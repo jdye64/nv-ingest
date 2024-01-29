@@ -18,10 +18,11 @@ import typing
 
 from morpheus.config import Config
 from morpheus.messages import ControlMessage
-from morpheus.modules.input.file_source_pipe import FileSourcePipeLoaderFactory
 from morpheus.pipeline.pipeline import Pipeline
 from morpheus.stages.general.linear_modules_source import LinearModuleSourceStage
 from morpheus.stages.output.in_memory_sink_stage import InMemorySinkStage
+
+from morpheus_pdf_ingest.modules.file_source_pipe import FileSourcePipeLoaderFactory
 
 logger = logging.getLogger(__name__)
 

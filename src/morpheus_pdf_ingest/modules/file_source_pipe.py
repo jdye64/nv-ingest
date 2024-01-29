@@ -15,17 +15,14 @@
 import logging
 
 import mrc
-from pydantic import ValidationError
-
-from morpheus.modules.functional.content_extractor_module import ContentExtractorLoaderFactory
-from morpheus.modules.functional.vdb_resource_tagging_module import VDBResourceTaggingLoaderFactory
 from morpheus.modules.general.monitor import MonitorLoaderFactory
 from morpheus.modules.input.multi_file_source import MultiFileSourceLoaderFactory
 from morpheus.modules.preprocess.deserialize import DeserializeLoaderFactory
-from morpheus.modules.preprocess.schema_transform import SchemaTransformLoaderFactory
-from morpheus.modules.schemas.examples.llm.file_source_pipe_schema import FileSourcePipeSchema
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
+from morpheus_pdf_ingest.modules.content_extractor_module import ContentExtractorLoaderFactory
+from morpheus_pdf_ingest.schemas.file_source_pipe_schema import FileSourcePipeSchema
+from pydantic import ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -106,9 +103,6 @@ def _file_source_pipe(builder: mrc.Builder):
         "deserialize", {
             "batch_size": validated_config.batch_size, "message_type": "ControlMessage"
         })
-
-    vdb_resource_tagging_loader = VDBResourceTaggingLoaderFactory.get_instance(
-        "vdb_resource_tagging", {"vdb_resource_name": validated_config.vdb_resource_name})
 
     monitor_1_loader = MonitorLoaderFactory.get_instance(
         "monitor_1", {

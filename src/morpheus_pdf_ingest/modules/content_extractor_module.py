@@ -25,13 +25,12 @@ import mrc
 import mrc.core.operators as ops
 import pandas as pd
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from pydantic import ValidationError
-from pyinstrument import Profiler
-
 from morpheus.messages import MessageMeta
-from morpheus.modules.schemas.examples.llm.content_extractor_schema import ContentExtractorSchema
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
+from morpheus_pdf_ingest.schemas.content_extractor_schema import ContentExtractorSchema
+from pydantic import ValidationError
+from pyinstrument import Profiler
 
 logger = logging.getLogger(__name__)
 
