@@ -28,9 +28,10 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from morpheus.messages import MessageMeta
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
-from morpheus_pdf_ingest.schemas.content_extractor_schema import ContentExtractorSchema
 from pydantic import ValidationError
 from pyinstrument import Profiler
+
+from morpheus_pdf_ingest.schemas.content_extractor_schema import ContentExtractorSchema
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,13 @@ def get_file_meta(open_file: fsspec.core.OpenFile) -> FileMeta:
 
 has_processed = False
 
+profiler = Profiler()
+
+
+def write_profiler_data():
+    with open("process_pdf_profile.html", "w") as file:
+        file.write(profiler.output_html())
+
 
 def process_pdf(file_content, file_meta, chunk_size, chunk_overlap):
     """
@@ -100,10 +108,7 @@ def process_pdf(file_content, file_meta, chunk_size, chunk_overlap):
     list
         A list of dictionaries containing processed data chunks.
     """
-
-    if (not has_processed):
-        profiler = Profiler()
-        profiler.start()
+    profiler.start()
 
     processed_data = []
 
@@ -150,10 +155,7 @@ def process_pdf(file_content, file_meta, chunk_size, chunk_overlap):
         logger.error(f"Error processing file {file_meta.file_path} content: {e}")
         return []
 
-    if (not has_processed):
-        profiler.stop()
-        with open("process_pdf_profile.html", "w") as file:
-            file.write(profiler.output_html())
+    profiler.stop()
 
     return processed_data
 
@@ -269,6 +271,7 @@ def file_content_extractor(builder: mrc.Builder):
 
         return MessageMeta(df=df_final)
 
-    node = builder.make_node("pdf_extractor", ops.map(parse_files), ops.filter(lambda x: x is not None))
+    node = builder.make_node("pdf_extractor", ops.map(parse_files), ops.filter(lambda x: x is not None),
+                             ops.on_completed(lambda: write_profiler_data()))
     builder.register_module_input("input", node)
     builder.register_module_output("output", node)
