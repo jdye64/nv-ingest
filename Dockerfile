@@ -1,18 +1,25 @@
 # Use NVIDIA Morpheus as the base image
-FROM nvcr.io/nvidia/morpheus/morpheus:23.11-runtime
+FROM devin-morpheus-ms:manual_0.01
 
 # Set the working directory in the container
 WORKDIR /workspace
 
 # Copy the module code
+COPY setup.py setup.py
 COPY src/ src/
-COPY setup.py src/pipeline.py ./
-RUN echo $(ls -la)
 SHELL ["/bin/bash", "-c"]
+
+# TODO(Devin): Something is wrong with the container build on the vdb_upload branch, its missing some of the module files.
+# Double check this tomorrow.
 
 # Install the module
 RUN source activate morpheus \
-    && pip install -e . \
-    && rm -rf src
+    && mamba env update -n morpheus --file ./examples/llm/vdb_upload/requirements.yaml \
+    && mamba install -c conda-forge pydantic pyinstrument \
+    && pip install pymupdf redis \
+    && pip install . \
+    && rm -rf src 
+
+COPY src/pipeline.py ./
 
 CMD ["python", "/workspace/pipeline.py"]

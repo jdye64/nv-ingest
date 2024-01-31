@@ -20,11 +20,15 @@ from morpheus.config import Config
 from morpheus.messages import ControlMessage
 from morpheus.pipeline.pipeline import Pipeline
 from morpheus.stages.general.linear_modules_source import LinearModuleSourceStage
-from morpheus.stages.output.in_memory_sink_stage import InMemorySinkStage
+from morpheus.stages.general.linear_modules_stage import LinearModulesStage
 
 from morpheus_pdf_ingest.modules.file_source_pipe import FileSourcePipeLoaderFactory
+from morpheus_pdf_ingest.modules.redis_subscriber_source import RedisSubscriberSourceLoaderFactory
+from morpheus_pdf_ingest.modules.redis_task_sink import RedisTaskSinkLoaderFactory
 
 logger = logging.getLogger(__name__)
+
+CONNECTION_TRACKER = {}
 
 file_sources = [
     './data/pdf_ingest_testing/*.pdf',
@@ -97,6 +101,26 @@ def setup_filesystem_source(pipe: Pipeline, config: Config, source_name: str, fs
     return file_pipe
 
 
+def setup_redis_source(pipe: Pipeline, config: Config):
+    source_module_loader = RedisSubscriberSourceLoaderFactory.get_instance(module_name="redis_listener",
+                                                                           module_config={})
+
+    source_stage = pipe.add_stage(
+        LinearModuleSourceStage(config, source_module_loader, output_type=ControlMessage, output_port_name="output"))
+
+    sink_module_loader = RedisTaskSinkLoaderFactory.get_instance(module_name="redis_task_sink", module_config={})
+    sink_stage = pipe.add_stage(
+        LinearModulesStage(config, sink_module_loader,
+                           input_type=ControlMessage,
+                           output_type=ControlMessage,
+                           input_port_name="input",
+                           output_port_name="output"))
+
+    pipe.add_edge(source_stage, sink_stage)
+
+    return sink_stage
+
+
 def process_vdb_sources(pipe: Pipeline, config: Config, vdb_source_config: typing.List[typing.Dict]) -> typing.List:
     """
     Processes and sets up sources defined in a vdb_source_config.
@@ -146,11 +170,16 @@ def pipeline(pipeline_config: Config) -> float:
     pipe = Pipeline(pipeline_config)
     start_abs = time.clock_gettime_ns(time.CLOCK_MONOTONIC)
 
-    vdb_sources = process_vdb_sources(pipe, pipeline_config, _source_config)
-    cm_sink = pipe.add_stage(InMemorySinkStage(pipeline_config))
+    # vdb_sources = process_vdb_sources(pipe, pipeline_config, _source_config)
+    # cm_sink = pipe.add_stage(InMemorySinkStage(pipeline_config))
 
-    for source_output in vdb_sources:
-        pipe.add_edge(source_output, cm_sink)
+    # Create HTTP source
+    setup_redis_source(pipe, pipeline_config)
+
+    # Connect HTTP source
+
+    # for source_output in vdb_sources:
+    #    pipe.add_edge(source_output, cm_sink)
 
     end_setup = start_run = time.clock_gettime_ns(time.CLOCK_MONOTONIC)
     setup_elapsed = (end_setup - start_abs) / 1e9
