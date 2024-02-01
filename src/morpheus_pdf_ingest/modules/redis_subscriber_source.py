@@ -67,7 +67,8 @@ def _redis_listener(builder: mrc.Builder):
             _, job_payload = redis_client.blpop([task_queue])
             try:
                 job_data = json.loads(job_payload)
-                df = cudf.read_json(job_data['data'])
+                logger.info(f"job data:\n{json.dumps(job_data, indent=2)}")
+                df = cudf.DataFrame(job_data['data'])
                 message_meta = MessageMeta(df=df)
 
                 control_message = ControlMessage()

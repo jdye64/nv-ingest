@@ -23,6 +23,7 @@ from morpheus.stages.general.linear_modules_source import LinearModuleSourceStag
 from morpheus.stages.general.linear_modules_stage import LinearModulesStage
 
 from morpheus_pdf_ingest.modules.file_source_pipe import FileSourcePipeLoaderFactory
+from morpheus_pdf_ingest.modules.nemo_doc_splitter import NemoDocSplitterLoaderFactory
 from morpheus_pdf_ingest.modules.redis_subscriber_source import RedisSubscriberSourceLoaderFactory
 from morpheus_pdf_ingest.modules.redis_task_sink import RedisTaskSinkLoaderFactory
 
@@ -101,14 +102,37 @@ def setup_filesystem_source(pipe: Pipeline, config: Config, source_name: str, fs
     return file_pipe
 
 
+# TODO: Should have multiple input channels (aka multiple redis sources for different pipelines)
 def setup_redis_source(pipe: Pipeline, config: Config):
     source_module_loader = RedisSubscriberSourceLoaderFactory.get_instance(module_name="redis_listener",
-                                                                           module_config={})
+                                                                           module_config={
+                                                                               "redis_listener": {
+                                                                                   "redis_host": "redis",
+                                                                               }
+                                                                           })
 
     source_stage = pipe.add_stage(
         LinearModuleSourceStage(config, source_module_loader, output_type=ControlMessage, output_port_name="output"))
 
-    sink_module_loader = RedisTaskSinkLoaderFactory.get_instance(module_name="redis_task_sink", module_config={})
+    nemo_splitter_loader = NemoDocSplitterLoaderFactory.get_instance(module_name="nemo_doc_splitter",
+                                                                     module_config={
+                                                                         "split_by": "word",
+                                                                         "split_length": 250,
+                                                                         "split_overlap": 30,
+                                                                         "max_character_length": 1900,
+                                                                     })
+
+    nemo_splitter_stage = pipe.add_stage(
+        LinearModulesStage(config, nemo_splitter_loader,
+                           input_type=ControlMessage,
+                           output_type=ControlMessage,
+                           input_port_name="input",
+                           output_port_name="output"))
+
+    sink_module_loader = RedisTaskSinkLoaderFactory.get_instance(module_name="redis_task_sink",
+                                                                 module_config={
+                                                                     "redis_host": "redis",
+                                                                 })
     sink_stage = pipe.add_stage(
         LinearModulesStage(config, sink_module_loader,
                            input_type=ControlMessage,
@@ -116,7 +140,8 @@ def setup_redis_source(pipe: Pipeline, config: Config):
                            input_port_name="input",
                            output_port_name="output"))
 
-    pipe.add_edge(source_stage, sink_stage)
+    pipe.add_edge(source_stage, nemo_splitter_stage)
+    pipe.add_edge(nemo_splitter_stage, sink_stage)
 
     return sink_stage
 

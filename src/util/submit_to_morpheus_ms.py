@@ -8,14 +8,23 @@ import redis
 
 
 def generate_random_json(num_rows=10):
-    """Generates a random JSON array of arrays."""
-    data = {
-        "value": [random.randint(1, 1000) for _ in range(num_rows)],
-        "name": [random.choice(["Alice", "Bob", "Charlie"]) for _ in range(num_rows)],
-        "is_active": [random.choice([True, False]) for _ in range(num_rows)]
-    }
+    """Generates a random JSON data that mimics the structure of Document data."""
+    documents = []
 
-    return json.dumps(data)
+    for i in range(num_rows):
+        document = {
+            "content": random.choice(["Lorem ipsum", "Dolor sit amet", str(random.randint(100, 999))]),
+            "content_type": "text",
+            "id": f"doc_{i}",
+            "meta": {
+                "value": random.randint(1, 1000),
+                "name": random.choice(["Alice", "Bob", "Charlie"]),
+                "is_active": random.choice([True, False])
+            }
+        }
+        documents.append(document)
+
+    return documents
 
 
 def submit_job_and_wait_for_response(redis_client, job_data, task_queue, timeout=3):
