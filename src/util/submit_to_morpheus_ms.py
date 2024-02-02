@@ -28,28 +28,42 @@ def generate_random_json(num_rows=10):
 
 
 def submit_job_and_wait_for_response(redis_client, job_data, task_queue, timeout=3):
-    """Submits a job to a Redis queue and waits for a response."""
-    # Generate a unique response queue name for each job
-    profiler = pyinstrument.Profiler()
-    profiler.start()
+    """Submits a job to a Redis queue, waits for a response with expiration, and cleans up."""
     job_id = str(uuid.uuid4())
-
-    # Prepare and send job payload
     job_payload = json.dumps({"job_id": job_id, "data": job_data})
     response_channel = f"response_{job_id}"
+
+    # Set a reasonable expiration time for the response queue
+    # This is a fallback in case the response is never read.
+    expiration_seconds = 60  # For example, 1 minute after the response is received
+
+    # Prepare and send job payload
     redis_client.rpush(task_queue, job_payload)
 
-    # Wait for response
+    # Set the expiration time for the response channel
+    # Note: We set the expiration now, but since the list is empty, we'll reset it after pushing the response
+    redis_client.expire(response_channel, expiration_seconds)
+
     print(f"Waiting for response on channel '{response_channel}'...")
     _, response = redis_client.blpop(response_channel, timeout=timeout)
-    if not response:
+
+    # Reset the expiration time now that we've pushed a response to ensure it lives long enough to be processed
+    redis_client.expire(response_channel, expiration_seconds)
+
+    if response:
+        # Process the response
+        result = cudf.DataFrame.from_dict(json.loads(response))
+
+        # Once the response is processed, delete the response queue to clean up
+        redis_client.delete(response_channel)
+
+        return result
+    else:
+        # Consider cleaning up the response channel if a timeout occurs
+        # This is optional and depends on whether you expect late responses to be processed
+        redis_client.delete(response_channel)
         raise RuntimeError("No response received within timeout period")
 
-    profiler.stop()
-    with open('client_profiling.html', 'w') as f:
-        f.write(profiler.output_html())
-
-    return cudf.DataFrame.from_dict(json.loads(response))
 
 
 # Example Usage

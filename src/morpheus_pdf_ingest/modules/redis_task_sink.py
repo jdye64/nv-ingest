@@ -50,7 +50,7 @@ def _redis_task_sink(builder: mrc.Builder):
         df = message.payload().df
 
         # Log the received DataFrame
-        logger.info(f"\nReceived DataFrame:\n{df}")
+        # logger.info(f"\nReceived DataFrame:\n{df}")
 
         # Add an 'embeddings' column with example data (adjust as necessary)
         df['embeddings'] = [[0.1, 0.2, 0.3]] * len(df)
