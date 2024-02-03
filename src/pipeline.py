@@ -22,7 +22,7 @@ from morpheus.pipeline.pipeline import Pipeline
 from morpheus.stages.general.linear_modules_source import LinearModuleSourceStage
 from morpheus.stages.general.linear_modules_stage import LinearModulesStage
 
-from morpheus_pdf_ingest.modules.file_source_pipe import FileSourcePipeLoaderFactory
+from morpheus_pdf_ingest.modules.content_extractor_module import PDFExtractorLoaderFactory
 from morpheus_pdf_ingest.modules.nemo_doc_splitter import NemoDocSplitterLoaderFactory
 from morpheus_pdf_ingest.modules.redis_subscriber_source import RedisSubscriberSourceLoaderFactory
 from morpheus_pdf_ingest.modules.redis_task_sink import RedisTaskSinkLoaderFactory
@@ -73,37 +73,7 @@ def validate_source_config(source_info: typing.Dict[str, any]) -> None:
         raise ValueError(f"Each source must have 'type', 'name', and 'config':\n {source_info}")
 
 
-def setup_filesystem_source(pipe: Pipeline, config: Config, source_name: str, fs_config: typing.Dict[str, typing.Any]):
-    """
-    Set up the filesystem source stage in the pipeline.
-
-    Parameters
-    ----------
-    pipe : Pipeline
-        The pipeline to which the filesystem source stage will be added.
-    config : Config
-        Configuration object for the pipeline.
-    source_name : str
-        The name of the filesystem source stage.
-    fs_config : typing.Dict[str, Any]
-        Configuration parameters for the filesystem source stage.
-
-    Returns
-    -------
-    SubPipeline
-        The sub-pipeline stage created for the filesystem source.
-    """
-
-    module_loader = FileSourcePipeLoaderFactory.get_instance(module_name=f"file_source_pipe__{source_name}",
-                                                             module_config={"file_source_config": fs_config})
-    file_pipe = pipe.add_stage(
-        LinearModuleSourceStage(config, module_loader, output_type=ControlMessage, output_port_name="output"))
-
-    return file_pipe
-
-
-# TODO: Should have multiple input channels (aka multiple redis sources for different pipelines)
-def setup_redis_source(pipe: Pipeline, config: Config):
+def setup_nemo_docsplitter_pipe(pipe: Pipeline, config: Config):
     source_module_loader = RedisSubscriberSourceLoaderFactory.get_instance(module_name="redis_listener",
                                                                            module_config={
                                                                                "redis_listener": {
@@ -124,6 +94,44 @@ def setup_redis_source(pipe: Pipeline, config: Config):
 
     nemo_splitter_stage = pipe.add_stage(
         LinearModulesStage(config, nemo_splitter_loader,
+                           input_type=ControlMessage,
+                           output_type=ControlMessage,
+                           input_port_name="input",
+                           output_port_name="output"))
+
+    sink_module_loader = RedisTaskSinkLoaderFactory.get_instance(module_name="redis_task_sink",
+                                                                 module_config={
+                                                                     "redis_host": "redis",
+                                                                 })
+    sink_stage = pipe.add_stage(
+        LinearModulesStage(config, sink_module_loader,
+                           input_type=ControlMessage,
+                           output_type=ControlMessage,
+                           input_port_name="input",
+                           output_port_name="output"))
+
+    pipe.add_edge(source_stage, nemo_splitter_stage)
+    pipe.add_edge(nemo_splitter_stage, sink_stage)
+
+    return sink_stage
+
+
+def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
+    source_module_loader = RedisSubscriberSourceLoaderFactory.get_instance(module_name="redis_listener",
+                                                                           module_config={
+                                                                               "redis_listener": {
+                                                                                   "redis_host": "redis",
+                                                                               }
+                                                                           })
+
+    source_stage = pipe.add_stage(
+        LinearModuleSourceStage(config, source_module_loader, output_type=ControlMessage, output_port_name="output"))
+
+    pdf_text_extract_loader = PDFExtractorLoaderFactory.get_instance(module_name="pdf_extractor",
+                                                                     module_config={})
+
+    nemo_splitter_stage = pipe.add_stage(
+        LinearModulesStage(config, pdf_text_extract_loader,
                            input_type=ControlMessage,
                            output_type=ControlMessage,
                            input_port_name="input",
@@ -199,7 +207,8 @@ def pipeline(pipeline_config: Config) -> float:
     # cm_sink = pipe.add_stage(InMemorySinkStage(pipeline_config))
 
     # Create HTTP source
-    setup_redis_source(pipe, pipeline_config)
+    # setup_nemo_docsplitter_pipe(pipe, pipeline_config)
+    setup_pdf_ingest_pipe(pipe, pipeline_config)
 
     # Connect HTTP source
 

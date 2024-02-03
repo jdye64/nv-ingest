@@ -67,18 +67,29 @@ def _redis_listener(builder: mrc.Builder):
             _, job_payload = redis_client.blpop([task_queue])
             try:
                 job_data = json.loads(job_payload)
-                #logger.info(f"job data:\n{json.dumps(job_data, indent=2)}")
-                df = cudf.DataFrame(job_data['data'])
+                # logger.info(f"job data:\n{json.dumps(job_data, indent=2)}")
+                df = cudf.DataFrame(job_data.get('data', {}))
                 message_meta = MessageMeta(df=df)
+                tasks = job_data.get('tasks', [])
+                task_id = job_data['task_id']
+                response_channel = f"response_{task_id}"
+
+                logger.info(f"Received message with {len(df)} rows, cols: {df.columns}")
 
                 control_message = ControlMessage()
                 control_message.payload(message_meta)
-                control_message.set_metadata('response_channel', f"response_{job_data['job_id']}")
+                control_message.set_metadata('response_channel', response_channel)
+                control_message.set_metadata('task_id', task_id)
+
+                for task in tasks:
+                    control_message.add_task(task['type'], task['properties'])
 
                 yield control_message
             except Exception as exc:
                 logger.error("Error processing message: %s", exc)
                 logger.error("Message payload: %s", job_payload)
+
+                return
 
     node = builder.make_source("fetch_messages", fetch_messages)
     builder.register_module_output("output", node)

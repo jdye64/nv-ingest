@@ -1,10 +1,17 @@
+import asyncio
+import base64
 import json
+import logging
+import os
 import random
+import sys
 import uuid
 
+import aioredis
+import click
 import cudf
-import pyinstrument
-import redis
+
+logger = logging.getLogger(__name__)
 
 
 def generate_random_json(num_rows=10):
@@ -27,51 +34,94 @@ def generate_random_json(num_rows=10):
     return documents
 
 
-def submit_job_and_wait_for_response(redis_client, job_data, task_queue, timeout=3):
-    """Submits a job to a Redis queue, waits for a response with expiration, and cleans up."""
+async def submit_job_and_wait_for_response(redis_client, job_data, task_queue, timeout=90):
     job_id = str(uuid.uuid4())
     job_payload = json.dumps({"job_id": job_id, "data": job_data})
     response_channel = f"response_{job_id}"
+    expiration_seconds = 60  # Example: 1 minute
 
-    # Set a reasonable expiration time for the response queue
-    # This is a fallback in case the response is never read.
-    expiration_seconds = 60  # For example, 1 minute after the response is received
-
-    # Prepare and send job payload
-    redis_client.rpush(task_queue, job_payload)
-
-    # Set the expiration time for the response channel
-    # Note: We set the expiration now, but since the list is empty, we'll reset it after pushing the response
-    redis_client.expire(response_channel, expiration_seconds)
+    await redis_client.rpush(task_queue, job_payload)
+    await redis_client.expire(response_channel, expiration_seconds)
 
     print(f"Waiting for response on channel '{response_channel}'...")
-    _, response = redis_client.blpop(response_channel, timeout=timeout)
-
-    # Reset the expiration time now that we've pushed a response to ensure it lives long enough to be processed
-    redis_client.expire(response_channel, expiration_seconds)
+    response = await redis_client.blpop(response_channel, timeout=timeout)
 
     if response:
-        # Process the response
-        result = cudf.DataFrame.from_dict(json.loads(response))
-
-        # Once the response is processed, delete the response queue to clean up
-        redis_client.delete(response_channel)
-
+        _, response_data = response
+        result = cudf.DataFrame.from_dict(json.loads(response_data))
+        await redis_client.delete(response_channel)
         return result
     else:
-        # Consider cleaning up the response channel if a timeout occurs
-        # This is optional and depends on whether you expect late responses to be processed
-        redis_client.delete(response_channel)
+        await redis_client.delete(response_channel)
         raise RuntimeError("No response received within timeout period")
 
 
+async def transmit_file_content(path):
+    if path.endswith('.pdf'):
+        # For PDF files, read as binary and encode in base64
+        with open(path, 'rb') as file:
+            content = base64.b64encode(file.read()).decode('utf-8')
+    else:
+        # For other files, assuming they are JSON, load them directly
+        with open(path, 'r') as file:
+            content = json.load(file)
+    return content
 
-# Example Usage
-redis_host = ('127.0.0.1')
-redis_port = 6379
-task_queue = 'morpheus_task_queue'
-redis_client = redis.Redis(host=redis_host, port=redis_port, db=0)
-random_json = generate_random_json()
 
-response = submit_job_and_wait_for_response(redis_client, random_json, task_queue)
-print(f"Response: {response}")
+async def load_data_from_paths(paths):
+    result = {"file_name": [], "content": []}
+    for path in paths:
+        if os.path.isdir(path):
+            for root, dirs, files in os.walk(path):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    content = await transmit_file_content(file_path)
+                    result["file_name"].append(file)
+                    result["content"].append(content)
+        elif os.path.isfile(path):
+            content = await transmit_file_content(path)
+            result["file_name"].append(os.path.basename(path))
+            result["content"].append(content)
+
+    return result
+
+
+@click.command()
+@click.option('--file_source', multiple=True, default=[], type=str,
+              help='List of file sources/paths to be processed.')
+@click.option('--redis-host', default='redis', help="DNS name for Redis.")
+@click.option('--redis-port', default='6379', help="DNS name for Redis.")
+def main(file_source, redis_host, redis_port):
+    logger.setLevel(logging.INFO)  # Set the log level to INFO
+    # Create handlers
+    console_handler = logging.StreamHandler(sys.stdout)  # stdout handler
+    console_handler.setLevel(logging.INFO)  # Set the handler log level to INFO
+
+    # Create formatters and add it to handlers
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    console_handler.setFormatter(formatter)
+
+    # Add handlers to the logger
+    logger.addHandler(console_handler)
+    task_queue = 'morpheus_task_queue'
+
+    async def run():
+        redis_client = await aioredis.from_url(f"redis://{redis_host}:{redis_port}", encoding="utf-8",
+                                               decode_responses=True)
+
+        if (file_source):
+            job_data = await load_data_from_paths(file_source)
+            logger.debug(json.dumps(job_data, indent=2))
+        else:
+            raise ValueError("No data source provided.")
+
+        response = await submit_job_and_wait_for_response(redis_client, job_data, task_queue)
+        logger.info(f"Received response with {len(response)} rows, cols: {response.columns}")
+        with open("response.json", "w") as file:
+            file.write(response.to_json(orient='split'))
+
+    asyncio.run(run())
+
+
+if __name__ == '__main__':
+    main()
