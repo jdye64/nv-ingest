@@ -13,10 +13,10 @@
 # limitations under the License.
 
 import base64
+import functools
 import io
 import logging
 
-import cudf
 import fitz
 import mrc
 import mrc.core.operators as ops
@@ -25,16 +25,19 @@ from morpheus.messages import MessageMeta
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
 
-from morpheus_pdf_ingest.schemas.content_extractor_schema import ContentExtractorSchema
+from morpheus_pdf_ingest.schemas.pdf_extractor_schema import PDFExtractorSchema
+from morpheus_pdf_ingest.util.tracing import traceable
 
 logger = logging.getLogger(__name__)
 
+MODULE_NAME = "pdf_text_extractor"
 PDFExtractorLoaderFactory = ModuleLoaderFactory("pdf_text_extractor",
                                                 "morpheus_pdf_ingest",
-                                                ContentExtractorSchema)
+                                                PDFExtractorSchema)
 
 
-def process_pdf_bytes(df):
+def _process_pdf_bytes(df, extract_text: bool = False, extract_images: bool = False,
+                       extract_tables: bool = False):
     """
     Processes a cuDF DataFrame containing PDF files in base64 encoding.
     Each PDF's content is replaced with its extracted text.
@@ -47,9 +50,10 @@ def process_pdf_bytes(df):
     """
 
     # Define a helper function to decode and extract text from a base64 encoded PDF
-    def decode_and_extract_text(base64_content):
+    def decode_and_extract(base64_content, extract_text: bool, extract_images: bool,
+                           extract_tables: bool):
         # Decode the base64 content
-        pdf_bytes = base64.b64decode(base64_content)
+        pdf_bytes = base64.b64decode(base64_content[0])
         # Load the PDF
         pdf_stream = io.BytesIO(pdf_bytes)
         doc = fitz.open(stream=pdf_stream, filetype="pdf")
@@ -61,28 +65,35 @@ def process_pdf_bytes(df):
         return text
 
     # Apply the helper function to each row in the 'content' column
-    df['content'] = df['content'].apply(decode_and_extract_text)
+    _decode_and_extract = functools.partial(decode_and_extract, extract_text=extract_text,
+                                            extract_images=extract_images, extract_tables=extract_tables)
+    logger.info(f"Extracting text from PDFs: {df['file_name']}")
+    df['content'] = df['content'].apply(_decode_and_extract)
 
     return df
 
 
-@register_module("pdf_text_extractor", "morpheus_pdf_ingest")
+@register_module(MODULE_NAME, "morpheus_pdf_ingest")
 def _pdf_text_extractor(builder: mrc.Builder):
     module_config = builder.get_current_module_config()
 
-    # try:
-    #    extractor_config = ContentExtractorSchema(**module_config)
-    # except ValidationError as e:
-    #    error_messages = '; '.join([f"{error['loc'][0]}: {error['msg']}" for error in e.errors()])
-    #    log_error_message = f"Invalid configuration for file_content_extractor: {error_messages}"
-    #    logger.error(log_error_message)
-    #    raise ValueError(log_error_message)
-
+    @traceable(MODULE_NAME)
     def parse_files(ctrl_msg: ControlMessage) -> ControlMessage:
-        df = ctrl_msg.payload().df.to_pandas()
-        df = process_pdf_bytes(df)
+        while (ctrl_msg.has_task('pdf_extract')):
+            # get task
+            task = ctrl_msg.remove_task('pdf_extract')
+            task_props = task.get('properties', {})
+            extract_text = task_props.get('extract_text', False)
+            extract_images = task_props.get('extract_images', False)
+            extract_tables = task_props.get('extract_tables', False)
 
-        ctrl_msg.payload(MessageMeta(df=df))
+            df = ctrl_msg.payload().df.to_pandas()
+
+            # Return text, image, or table
+            df = _process_pdf_bytes(df, extract_text, extract_images, extract_tables)
+
+            ctrl_msg.payload(MessageMeta(df=df))
+
         return ctrl_msg
 
     node = builder.make_node("pdf_extractor", ops.map(parse_files), ops.filter(lambda x: x is not None))

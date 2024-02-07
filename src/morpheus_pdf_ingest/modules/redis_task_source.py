@@ -15,6 +15,7 @@
 
 import json
 import logging
+import time
 
 import cudf
 import mrc
@@ -23,14 +24,17 @@ from morpheus.messages import ControlMessage
 from morpheus.messages import MessageMeta
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
+from pydantic import ValidationError
+
+from morpheus_pdf_ingest.schemas.redis_task_source_schema import RedisTaskSourceSchema
 
 logger = logging.getLogger(__name__)
 
-RedisSubscriberSourceLoaderFactory = ModuleLoaderFactory("redis_listener", "morpheus_pdf_ingest")
+RedisTaskSourceLoaderFactory = ModuleLoaderFactory("redis_task_source", "morpheus_pdf_ingest")
 
 
-@register_module("redis_listener", "morpheus_pdf_ingest")
-def _redis_listener(builder: mrc.Builder):
+@register_module("redis_task_source", "morpheus_pdf_ingest")
+def _redis_task_source(builder: mrc.Builder):
     """
     A module for receiving messages from a Redis channel, converting them into DataFrames,
     and attaching job IDs to ControlMessages.
@@ -39,22 +43,22 @@ def _redis_listener(builder: mrc.Builder):
     ----------
     builder : mrc.Builder
         The Morpheus pipeline builder object.
-
-    Notes
-    -----
-    The configuration should contain:
-    - 'redis_host': str, the host address of the Redis server.
-    - 'redis_port': int, the port on which the Redis server is running.
-    - 'task_queue': str, the Redis list from which to retrieve tasks.
     """
 
     module_config = builder.get_current_module_config()
-    redis_config = module_config.get("redis_listener", {})
+    try:
+        validated_config = RedisTaskSourceSchema(**module_config)
+    except ValidationError as e:
+        error_messages = '; '.join([f"{error['loc'][0]}: {error['msg']}" for error in e.errors()])
+        log_error_message = f"Invalid Redis Task Source configuration: {error_messages}"
+        logger.error(log_error_message)
 
-    # Extract configuration details
-    redis_host = redis_config.get('redis_host', 'redis')
-    redis_port = redis_config.get('redis_port', 6379)
-    task_queue = redis_config.get('task_queue', 'morpheus_task_queue')
+        raise
+
+    # Use validated_config for further operations
+    redis_host = validated_config.redis_host
+    redis_port = validated_config.redis_port
+    task_queue = validated_config.task_queue
 
     # Initialize Redis client
     redis_client = redis.Redis(host=redis_host, port=redis_port, db=0)
@@ -65,15 +69,19 @@ def _redis_listener(builder: mrc.Builder):
         """
         while True:
             _, job_payload = redis_client.blpop([task_queue])
+
+            # Debug Tracing
+            ts_entry = time.clock_gettime_ns(time.CLOCK_MONOTONIC)
             try:
                 job_data = json.loads(job_payload)
                 # logger.info(f"job data:\n{json.dumps(job_data, indent=2)}")
-                df = cudf.DataFrame(job_data.get('data', {}))
-                message_meta = MessageMeta(df=df)
-                tasks = job_data.get('tasks', [])
-                task_id = job_data['task_id']
+                do_trace_tagging = job_data.pop('add_trace_tagging', False)
+                tasks = job_data.pop('tasks', [])
+                task_id = job_data.pop('task_id')
                 response_channel = f"response_{task_id}"
 
+                df = cudf.DataFrame(job_data.get('data', {}))
+                message_meta = MessageMeta(df=df)
                 logger.info(f"Received message with {len(df)} rows, cols: {df.columns}")
 
                 control_message = ControlMessage()
@@ -84,10 +92,17 @@ def _redis_listener(builder: mrc.Builder):
                 for task in tasks:
                     control_message.add_task(task['type'], task['properties'])
 
+                # Debug Tracing
+                if do_trace_tagging:
+                    ts_exit = time.clock_gettime_ns(time.CLOCK_MONOTONIC)
+                    control_message.set_metadata("config::add_trace_tagging", do_trace_tagging)
+                    control_message.set_metadata("trace::entry::redis_task_source", ts_entry)
+                    control_message.set_metadata("trace::exit::redis_task_source", ts_exit)
+
                 yield control_message
             except Exception as exc:
                 logger.error("Error processing message: %s", exc)
-                logger.error("Message payload: %s", job_payload)
+                # logger.error("Message payload: %s", job_payload)
 
                 return
 

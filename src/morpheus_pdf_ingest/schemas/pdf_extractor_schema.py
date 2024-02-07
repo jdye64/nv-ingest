@@ -13,41 +13,17 @@
 # limitations under the License.
 
 import logging
-from typing import Dict
-from typing import List
 
 from pydantic import BaseModel
-from pydantic import Field
-from pydantic import validator
 
 logger = logging.getLogger(__name__)
 
 
-class CSVConverterSchema(BaseModel):
-    chunk_overlap: int = 102  # Example default value
-    chunk_size: int = 1024
-    text_column_names: List[str]
-
-    class Config:
-        extra = "forbid"
-
-
-class ContentExtractorSchema(BaseModel):
+class PDFExtractorSchema(BaseModel):
     batch_size: int = 32
     chunk_overlap: int = 51
     chunk_size: int = 512
-    converters_meta: Dict[str, Dict] = Field(default_factory=dict)
     num_threads: int = 10
-
-    @validator('converters_meta', pre=True)
-    def validate_converters_meta(cls, v):
-        validated_meta = {}
-        for key, value in v.items():
-            if key.lower() == 'csv':
-                validated_meta[key] = CSVConverterSchema(**value)
-            else:
-                validated_meta[key] = value
-        return validated_meta
 
     class Config:
         extra = "forbid"

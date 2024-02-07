@@ -14,7 +14,6 @@
 
 
 import logging
-import json
 from typing import List, Literal, Any
 
 import mrc
@@ -28,6 +27,7 @@ from mrc.core import operators as ops
 from pydantic import ValidationError
 
 from morpheus_pdf_ingest.schemas.nemo_doc_splitter_schema import DocumentSplitterSchema
+from morpheus_pdf_ingest.util.tracing import traceable
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +106,7 @@ def _split_long_text(text: str, max_character_length: int) -> List[str]:
     return split_texts
 
 
-def process_content(row, validated_config):
+def _process_content(row, validated_config):
     units = _split_into_units(row['content'], validated_config.split_by)
     text_splits = _concatenate_units(units, validated_config.split_length, validated_config.split_overlap,
                                      max_character_length=validated_config.max_character_length)
@@ -116,11 +116,13 @@ def process_content(row, validated_config):
     return split_docs
 
 
+MODULE_NAME = "nemo_document_splitter"
+
 NemoDocSplitterLoaderFactory = ModuleLoaderFactory("nemo_document_splitter", "morpheus_pdf_ingest",
                                                    DocumentSplitterSchema)
 
 
-@register_module("nemo_document_splitter", "morpheus_pdf_ingest")
+@register_module(MODULE_NAME, "morpheus_pdf_ingest")
 def _nemo_document_splitter(builder: mrc.Builder):
     """
     A pipeline module that splits documents into smaller parts based on the specified criteria.
@@ -135,6 +137,7 @@ def _nemo_document_splitter(builder: mrc.Builder):
         logger.error(log_error_message)
         raise ValueError(log_error_message)
 
+    @traceable(MODULE_NAME)
     def split_and_forward(message: ControlMessage):
         # Assume that df is going to have a 'content' column
 

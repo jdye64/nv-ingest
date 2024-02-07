@@ -7,9 +7,10 @@ import random
 import sys
 import uuid
 
-import aioredis
 import click
 import cudf
+import pandas as pd
+from redis import asyncio as aioredis
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +35,19 @@ def generate_random_json(num_rows=10):
     return documents
 
 
-async def submit_job_and_wait_for_response(redis_client, job_data, task_queue, timeout=90):
+async def submit_job_and_wait_for_response(redis_client, job_data, tasks, task_queue, timeout=90):
     job_id = str(uuid.uuid4())
-    job_payload = json.dumps({"job_id": job_id, "data": job_data})
+    job_payload = json.dumps({
+        "task_id": job_id,
+        "add_trace_tagging": True,
+        "data": job_data,
+        "tasks": tasks
+    })
     response_channel = f"response_{job_id}"
     expiration_seconds = 60  # Example: 1 minute
+
+    with open('job_payload.json', 'w') as file:
+        file.write(job_payload)
 
     await redis_client.rpush(task_queue, job_payload)
     await redis_client.expire(response_channel, expiration_seconds)
@@ -48,40 +57,40 @@ async def submit_job_and_wait_for_response(redis_client, job_data, task_queue, t
 
     if response:
         _, response_data = response
-        result = cudf.DataFrame.from_dict(json.loads(response_data))
         await redis_client.delete(response_channel)
-        return result
+        return json.loads(response_data)
     else:
         await redis_client.delete(response_channel)
         raise RuntimeError("No response received within timeout period")
 
 
-async def transmit_file_content(path):
+async def extract_file_content(path):
     if path.endswith('.pdf'):
         # For PDF files, read as binary and encode in base64
         with open(path, 'rb') as file:
             content = base64.b64encode(file.read()).decode('utf-8')
-    else:
-        # For other files, assuming they are JSON, load them directly
-        with open(path, 'r') as file:
-            content = json.load(file)
-    return content
+            logger.info(f"Encoded PDF content: {content[:100]}... (truncated)")
+            logger.info(f"Content length: {len(content)}")
+
+        return content
+
+    raise ValueError(f"Unsupported file type: {path}")
 
 
-async def load_data_from_paths(paths):
+async def load_data_from_path(path):
+    print(f"Loading data from paths: {path}")
     result = {"file_name": [], "content": []}
-    for path in paths:
-        if os.path.isdir(path):
-            for root, dirs, files in os.walk(path):
-                for file in files:
-                    file_path = os.path.join(root, file)
-                    content = await transmit_file_content(file_path)
-                    result["file_name"].append(file)
-                    result["content"].append(content)
-        elif os.path.isfile(path):
-            content = await transmit_file_content(path)
-            result["file_name"].append(os.path.basename(path))
-            result["content"].append(content)
+    if os.path.isdir(path):
+        for root, dirs, files in os.walk(path):
+            for file in files:
+                file_path = os.path.join(root, file)
+                content = await extract_file_content(file_path)
+                result["file_name"].append(file)
+                result["content"].append(content)
+    elif os.path.isfile(path):
+        content = await extract_file_content(path)
+        result["file_name"].append(os.path.basename(path))
+        result["content"].append(content)
 
     return result
 
@@ -90,38 +99,64 @@ async def load_data_from_paths(paths):
 @click.option('--file_source', multiple=True, default=[], type=str,
               help='List of file sources/paths to be processed.')
 @click.option('--redis-host', default='redis', help="DNS name for Redis.")
-@click.option('--redis-port', default='6379', help="DNS name for Redis.")
-def main(file_source, redis_host, redis_port):
-    logger.setLevel(logging.INFO)  # Set the log level to INFO
-    # Create handlers
-    console_handler = logging.StreamHandler(sys.stdout)  # stdout handler
-    console_handler.setLevel(logging.INFO)  # Set the handler log level to INFO
+@click.option('--redis-port', default='6379', help="Port for Redis.")
+def cli(file_source, redis_host, redis_port):
+    asyncio.run(main(file_source, redis_host, redis_port))
 
-    # Create formatters and add it to handlers
+
+async def main(file_source, redis_host, redis_port):
+    logger.setLevel(logging.INFO)
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     console_handler.setFormatter(formatter)
-
-    # Add handlers to the logger
     logger.addHandler(console_handler)
-    task_queue = 'morpheus_task_queue'
 
-    async def run():
-        redis_client = await aioredis.from_url(f"redis://{redis_host}:{redis_port}", encoding="utf-8",
-                                               decode_responses=True)
+    redis_url = f"redis://{redis_host}:{redis_port}"
+    task_queue = os.environ.get("TASK_QUEUE_NAME", "morpheus_task_queue")
 
-        if (file_source):
-            job_data = await load_data_from_paths(file_source)
-            logger.debug(json.dumps(job_data, indent=2))
-        else:
-            raise ValueError("No data source provided.")
+    # Create a Redis client instance
+    redis_client = await aioredis.from_url(redis_url, encoding="utf-8", decode_responses=True)
 
-        response = await submit_job_and_wait_for_response(redis_client, job_data, task_queue)
-        logger.info(f"Received response with {len(response)} rows, cols: {response.columns}")
-        with open("response.json", "w") as file:
-            file.write(response.to_json(orient='split'))
+    if not file_source:
+        logger.error("No data source provided.")
+        return
 
-    asyncio.run(run())
+    # Prepare job data for each file source
+    tasks = [
+        {
+            "type": "pdf_extract",
+            "properties": {
+                "extract_text": True,
+                "extract_images": False,
+                "extract_tables": False
+            }
+        }
+    ]
+
+    for source in file_source:
+        try:
+            # Assuming load_data_from_paths is modified to work with a single path and return encoded content
+            job_data = await load_data_from_path(source),
+            response = await submit_job_and_wait_for_response(redis_client, job_data, tasks, task_queue)
+
+            trace_tags = response.get("trace", {})
+            df_data = pd.DataFrame.from_dict(json.loads(response.get("data", {})))
+
+            # Assuming multiple documents could be processed
+            for content in df_data["content"]:
+                logger.info(f"Processed content: {content}")
+
+            # Example of saving a single document's content to a file
+            with open(f"{source}_response.json", "w") as file:
+                file.write(df_data["content"].iloc[0])
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            logger.error(f"Failed to process document {source}: {str(e)}")
+            # Consider whether to continue processing other files or abort
 
 
 if __name__ == '__main__':
-    main()
+    cli()

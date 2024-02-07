@@ -22,9 +22,9 @@ from morpheus.pipeline.pipeline import Pipeline
 from morpheus.stages.general.linear_modules_source import LinearModuleSourceStage
 from morpheus.stages.general.linear_modules_stage import LinearModulesStage
 
-from morpheus_pdf_ingest.modules.content_extractor_module import PDFExtractorLoaderFactory
+from morpheus_pdf_ingest.modules.pdf_extractor import PDFExtractorLoaderFactory
 from morpheus_pdf_ingest.modules.nemo_doc_splitter import NemoDocSplitterLoaderFactory
-from morpheus_pdf_ingest.modules.redis_subscriber_source import RedisSubscriberSourceLoaderFactory
+from morpheus_pdf_ingest.modules.redis_task_source import RedisTaskSourceLoaderFactory
 from morpheus_pdf_ingest.modules.redis_task_sink import RedisTaskSinkLoaderFactory
 
 logger = logging.getLogger(__name__)
@@ -74,8 +74,8 @@ def validate_source_config(source_info: typing.Dict[str, any]) -> None:
 
 
 def setup_nemo_docsplitter_pipe(pipe: Pipeline, config: Config):
-    source_module_loader = RedisSubscriberSourceLoaderFactory.get_instance(module_name="redis_listener",
-                                                                           module_config={
+    source_module_loader = RedisTaskSourceLoaderFactory.get_instance(module_name="redis_listener",
+                                                                     module_config={
                                                                                "redis_listener": {
                                                                                    "redis_host": "redis",
                                                                                }
@@ -117,8 +117,8 @@ def setup_nemo_docsplitter_pipe(pipe: Pipeline, config: Config):
 
 
 def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
-    source_module_loader = RedisSubscriberSourceLoaderFactory.get_instance(module_name="redis_listener",
-                                                                           module_config={
+    source_module_loader = RedisTaskSourceLoaderFactory.get_instance(module_name="redis_listener",
+                                                                     module_config={
                                                                                "redis_listener": {
                                                                                    "redis_host": "redis",
                                                                                }

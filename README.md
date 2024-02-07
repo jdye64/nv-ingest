@@ -1,6 +1,29 @@
 # Quickstart
 
-We need to build the morpheus-ms here that gets loaded by the Nemo Retriver pipeline
+We need to build the morpheus-ms here that gets loaded by the Nemo Retriever pipeline
+
+# Build Morpheus 24.03 release container from source
+
+Clone the Morpheus repository and checkout the 24.03 release tag.
+```bash
+git clone https://github.com/nv-morpheus/Morpheus.git
+git checkout branch-24.03
+git submodule update --init --recursive
+```
+
+Build the Morpheus-ms-base container
+```bash
+DOCKER_IMAGE_NAME=morpheus-ms-base \
+DOCKER_IMAGE_TAG=24.03 \
+bash docker/build_release_container.sh
+```
+
+Wait for a while.
+
+Build the Morpheus-ms container
+```bash
+
+```
 
 docker compose -f docker-compose.yaml up retrieval-ms --build
 

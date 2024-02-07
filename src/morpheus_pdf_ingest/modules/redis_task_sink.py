@@ -11,8 +11,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+import json
 import logging
+import time
 
 import mrc
 import redis
@@ -20,13 +21,18 @@ from morpheus.messages import ControlMessage
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
 from mrc.core import operators as ops
+from pydantic import ValidationError
+
+from morpheus_pdf_ingest.schemas.redis_task_sink_schema import RedisTaskSinkSchema
+from morpheus_pdf_ingest.util.tracing import traceable
 
 logger = logging.getLogger(__name__)
 
+MODULE_NAME = "redis_task_sink"
 RedisTaskSinkLoaderFactory = ModuleLoaderFactory("redis_task_sink", "morpheus_pdf_ingest")
 
 
-@register_module("redis_task_sink", "morpheus_pdf_ingest")
+@register_module(MODULE_NAME, "morpheus_pdf_ingest")
 def _redis_task_sink(builder: mrc.Builder):
     """
     A pipeline module that prints message payloads, adds an 'embeddings' column,
@@ -39,14 +45,26 @@ def _redis_task_sink(builder: mrc.Builder):
     """
 
     module_config = builder.get_current_module_config()
-    # Extract Redis configuration from module_config
-    redis_host = module_config.get('redis_host', 'redis')
-    redis_port = module_config.get('redis_port', 6379)
+    try:
+        validated_config = RedisTaskSinkSchema(**module_config)
+    except ValidationError as e:
+        error_messages = '; '.join([f"{error['loc'][0]}: {error['msg']}" for error in e.errors()])
+        log_error_message = f"Invalid Redis Task Sink configuration: {error_messages}"
+        logger.error(log_error_message)
+        raise ValueError(log_error_message)
+
+    # Use validated_config for further operations
+    redis_host = validated_config.redis_host
+    redis_port = validated_config.redis_port
 
     # Initialize Redis client
     redis_client = redis.Redis(host=redis_host, port=redis_port, db=0)
 
+    @traceable(MODULE_NAME)
     def process_and_forward(message: ControlMessage):
+        do_trace_tagging = ((message.has_metadata("config::add_trace_tagging") is True) and (message.get_metadata(
+            "config::add_trace_tagging") is True))
+
         df = message.payload().df
 
         # Log the received DataFrame
@@ -55,12 +73,23 @@ def _redis_task_sink(builder: mrc.Builder):
         # Add an 'embeddings' column with example data (adjust as necessary)
         df['embeddings'] = [[0.1, 0.2, 0.3]] * len(df)
 
-        # Convert the DataFrame to JSON
-        df_json = df.to_json(orient='records')
+        # Build response JSON
+        ret_val_json = {
+            "data": df.to_json(orient='records'),
+        }
+
+        #if (do_trace_tagging):
+        #    traces = {}
+        #    for key in message.list_metadata():
+        #        if (key.startswith("trace::")):
+        #            traces[key] = message.get_metadata(key)
+
+        #    ret_val_json["trace"] = traces
 
         # Send the JSON data to the Redis listener
         response_channel = message.get_metadata('response_channel')
-        redis_client.rpush(response_channel, df_json)
+
+        redis_client.rpush(response_channel, json.dumps(ret_val_json))
 
         logger.info(f"Forwarded message to Redis channel '{response_channel}'.")
 
