@@ -5,9 +5,9 @@ from pydantic import BaseModel, validator, conint
 
 class DocumentSplitterSchema(BaseModel):
     split_by: Literal["word", "sentence", "passage"] = "word"
-    split_length: conint(gt=0) = 200
-    split_overlap: conint(ge=0) = 0
-    max_character_length: Optional[conint(gt=0)] = None
+    split_length: conint(gt=0) = 60
+    split_overlap: conint(ge=0) = 10
+    max_character_length: Optional[conint(gt=0)] = 450
     sentence_window_size: Optional[conint(ge=0)] = 0
 
     @validator('sentence_window_size')

@@ -20,12 +20,14 @@ import logging
 import fitz
 import mrc
 import mrc.core.operators as ops
+from morpheus._lib.messages import MessageMeta
 from morpheus.messages import ControlMessage
-from morpheus.messages import MessageMeta
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
 
 from morpheus_pdf_ingest.schemas.pdf_extractor_schema import PDFExtractorSchema
+from morpheus_pdf_ingest.util.flow_control import filter_by_task
+from morpheus_pdf_ingest.util.tracing import latency_logger
 from morpheus_pdf_ingest.util.tracing import traceable
 
 logger = logging.getLogger(__name__)
@@ -53,7 +55,7 @@ def _process_pdf_bytes(df, extract_text: bool = False, extract_images: bool = Fa
     def decode_and_extract(base64_content, extract_text: bool, extract_images: bool,
                            extract_tables: bool):
         # Decode the base64 content
-        pdf_bytes = base64.b64decode(base64_content[0])
+        pdf_bytes = base64.b64decode(base64_content)
         # Load the PDF
         pdf_stream = io.BytesIO(pdf_bytes)
         doc = fitz.open(stream=pdf_stream, filetype="pdf")
@@ -62,13 +64,19 @@ def _process_pdf_bytes(df, extract_text: bool = False, extract_images: bool = Fa
         for page in doc:
             text += page.get_text()
         doc.close()  # Close the document
-        return text
 
-    # Apply the helper function to each row in the 'content' column
-    _decode_and_extract = functools.partial(decode_and_extract, extract_text=extract_text,
-                                            extract_images=extract_images, extract_tables=extract_tables)
-    logger.info(f"Extracting text from PDFs: {df['file_name']}")
-    df['content'] = df['content'].apply(_decode_and_extract)
+        return text.replace('+', ' ')
+
+    try:
+        # Apply the helper function to each row in the 'content' column
+        _decode_and_extract = functools.partial(decode_and_extract, extract_text=extract_text,
+                                                extract_images=extract_images, extract_tables=extract_tables)
+        logger.debug(f"Extracting text from PDFs: {df['file_name']}")
+        logger.debug(df)
+        df['content'] = df['content'].apply(_decode_and_extract)
+    except:
+        # TODO(Devin): Retry / graceful fallback, etc.. if extraction fails
+        logger.error("Failed to extract text from PDFs.")
 
     return df
 
@@ -77,7 +85,9 @@ def _process_pdf_bytes(df, extract_text: bool = False, extract_images: bool = Fa
 def _pdf_text_extractor(builder: mrc.Builder):
     module_config = builder.get_current_module_config()
 
+    @filter_by_task(["pdf_extract"])
     @traceable(MODULE_NAME)
+    @latency_logger(MODULE_NAME)
     def parse_files(ctrl_msg: ControlMessage) -> ControlMessage:
         while (ctrl_msg.has_task('pdf_extract')):
             # get task

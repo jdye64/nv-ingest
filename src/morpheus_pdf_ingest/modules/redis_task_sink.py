@@ -13,7 +13,6 @@
 # limitations under the License.
 import json
 import logging
-import time
 
 import mrc
 import redis
@@ -24,6 +23,7 @@ from mrc.core import operators as ops
 from pydantic import ValidationError
 
 from morpheus_pdf_ingest.schemas.redis_task_sink_schema import RedisTaskSinkSchema
+from morpheus_pdf_ingest.util.tracing import latency_logger
 from morpheus_pdf_ingest.util.tracing import traceable
 
 logger = logging.getLogger(__name__)
@@ -61,28 +61,24 @@ def _redis_task_sink(builder: mrc.Builder):
     redis_client = redis.Redis(host=redis_host, port=redis_port, db=0)
 
     @traceable(MODULE_NAME)
+    @latency_logger(MODULE_NAME)
     def process_and_forward(message: ControlMessage):
-        do_trace_tagging = ((message.has_metadata("config::add_trace_tagging") is True) and (message.get_metadata(
-            "config::add_trace_tagging") is True))
-
         df = message.payload().df
 
         # Log the received DataFrame
-        # logger.info(f"\nReceived DataFrame:\n{df}")
+        # logger.debug(f"\nReceived DataFrame:\n{df}")
 
-        # Add an 'embeddings' column with example data (adjust as necessary)
-        df['embeddings'] = [[0.1, 0.2, 0.3]] * len(df)
-
-        # Build response JSON
         ret_val_json = {
             "data": df.to_json(orient='records'),
         }
 
-        #if (do_trace_tagging):
+        # if (do_trace_tagging):
         #    traces = {}
-        #    for key in message.list_metadata():
-        #        if (key.startswith("trace::")):
-        #            traces[key] = message.get_metadata(key)
+        #    # meta_list = message.list_metadata()
+        #    # logger.info(f"meta_list: {meta_list}")
+        #    # for key in message.list_metadata():
+        #    #    if (key.startswith("trace::")):
+        #    #        traces[key] = message.get_metadata(key)
 
         #    ret_val_json["trace"] = traces
 

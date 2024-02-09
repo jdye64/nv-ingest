@@ -19,14 +19,16 @@ from typing import List, Literal, Any
 import mrc
 import pandas as pd
 from more_itertools import windowed
+from morpheus._lib.messages import MessageMeta
 from morpheus.messages import ControlMessage
-from morpheus.messages import MessageMeta
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
 from mrc.core import operators as ops
 from pydantic import ValidationError
 
 from morpheus_pdf_ingest.schemas.nemo_doc_splitter_schema import DocumentSplitterSchema
+from morpheus_pdf_ingest.util.flow_control import filter_by_task
+from morpheus_pdf_ingest.util.tracing import latency_logger
 from morpheus_pdf_ingest.util.tracing import traceable
 
 logger = logging.getLogger(__name__)
@@ -41,7 +43,7 @@ def _build_split_documents(row, text_splits: List[str], sentence_window_size: in
         if text is None or not text.strip():
             continue
 
-        metadata = row.meta if isinstance(row.meta, dict) else {}
+        metadata = row.meta if hasattr(row, 'meta') and isinstance(row.meta, dict) else {}
         metadata["source_id"] = row.id
         if window_size > 0:
             window_text = "".join(
@@ -137,28 +139,43 @@ def _nemo_document_splitter(builder: mrc.Builder):
         logger.error(log_error_message)
         raise ValueError(log_error_message)
 
+    @filter_by_task(["split"])
     @traceable(MODULE_NAME)
+    @latency_logger(MODULE_NAME)
     def split_and_forward(message: ControlMessage):
         # Assume that df is going to have a 'content' column
+        while (message.has_task('split')):
+            task = message.remove_task('split')
+            logger.info(f"Processing task: {task}")
+            task_props = task.get("properties", {})
 
-        split_docs = []
+            # Validate that all 'content' values are not None
+            df = message.payload().df.to_pandas()
+            if df['content'].isnull().any():
+                raise ValueError(
+                    "DocumentSplitter only works with text documents but one or more 'content' values are None.")
 
-        # Validate that all 'content' values are not None
-        df = message.payload().df.to_pandas()
-        if df['content'].isnull().any():
-            raise ValueError(
-                "DocumentSplitter only works with text documents but one or more 'content' values are None.")
+            # Override parameters if set
+            split_by = task_props.get('split_by', validated_config.split_by)
+            split_length = task_props.get('split_length', validated_config.split_length)
+            split_overlap = task_props.get('split_overlap', validated_config.split_overlap)
+            max_character_length = task_props.get('max_character_length', validated_config.max_character_length)
+            sentence_window_size = task_props.get('sentence_window_size', validated_config.sentence_window_size)
 
-        split_docs = []
-        for _, row in df.iterrows():
-            units = _split_into_units(row['content'], validated_config.split_by)
-            text_splits = _concatenate_units(units, validated_config.split_length, validated_config.split_overlap,
-                                             max_character_length=validated_config.max_character_length)
-            split_docs.extend(_build_split_documents(row, text_splits,
-                                                     sentence_window_size=validated_config.sentence_window_size))
-        split_docs_df = pd.DataFrame(split_docs)
-        message_meta = MessageMeta(df=split_docs_df)
-        message.payload(message_meta)
+            logger.info(f"Splitting documents with split_by: {split_by}, split_length: {split_length}, "
+                        f"split_overlap: {split_overlap}, max_character_length: {max_character_length}, "
+                        f"sentence_window_size: {sentence_window_size}")
+
+            split_docs = []
+            for _, row in df.iterrows():
+                units = _split_into_units(row['content'], split_by)
+                text_splits = _concatenate_units(units, split_length, split_overlap,
+                                                 max_character_length=max_character_length)
+                split_docs.extend(_build_split_documents(row, text_splits, sentence_window_size=sentence_window_size))
+
+            split_docs_df = pd.DataFrame(split_docs)
+            message_meta = MessageMeta(df=split_docs_df)
+            message.payload(message_meta)
 
         return message
 

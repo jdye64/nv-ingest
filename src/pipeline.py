@@ -17,15 +17,19 @@ import time
 import typing
 
 from morpheus.config import Config
+from morpheus.config import PipelineModes
 from morpheus.messages import ControlMessage
 from morpheus.pipeline.pipeline import Pipeline
 from morpheus.stages.general.linear_modules_source import LinearModuleSourceStage
 from morpheus.stages.general.linear_modules_stage import LinearModulesStage
+# from morpheus.stages.output.write_to_vector_db_stage import WriteToVectorDBStage
+from morpheus.stages.inference.triton_inference_stage import TritonInferenceStage
+from morpheus.stages.preprocess.preprocess_nlp_stage import PreprocessNLPStage
 
-from morpheus_pdf_ingest.modules.pdf_extractor import PDFExtractorLoaderFactory
 from morpheus_pdf_ingest.modules.nemo_doc_splitter import NemoDocSplitterLoaderFactory
-from morpheus_pdf_ingest.modules.redis_task_source import RedisTaskSourceLoaderFactory
+from morpheus_pdf_ingest.modules.pdf_extractor import PDFExtractorLoaderFactory
 from morpheus_pdf_ingest.modules.redis_task_sink import RedisTaskSinkLoaderFactory
+from morpheus_pdf_ingest.modules.redis_task_source import RedisTaskSourceLoaderFactory
 
 logger = logging.getLogger(__name__)
 
@@ -76,10 +80,10 @@ def validate_source_config(source_info: typing.Dict[str, any]) -> None:
 def setup_nemo_docsplitter_pipe(pipe: Pipeline, config: Config):
     source_module_loader = RedisTaskSourceLoaderFactory.get_instance(module_name="redis_listener",
                                                                      module_config={
-                                                                               "redis_listener": {
-                                                                                   "redis_host": "redis",
-                                                                               }
-                                                                           })
+                                                                         "redis_listener": {
+                                                                             "redis_host": "redis",
+                                                                         }
+                                                                     })
 
     source_stage = pipe.add_stage(
         LinearModuleSourceStage(config, source_module_loader, output_type=ControlMessage, output_port_name="output"))
@@ -119,10 +123,10 @@ def setup_nemo_docsplitter_pipe(pipe: Pipeline, config: Config):
 def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
     source_module_loader = RedisTaskSourceLoaderFactory.get_instance(module_name="redis_listener",
                                                                      module_config={
-                                                                               "redis_listener": {
-                                                                                   "redis_host": "redis",
-                                                                               }
-                                                                           })
+                                                                         "redis_listener": {
+                                                                             "redis_host": "redis",
+                                                                         }
+                                                                     })
 
     source_stage = pipe.add_stage(
         LinearModuleSourceStage(config, source_module_loader, output_type=ControlMessage, output_port_name="output"))
@@ -130,71 +134,71 @@ def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
     pdf_text_extract_loader = PDFExtractorLoaderFactory.get_instance(module_name="pdf_extractor",
                                                                      module_config={})
 
-    nemo_splitter_stage = pipe.add_stage(
+    extractor_stage = pipe.add_stage(
         LinearModulesStage(config, pdf_text_extract_loader,
                            input_type=ControlMessage,
                            output_type=ControlMessage,
                            input_port_name="input",
                            output_port_name="output"))
 
-    sink_module_loader = RedisTaskSinkLoaderFactory.get_instance(module_name="redis_task_sink",
-                                                                 module_config={
-                                                                     "redis_host": "redis",
-                                                                 })
-    sink_stage = pipe.add_stage(
-        LinearModulesStage(config, sink_module_loader,
+    nemo_splitter_loader = NemoDocSplitterLoaderFactory.get_instance(module_name="nemo_doc_splitter",
+                                                                     module_config={
+                                                                         "split_by": "word",
+                                                                         "split_length": 60,
+                                                                         "split_overlap": 10,
+                                                                         "max_character_length": 450,
+                                                                     })
+
+    nemo_splitter_stage = pipe.add_stage(
+        LinearModulesStage(config, nemo_splitter_loader,
                            input_type=ControlMessage,
                            output_type=ControlMessage,
                            input_port_name="input",
                            output_port_name="output"))
 
-    pipe.add_edge(source_stage, nemo_splitter_stage)
-    pipe.add_edge(nemo_splitter_stage, sink_stage)
+    tokenizer_config = {
+        "model_kwargs": {
+            "add_special_tokens": False,
+            "column": "content",
+            "do_lower_case": True,
+            "truncation": True,
+            "vocab_hash_file": "data/bert-base-uncased-hash.txt",
+        },
+        "model_name": "bert-base-uncased-hash"
+    }
+    nlp_stage = pipe.add_stage(PreprocessNLPStage(config, **tokenizer_config.get("model_kwargs", {})))
+
+    sink_module_loader = RedisTaskSinkLoaderFactory.get_instance(module_name="redis_task_sink",
+                                                                 module_config={
+                                                                     "redis_host": "redis",
+                                                                 })
+
+    embeddings_config = {
+        "model_kwargs": {
+            "force_convert_inputs": True,
+            "model_name": "intfloat/e5-small-v2",
+            "server_url": "triton:8001",
+            "use_shared_memory": True
+        }
+    }
+    embedding_stage = pipe.add_stage(TritonInferenceStage(config, **embeddings_config.get('model_kwargs', {})))
+
+    # vector_db = pipe.add_stage(WriteToVectorDBStage(pipeline_config, **vdb_config))
+
+    sink_stage = pipe.add_stage(
+        LinearModulesStage(config, sink_module_loader,
+                           input_type=typing.Any,
+                           output_type=ControlMessage,
+                           input_port_name="input",
+                           output_port_name="output"))
+
+    pipe.add_edge(source_stage, extractor_stage)
+    pipe.add_edge(extractor_stage, nemo_splitter_stage)
+    pipe.add_edge(nemo_splitter_stage, nlp_stage)
+    pipe.add_edge(nlp_stage, embedding_stage)
+    pipe.add_edge(embedding_stage, sink_stage)
 
     return sink_stage
-
-
-def process_vdb_sources(pipe: Pipeline, config: Config, vdb_source_config: typing.List[typing.Dict]) -> typing.List:
-    """
-    Processes and sets up sources defined in a vdb_source_config.
-
-    This function reads the source configurations provided in vdb_source_config and
-    sets up each source based on its type ('rss', 'filesystem', or 'custom').
-    It validates each source configuration and then calls the appropriate setup
-    function to add the source to the pipeline.
-
-    Parameters
-    ----------
-    pipe : Pipeline
-        The pipeline to which the sources will be added.
-    config : Config
-        Configuration object for the pipeline.
-    vdb_source_config : List[Dict]
-        A list of dictionaries, each containing the configuration for a source.
-
-    Returns
-    -------
-    list
-        A list of the sub-pipeline stages created for each defined source.
-
-    Raises
-    ------
-    ValueError
-        If an unsupported source type is encountered in the configuration.
-    """
-    vdb_sources = []
-    for source_info in vdb_source_config:
-        validate_source_config(source_info)
-        source_type = source_info['type']
-        source_name = source_info['name']
-        source_config = source_info['config']
-
-        if (source_type == 'filesystem'):
-            vdb_sources.append(setup_filesystem_source(pipe, config, source_name, source_config))
-        else:
-            raise ValueError(f"Unsupported source type: {source_type}")
-
-    return vdb_sources
 
 
 def pipeline(pipeline_config: Config) -> float:
@@ -235,9 +239,15 @@ def pipeline(pipeline_config: Config) -> float:
 if (__name__ == "__main__"):
     logging.basicConfig(level=logging.INFO)
 
+    from morpheus.config import CppConfig
+
+    CppConfig.set_should_use_cpp(False)
+
     config = Config()
-    config.pipeline_batch_size = 1
-    config.num_threads = 1
+    config.pipeline_batch_size = 256
     config.enable_monitor = True
+    config.feature_length = 512
+    config.model_max_batch_size = 256
+    config.mode = PipelineModes.NLP
 
     pipeline(config)
