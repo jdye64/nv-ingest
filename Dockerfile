@@ -14,9 +14,8 @@ SHELL ["/bin/bash", "-c"]
 
 # Install the module
 RUN source activate morpheus \
-    && mamba env update -n morpheus --file ./examples/llm/vdb_upload/requirements.yaml \
-    && mamba install -c conda-forge pydantic pyinstrument \
-    && pip install pymupdf redis \
+    && mamba install -c conda-forge pyinstrument \
+    && pip install redis==5.0.1 \
     && pip install . \
     && rm -rf src 
 
