@@ -1,5 +1,5 @@
 # Use NVIDIA Morpheus as the base image
-FROM devin-morpheus-ms:manual_0.01
+FROM morpheus-ms-base:24.03
 
 # Set the working directory in the container
 WORKDIR /workspace
@@ -8,9 +8,6 @@ WORKDIR /workspace
 COPY setup.py setup.py
 COPY src/ src/
 SHELL ["/bin/bash", "-c"]
-
-# TODO(Devin): Something is wrong with the container build on the vdb_upload branch, its missing some of the module files.
-# Double check this tomorrow.
 
 # Install the module
 RUN source activate morpheus \
