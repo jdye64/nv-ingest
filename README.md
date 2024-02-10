@@ -46,7 +46,9 @@ python ./src/util/submit_to_morpheus_ms.py \
 
 # Launch the Nemo Retriever pipeline with the morpheus-ms service
 
-Note: as of 9 Feb, 2024 you will need to pull the Devin's experimental Nemo Retrieval pipeline branch.
+Note: As of 9 Feb, 2024 you will need to pull the Devin's experimental Nemo Retrieval pipeline branch.
+Note: Currently, only the 'index' side of the Nemo pipeline has hooks into the morpheus-ms, 'query' side still needs 
+work.
 
 ### Create a Nemo Retriever pipeline with the morpheus-ms service
 
