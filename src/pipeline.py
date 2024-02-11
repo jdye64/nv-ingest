@@ -22,7 +22,6 @@ from morpheus.messages import ControlMessage
 from morpheus.pipeline.pipeline import Pipeline
 from morpheus.stages.general.linear_modules_source import LinearModuleSourceStage
 from morpheus.stages.general.linear_modules_stage import LinearModulesStage
-# from morpheus.stages.output.write_to_vector_db_stage import WriteToVectorDBStage
 from morpheus.stages.inference.triton_inference_stage import TritonInferenceStage
 from morpheus.stages.preprocess.preprocess_nlp_stage import PreprocessNLPStage
 
@@ -182,8 +181,6 @@ def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
         }
     }
     embedding_stage = pipe.add_stage(TritonInferenceStage(config, **embeddings_config.get('model_kwargs', {})))
-
-    # vector_db = pipe.add_stage(WriteToVectorDBStage(pipeline_config, **vdb_config))
 
     sink_stage = pipe.add_stage(
         LinearModulesStage(config, sink_module_loader,

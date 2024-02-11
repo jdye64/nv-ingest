@@ -11,8 +11,8 @@ SHELL ["/bin/bash", "-c"]
 
 # Install the module
 RUN source activate morpheus \
-    && mamba install -c conda-forge pyinstrument \
-    && pip install redis==5.0.1 \
+    && mamba install -c conda-forge pydantic pyinstrument \
+    && pip install redis==5.0.1 PyMuPDF more_itertools\
     && pip install . \
     && rm -rf src 
 
