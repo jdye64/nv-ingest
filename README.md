@@ -1,8 +1,43 @@
 # Quickstart
 
+## Links
+
+- [Morpheus-Core](https://github.com/nv-morpheus/Morpheus)
+- [Morpheus-MS](https://gitlab-master.nvidia.com/drobison/morpheus-pdf-ingest-ms)
+- [Nemo Retriever](https://gitlab-master.nvidia.com/drobison/devin-nemo-retrieval-microservice-private)
+- [Tracking Doc + Notes on Nemo Retriever](https://docs.google.com/document/d/12krzO82T-nhtyvTNh6Pbc8mqBOrBp4JZ9wWwM3OOR2Q/edit#heading=h.gya3si3lass1)
+- [Ryan Angilly's Engineering Overview of Nemo Retriever](https://nvidia-my.sharepoint.com/personal/rangilly_nvidia_com/_layouts/15/stream.aspx?id=%2Fpersonal%2Frangilly%5Fnvidia%5Fcom%2FDocuments%2FRecordings%2FRyan%20Angilly%20presents%20how%20Retriever%20Services%20work%2D20240124%5F120001%2DMeeting%20Recording%2Emp4&referrer=StreamWebApp%2EWeb&referrerScenario=AddressBarCopied%2Eview&ga=1)
+
+## Big picture Concepts
+
+- We need to build the Morpheus-ms container so it can be deployed into the Nemo Retriever's docker compose cluster.
+    - We'll build the Morpheus-ms container from the Morpheus runtime container, which is built from the Morpheus-Core
+      repo.
+- The Morpheus-ms container is, right now, basically the dependencies + entrypoint to run src/pipeline.py
+    - We will build this from the Morpheus-ms repo, which consists of a library morpheus_pdf_ingest, and a pipeline
+      defined in src/pipeline.py
+- We can test the src/pipeline.py code outside the Nemo Retriever cluster without having to use/build the Morpheus-ms
+  container, which is nice for development
+    - The pipeline.py script expects to read from a Redis service, do various things, including run an inference model
+      on
+      Triton, and then return via Redis
+    - Redis and Triton need to be deployed
+    - Triton needs models to run.
+    - The pipeline.py script starts a Morpheus pipeline that monitors a Redis list for new jobs, and then processes
+      them, and returns a result.
+    - We can use the src/util/submit_to_morpheus_ms.py script to submit a PDF to the Morpheus-ms service, good for
+      fast iteration and experimentation.
+- Once we've independently tested the Morpheus-ms, we can deploy it into the Nemo Retriever cluster and test it there.
+    - The modified Nemo Retriever cluster and insertion hooks for Morpheus-ms can be found in Devin's private branch of
+      the Nemo Retriever repo.
+    - In the context of the Nemo Retriever, the Morpheus-ms service is used to process PDFs and return the results to
+      the
+      Nemo Retriever pipeline for indexing. Currently we insert into the document_indexing.py file, and forward new
+      documents to the Morpheus-ms service for processing.
+
 We need to build the morpheus-ms here that gets loaded by the Nemo Retriever pipeline
 
-# Build Morpheus 24.03 release container from source
+## Build Morpheus 24.03 (morpheus-ms-base:24.03) release container from source
 
 ### Clone the Morpheus repository and checkout the 24.03 release tag.
 
@@ -12,7 +47,7 @@ git checkout branch-24.03
 git submodule update --init --recursive
 ```
 
-### Build the Morpheus-ms-base container
+### Build Morpheus 24.03 (morpheus-ms-base:24.03) release container
 
 ```bash
 DOCKER_IMAGE_NAME=morpheus-ms-base \
@@ -22,17 +57,88 @@ bash docker/build_container_release.sh
 
 Wait for a while.
 
-# Build the Morpheus-ms container
+## Build the Morpheus-ms container (morpheus-ms:24.03) from the source
+
+### Clone the Morpheus-ms repository
+
+```bash
+git clone https://gitlab-master.nvidia.com/drobison/morpheus-pdf-ingest-ms
+```
 
 ```bash
 docker build --tag morpheus-ms:24.03 .
 ```
 
-### Check if the morpheus-ms is running and responding correctly - This will submit a PDF directly to the morpheus-ms service, bypassing the Nemo Retriever pipeline
+## Verify src/pipeline.py is working as expected - This will submit a PDF directly to the morpheus-ms service, bypassing the Nemo Retriever pipeline
 
 ```bash
+# In MORPHEUS_ROOT
+## Make a new Conda environment from the Morpheus Requirements file
+mamba env create -n morpheus -f docker/environments/conda/environments/all_cuda-121_arch-x86_64.yaml
+conda activate morpheus
+
+python examples/llm/main.py vdb_upload export-triton-model --model_name intfloat/e5-small-v2 \
+  --triton_repo ./models/triton-model-repo
+  
+Created Triton Model at ./models/triton-model-repo/intfloat/e5-small-v2
+Total time: 4.36 sec
+
+export MORPHEUS_ROOT=[path to your morpheus core installation]
+export MORPHEUS_PDF_INGEST_ROOT=[path to morpheus pdf ingest]
+
+# In MORPHEUS_PDF_INGEST_ROOT
+ln -s ${MORPHEUS_ROOT}/models:${MORPHEUS_PDF_INGEST_ROOT}/models_symlinks   # map in the pre-built models from morpheus. We don't have to, but if we don't we have to use our own.
+
+docker run -p 6379:6379 redis  # Start Redis and make sure that we map its ports into our host network.
+docker run --rm -ti --gpus=all -p8000:8000 -p8001:8001 -p8002:8002 -v $PWD/models_symlinks:/models nvcr.
+io/nvidia/tritonserver:23.12-py3 tritonserver --model-repository=/models/triton-model-repo --exit-on-error=false 
+--model-control-mode=explicit --load-model intfloat/e5-small-v2 --load-model all-MiniLM-L6-v2
+
+## Make sure the triton server is running and the models are loaded with no errors reported ##
+
+docker ps
+CONTAINER ID   IMAGE                                   COMMAND                  CREATED          STATUS          PORTS                                                           NAMES
+84a18da41101   nvcr.io/nvidia/tritonserver:23.12-py3   "/opt/nvidia/nvidia_…"   16 seconds ago   Up 15 seconds   0.0.0.0:8000-8002->8000-8002/tcp, :::8000-8002->8000-8002/tcp   eloquent_austin
+10357419c96a   redis                                   "docker-entrypoint.s…"   28 seconds ago   Up 27 seconds   0.0.0.0:6379->6379/tcp, :::6379->6379/tcp                       romantic_eu
+
 # In a second terminal, start the morpheus-ms service
 python src/pipeline.py
+DEBUG:morpheus.utils.module_utils:Module 'nemo_document_splitter' was successfully registered with 'morpheus_pdf_ingest' namespace.
+DEBUG:morpheus.utils.module_utils:Module 'pdf_text_extractor' was successfully registered with 'morpheus_pdf_ingest' namespace.
+DEBUG:morpheus.utils.module_utils:Module 'redis_task_sink' was successfully registered with 'morpheus_pdf_ingest' namespace.
+DEBUG:morpheus.utils.module_utils:Module 'redis_task_source' was successfully registered with 'morpheus_pdf_ingest' namespace.
+INFO:root:Starting pipeline setup
+INFO:root:Pipeline setup completed in 0.00 seconds
+INFO:root:Running pipeline
+DEBUG:asyncio:Using selector: EpollSelector
+INFO:morpheus.pipeline.pipeline:====Pipeline Pre-build====
+INFO:morpheus.pipeline.pipeline:====Pre-Building Segment: main====
+INFO:morpheus.pipeline.pipeline:====Pre-Building Segment Complete!====
+INFO:morpheus.pipeline.pipeline:====Pipeline Pre-build Complete!====
+INFO:morpheus.pipeline.pipeline:====Registering Pipeline====
+INFO:morpheus.pipeline.pipeline:====Building Pipeline====
+INFO:morpheus.pipeline.pipeline:====Building Pipeline Complete!====
+INFO:morpheus.pipeline.pipeline:====Registering Pipeline Complete!====
+INFO:morpheus.pipeline.pipeline:====Starting Pipeline====
+INFO:morpheus.pipeline.pipeline:====Pipeline Started====
+INFO:morpheus.pipeline.pipeline:====Building Segment: main====
+DEBUG:morpheus.utils.module_utils:Module 'redis_task_source' with namespace 'morpheus_pdf_ingest' is successfully loaded.
+INFO:morpheus.pipeline.single_output_source:Added source: <redis_listener-0; LinearModuleSourceStage(module_config=<morpheus.utils.module_utils.ModuleLoader object at 0x7f9550635660>, output_port_name=output, output_type=<class 'morpheus._lib.messages.ControlMessage'>)>
+  └─> morpheus.ControlMessage
+DEBUG:morpheus.utils.module_utils:Module 'pdf_text_extractor' with namespace 'morpheus_pdf_ingest' is successfully loaded.
+INFO:morpheus.pipeline.single_port_stage:Added stage: <pdf_extractor-1; LinearModulesStage(module_config=<morpheus.utils.module_utils.ModuleLoader object at 0x7f95506358d0>, input_port_name=input, output_port_name=output, input_type=<class 'morpheus._lib.messages.ControlMessage'>, output_type=<class 'morpheus._lib.messages.ControlMessage'>)>
+  └─ morpheus.ControlMessage -> morpheus.ControlMessage
+DEBUG:morpheus.utils.module_utils:Module 'nemo_document_splitter' with namespace 'morpheus_pdf_ingest' is successfully loaded.
+INFO:morpheus.pipeline.single_port_stage:Added stage: <nemo_doc_splitter-2; LinearModulesStage(module_config=<morpheus.utils.module_utils.ModuleLoader object at 0x7f95506359c0>, input_port_name=input, output_port_name=output, input_type=<class 'morpheus._lib.messages.ControlMessage'>, output_type=<class 'morpheus._lib.messages.ControlMessage'>)>
+  └─ morpheus.ControlMessage -> morpheus.ControlMessage
+INFO:morpheus.pipeline.single_port_stage:Added stage: <preprocess-nlp-3; PreprocessNLPStage(vocab_hash_file=data/bert-base-uncased-hash.txt, truncation=True, do_lower_case=True, add_special_tokens=False, stride=-1, column=content)>
+  └─ morpheus.ControlMessage -> morpheus.MultiInferenceMessage
+INFO:morpheus.pipeline.single_port_stage:Added stage: <inference-4; TritonInferenceStage(model_name=all-MiniLM-L6-v2, server_url=triton:8001, force_convert_inputs=True, use_shared_memory=True, needs_logits=None, inout_mapping=None)>
+  └─ morpheus.MultiInferenceMessage -> morpheus.MultiResponseMessage
+DEBUG:morpheus.utils.module_utils:Module 'redis_task_sink' with namespace 'morpheus_pdf_ingest' is successfully loaded.
+INFO:morpheus.pipeline.single_port_stage:Added stage: <redis_task_sink-5; LinearModulesStage(module_config=<morpheus.utils.module_utils.ModuleLoader object at 0x7f9550635cc0>, input_port_name=input, output_port_name=output, input_type=typing.Any, output_type=<class 'morpheus._lib.messages.ControlMessage'>)>
+  └─ morpheus.MultiResponseMessage -> morpheus.ControlMessage
+INFO:morpheus.pipeline.pipeline:====Building Segment Complete!====
 
 # In another terminal, submit a PDF to the morpheus-ms service
 
@@ -44,11 +150,18 @@ python ./src/util/submit_to_morpheus_ms.py \
   --enable_split
 ```
 
-# Launch the Nemo Retriever pipeline with the morpheus-ms service
+## Launch the Nemo Retriever pipeline with the morpheus-ms service
 
 Note: As of 9 Feb, 2024 you will need to pull the Devin's experimental Nemo Retrieval pipeline branch.
-Note: Currently, only the 'index' side of the Nemo pipeline has hooks into the morpheus-ms, 'query' side still needs 
+Note: Currently, only the 'index' side of the Nemo pipeline has hooks into the morpheus-ms, 'query' side still needs
 work.
+
+### Clone the experimental Nemo Retrieval pipeline branch
+
+```bash
+git clone https://gitlab-master.nvidia.com/drobison/devin-nemo-retrieval-microservice-private
+git checkout devin_morpheus_pdf_ingest
+```
 
 ### Create a Nemo Retriever pipeline with the morpheus-ms service
 
@@ -81,15 +194,15 @@ devin-nemo-retrieval-microservice-private-zipkin-1           openzipkin/zipkin  
 
 ### Create collections for performance comparison, and export the collection ID's
 
-Note: the collection ID will be associated with the pipeline specified in the request, and subsequent index and 
-query calls will use the associated pipeline. 
+Note: the collection ID will be associated with the pipeline specified in the request, and subsequent index and
+query calls will use the associated pipeline.
 
-The Haystack pipeline will run the pipeline defined in `[nemo_retriever]/pipelines/dense_milvus.mustache`, where 
-initial pdf text extraction will be done by the Tika service, and the text will then be chunked, embedded, and 
+The Haystack pipeline will run the pipeline defined in `[nemo_retriever]/pipelines/dense_milvus.mustache`, where
+initial pdf text extraction will be done by the Tika service, and the text will then be chunked, embedded, and
 uploaded to Milvus by nemo defined haystack components.
 
-The Morpheus pipeline will run the pipeline defined in `[nemo_retriever]/pipelines/test_writer_only.mustache`, this 
-will call out to the morpheus-ms to do pdf text extraction, chunking, and embedding, then return the results to the 
+The Morpheus pipeline will run the pipeline defined in `[nemo_retriever]/pipelines/test_writer_only.mustache`, this
+will call out to the morpheus-ms to do pdf text extraction, chunking, and embedding, then return the results to the
 Haystack DocumentWriter component for upload.
 
 See: `[nemo_retriever]/src/v1/document_indexing.py` for ingest API modifications.
@@ -126,10 +239,10 @@ export MORPHEUS_PATH_COLLECTION_ID=33e0b745-585d-44c6-8db0-b03b841ea50b
 
 ### Upload documents to the indexing endpoint
 
-Note: `[nemo_retriever]/script/quickstart/upload.py` has also been modified to support new options `--silent` and 
-`--debug_pdf_extract_method=[tika|morpheus]` 
+Note: `[nemo_retriever]/script/quickstart/upload.py` has also been modified to support new options `--silent` and
+`--debug_pdf_extract_method=[tika|morpheus]`
 
-Note: You may want to run the upload command below multiple times as a warm up; the first time the Triton service is 
+Note: You may want to run the upload command below multiple times as a warm up; the first time the Triton service is
 hit, it tends to take an unusually long time to respond.
 
 ```bash
@@ -142,6 +255,7 @@ data/ [pdf_name].pdf
 At present stat collection is a manual process from trace logs.
 
 ### For the Haystack pipeline:
+
 ```bash
 retrieval-ms-1  | INFO:     Using Tika to process PDFs.
 retrieval-ms-1  | INFO:     TIKA ELAPSED: 7236.22189 ms
@@ -150,6 +264,7 @@ retrieval-ms-1  | INFO:     Nemo Document embedding: 13578.185228 ms.
 ```
 
 ### For the Morpheus pipeline:
+
 ```bash
 morpheus-ms-1  | DEBUG:morpheus_pdf_ingest.modules.redis_task_source:latency::redis_source_retrieve: 33.609341 msec.
 morpheus-ms-1  | DEBUG:morpheus_pdf_ingest.modules.redis_task_source:throughput::redis_source_retrieve: -2.9753633074805006e-05 MB/sec.
