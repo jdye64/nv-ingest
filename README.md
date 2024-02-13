@@ -45,6 +45,8 @@ We need to build the morpheus-ms here that gets loaded by the Nemo Retriever pip
 git clone https://github.com/nv-morpheus/Morpheus.git
 git checkout branch-24.03
 git submodule update --init --recursive
+
+./scripts/fetch_data.py fetch all # pull down all the LFS artifacts for Morpheus, including pre-built models
 ```
 
 ### Build Morpheus 24.03 (morpheus-ms-base:24.03) release container
