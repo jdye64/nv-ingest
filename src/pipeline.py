@@ -22,8 +22,6 @@ from morpheus.messages import ControlMessage
 from morpheus.pipeline.pipeline import Pipeline
 from morpheus.stages.general.linear_modules_source import LinearModuleSourceStage
 from morpheus.stages.general.linear_modules_stage import LinearModulesStage
-from morpheus.stages.inference.triton_inference_stage import TritonInferenceStage
-from morpheus.stages.preprocess.preprocess_nlp_stage import PreprocessNLPStage
 
 from morpheus_pdf_ingest.modules.nemo_doc_splitter import NemoDocSplitterLoaderFactory
 from morpheus_pdf_ingest.modules.pdf_extractor import PDFExtractorLoaderFactory
@@ -155,33 +153,31 @@ def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
                            input_port_name="input",
                            output_port_name="output"))
 
-    tokenizer_config = {
-        "model_kwargs": {
-            "add_special_tokens": False,
-            "column": "content",
-            "do_lower_case": True,
-            "truncation": True,
-            "vocab_hash_file": "data/bert-base-uncased-hash.txt",
-        },
-        "model_name": "bert-base-uncased-hash"
-    }
-    nlp_stage = pipe.add_stage(PreprocessNLPStage(config, **tokenizer_config.get("model_kwargs", {})))
+    # tokenizer_config = {
+    #    "model_kwargs": {
+    #        "add_special_tokens": False,
+    #        "column": "content",
+    #        "do_lower_case": True,
+    #        "truncation": True,
+    #        "vocab_hash_file": "data/bert-base-uncased-hash.txt",
+    #    },
+    #    "model_name": "bert-base-uncased-hash"
+    # }
+    # nlp_stage = pipe.add_stage(PreprocessNLPStage(config, **tokenizer_config.get("model_kwargs", {})))
 
+    # embeddings_config = {
+    #    "model_kwargs": {
+    #        "force_convert_inputs": True,
+    #        "model_name": "intfloat/e5-small-v2",
+    #        "server_url": "triton:8001",
+    #        "use_shared_memory": True
+    #    }
+    # }
+    # embedding_stage = pipe.add_stage(TritonInferenceStage(config, **embeddings_config.get('model_kwargs', {})))
     sink_module_loader = RedisTaskSinkLoaderFactory.get_instance(module_name="redis_task_sink",
                                                                  module_config={
                                                                      "redis_host": "redis",
                                                                  })
-
-    embeddings_config = {
-        "model_kwargs": {
-            "force_convert_inputs": True,
-            "model_name": "intfloat/e5-small-v2",
-            "server_url": "triton:8001",
-            "use_shared_memory": True
-        }
-    }
-    embedding_stage = pipe.add_stage(TritonInferenceStage(config, **embeddings_config.get('model_kwargs', {})))
-
     sink_stage = pipe.add_stage(
         LinearModulesStage(config, sink_module_loader,
                            input_type=typing.Any,
@@ -191,9 +187,9 @@ def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
 
     pipe.add_edge(source_stage, extractor_stage)
     pipe.add_edge(extractor_stage, nemo_splitter_stage)
-    pipe.add_edge(nemo_splitter_stage, nlp_stage)
-    pipe.add_edge(nlp_stage, embedding_stage)
-    pipe.add_edge(embedding_stage, sink_stage)
+    # pipe.add_edge(nemo_splitter_stage, nlp_stage)
+    # pipe.add_edge(nlp_stage, embedding_stage)
+    pipe.add_edge(nemo_splitter_stage, sink_stage)
 
     return sink_stage
 

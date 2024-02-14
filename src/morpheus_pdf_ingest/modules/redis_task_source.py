@@ -16,12 +16,13 @@
 import json
 import logging
 import time
+import traceback
 
 import cudf
 import mrc
 import redis
-from morpheus.messages import ControlMessage
 from morpheus._lib.messages import MessageMeta
+from morpheus.messages import ControlMessage
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
 from pydantic import ValidationError
@@ -77,6 +78,8 @@ def _redis_task_source(builder: mrc.Builder):
             try:
                 job_data = json.loads(job_payload)
                 # logger.info(f"job data:\n{json.dumps(job_data, indent=2)}")
+                data = job_data.pop('data', {})
+                logger.info(f"Job data:\n{json.dumps(job_data, indent=2)}")
                 do_trace_tagging = job_data.pop('add_trace_tagging', False)
                 tasks = job_data.pop('tasks', [])
                 task_id = job_data.pop('task_id')
@@ -85,7 +88,7 @@ def _redis_task_source(builder: mrc.Builder):
 
                 response_channel = f"response_{task_id}"
 
-                df = cudf.DataFrame(job_data.get('data', {}))
+                df = cudf.DataFrame(data)
                 message_meta = MessageMeta(df=df)
                 logger.info(f"Received message with {len(df)} rows, cols: {df.columns}")
 
@@ -95,6 +98,7 @@ def _redis_task_source(builder: mrc.Builder):
                 control_message.set_metadata('task_id', task_id)
 
                 for task in tasks:
+                    logger.info("Tasks: %s", json.dumps(task, indent=2))
                     control_message.add_task(task['type'], task['properties'])
 
                 # Debug Tracing
@@ -118,6 +122,7 @@ def _redis_task_source(builder: mrc.Builder):
 
                 yield control_message
             except Exception as exc:
+                traceback.print_exc()
                 logger.error("Error processing message: %s", exc)
                 return None
 
