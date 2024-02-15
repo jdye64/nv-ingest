@@ -180,7 +180,7 @@ async def load_data_from_path(path):
 @click.command()
 @click.option('--file_source', multiple=True, default=[], type=str,
               help='List of file sources/paths to be processed.')
-@click.option('--redis-host', default='redis', help="DNS name for Redis.")
+@click.option('--redis-host', default='localhost', help="DNS name for Redis.")
 @click.option('--redis-port', default='6379', help="Port for Redis.")
 @click.option('--enable_pdf_extract', is_flag=True, help="Enable PDF text extraction task.")
 @click.option('--enable_split', is_flag=True, help="Enable text splitting task.")
