@@ -92,6 +92,8 @@ export MORPHEUS_PDF_INGEST_ROOT=[path to morpheus pdf ingest]
 ln -s ${MORPHEUS_ROOT}/models:${MORPHEUS_PDF_INGEST_ROOT}/models_symlinks   # map in the pre-built models from morpheus. We don't have to, but if we don't we have to use our own.
 
 docker run -p 6379:6379 redis  # Start Redis and make sure that we map its ports into our host network.
+
+#### Triton is Optional at the Moment -- unless you're testing ingestion embedding creation ####
 docker run --rm -ti --gpus=all -p8000:8000 -p8001:8001 -p8002:8002 -v $PWD/models_symlinks:/models nvcr.
 io/nvidia/tritonserver:23.12-py3 tritonserver --model-repository=/models/triton-model-repo --exit-on-error=false 
 --model-control-mode=explicit --load-model intfloat/e5-small-v2 --load-model all-MiniLM-L6-v2
@@ -203,8 +205,8 @@ The Haystack pipeline will run the pipeline defined in `[nemo_retriever]/pipelin
 initial pdf text extraction will be done by the Tika service, and the text will then be chunked, embedded, and
 uploaded to Milvus by nemo defined haystack components.
 
-The Morpheus pipeline will run the pipeline defined in `[nemo_retriever]/pipelines/test_writer_only.mustache`, this
-will call out to the morpheus-ms to do pdf text extraction, chunking, and embedding, then return the results to the
+The Morpheus pipeline will run the pipeline defined in `[nemo_retriever]/pipelines/morpheus_extract_split.mustache`, 
+this will call out to the morpheus-ms to do pdf text extraction, chunking, and embedding, then return the results to the
 Haystack DocumentWriter component for upload.
 
 See: `[nemo_retriever]/src/v1/document_indexing.py` for ingest API modifications.
@@ -225,18 +227,18 @@ curl http://localhost:1984/v1/collections?pretty=true \
 
 curl http://localhost:1984/v1/collections?pretty=true \
 > -H 'Content-Type: application/json' \
-> -d '{"name": "test_collection", "pipeline": "test_writer_only"}'
+> -d '{"name": "test_collection", "pipeline": "morpheus_extract_split"}'
 
 {
   "collection": {
-    "pipeline": "test_writer_only",
+    "pipeline": "morpheus_extract_split",
     "name": "test_collection",
     "id": "33e0b745-585d-44c6-8db0-b03b841ea50b"
   }
 }
 
 export HAYSTACK_PATH_COLLECTION_ID=a962acb5-f1e7-4632-add7-1ca601063287
-export MORPHEUS_PATH_COLLECTION_ID=33e0b745-585d-44c6-8db0-b03b841ea50b
+export MORPHEUS_EXTRACT_SPLIT_COLLECTION=33e0b745-585d-44c6-8db0-b03b841ea50b
 ```
 
 ### Upload documents to the indexing endpoint
@@ -248,10 +250,13 @@ Note: You may want to run the upload command below multiple times as a warm up; 
 hit, it tends to take an unusually long time to respond.
 
 ```bash
-time python script/quickstart/upload.py -c --debug_pdf_extract_method=tika --silent ${HAYSTACK_PATH_COLLECTION_ID} data/
-[pdf_name].pdf
-time python script/quickstart/upload.py -c --debug_pdf_extract_method=morpheus --silent ${MORPHEUS_PATH_COLLECTION_ID} 
-data/ [pdf_name].pdf
+time python script/quickstart/upload.py -c ${HAYSTACK_PATH_COLLECTION} \
+   --metadata extraction_method=tika \
+   --silent --n_parallel=15 --filenames [pdf_name].pdf
+   
+time python script/quickstart/upload.py -c ${MORPHEUS_EXTRACT_SPLIT} \
+   --metadata extraction_method=morpheus \
+   --silent --n_parallel=15 --filenames [pdf_name].pdf
 ```
 
 At present stat collection is a manual process from trace logs.
