@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import logging
+import os
 import time
 import typing
 
@@ -22,13 +23,14 @@ from morpheus.messages import ControlMessage
 from morpheus.pipeline.pipeline import Pipeline
 from morpheus.stages.general.linear_modules_source import LinearModuleSourceStage
 from morpheus.stages.general.linear_modules_stage import LinearModulesStage
-# from morpheus.stages.inference.triton_inference_stage import TritonInferenceStage
-# from morpheus.stages.preprocess.preprocess_nlp_stage import PreprocessNLPStage
 
 from morpheus_pdf_ingest.modules.nemo_doc_splitter import NemoDocSplitterLoaderFactory
 from morpheus_pdf_ingest.modules.pdf_extractor import PDFExtractorLoaderFactory
 from morpheus_pdf_ingest.modules.redis_task_sink import RedisTaskSinkLoaderFactory
 from morpheus_pdf_ingest.modules.redis_task_source import RedisTaskSourceLoaderFactory
+
+# from morpheus.stages.inference.triton_inference_stage import TritonInferenceStage
+# from morpheus.stages.preprocess.preprocess_nlp_stage import PreprocessNLPStage
 
 logger = logging.getLogger(__name__)
 
@@ -77,9 +79,14 @@ def validate_source_config(source_info: typing.Dict[str, any]) -> None:
 
 
 def setup_nemo_docsplitter_pipe(pipe: Pipeline, config: Config):
+    redis_host = os.environ.get("REDIS_HOST", "localhost")
+    redis_port = os.environ.get("REDIS_PORT", "6379")
+    logger.info(f"{redis_host}")
+    logger.info(f"{redis_port}")
     source_module_loader = RedisTaskSourceLoaderFactory.get_instance(module_name="redis_listener",
                                                                      module_config={
-                                                                         "redis_host": "localhost",
+                                                                         "redis_host": redis_host,
+                                                                         "redis_port": redis_port
                                                                      })
 
     source_stage = pipe.add_stage(
@@ -102,7 +109,8 @@ def setup_nemo_docsplitter_pipe(pipe: Pipeline, config: Config):
 
     sink_module_loader = RedisTaskSinkLoaderFactory.get_instance(module_name="redis_task_sink",
                                                                  module_config={
-                                                                     "redis_host": "localhost",
+                                                                     "redis_host": redis_host,
+                                                                     "redis_port": redis_port
                                                                  })
     sink_stage = pipe.add_stage(
         LinearModulesStage(config, sink_module_loader,
@@ -118,9 +126,14 @@ def setup_nemo_docsplitter_pipe(pipe: Pipeline, config: Config):
 
 
 def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
+    redis_host = os.environ.get("REDIS_HOST", "localhost")
+    redis_port = os.environ.get("REDIS_PORT", "6379")
+    logger.info(f"REDIS_HOST: {redis_host}")
+    logger.info(f"REDIS_PORT: {redis_port}")
     source_module_loader = RedisTaskSourceLoaderFactory.get_instance(module_name="redis_listener",
                                                                      module_config={
-                                                                         "redis_host": "localhost",
+                                                                         "redis_host": redis_host,
+                                                                         "redis_port": redis_port
                                                                      })
 
     source_stage = pipe.add_stage(
@@ -174,7 +187,8 @@ def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
     # embedding_stage = pipe.add_stage(TritonInferenceStage(config, **embeddings_config.get('model_kwargs', {})))
     sink_module_loader = RedisTaskSinkLoaderFactory.get_instance(module_name="redis_task_sink",
                                                                  module_config={
-                                                                     "redis_host": "localhost",
+                                                                     "redis_host": redis_host,
+                                                                     "redis_port": redis_port
                                                                  })
     sink_stage = pipe.add_stage(
         LinearModulesStage(config, sink_module_loader,

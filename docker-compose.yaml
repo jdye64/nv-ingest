@@ -58,8 +58,6 @@ services:
     build:
       context: ${MORPHEUS_PDF_INGEST_ROOT}
       dockerfile: "./Dockerfile"
-
-    network_mode: host
     volumes:
       - ${MORPHEUS_PDF_INGEST_ROOT}/data:/workspace/data
     deploy:

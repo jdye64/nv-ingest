@@ -362,42 +362,88 @@ export HAYSTACK_PATH_COLLECTION_ID=a962acb5-f1e7-4632-add7-1ca601063287
 export MORPHEUS_EXTRACT_SPLIT_COLLECTION=33e0b745-585d-44c6-8db0-b03b841ea50b
 ```
 
-### Upload documents to the indexing endpoint
+## Example document upload to the indexing endpoint using the Nemo Retrieval upload script
 
-Note: `[nemo_retriever]/script/quickstart/upload.py` has also been modified to support new options `--silent` and
-`--debug_pdf_extract_method=[tika|morpheus]`
+### Command line interface options
 
-Note: You may want to run the upload command below multiple times as a warm up; the first time the Triton service is
+- `-c`, `--collection`: Specifies the Collection ID to which files will be uploaded. This option is required.
+    - **Type**: String
+    - **Required**: Yes
+    - **Example Usage**: `--collection "123ABC"`
+
+- `-m`, `--metadata`: Allows specifying metadata for the upload in the format `key=value`. This option can be repeated
+  to specify multiple metadata entries.
+    - **Type**: Action (Append)
+    - **Required**: No
+    - **Example Usage**: `--metadata "author=John Doe" --metadata "year=2024"`
+
+- `--filenames`: Specifies the filenames to upload. Multiple filenames can be provided.
+    - **Type**: Nargs (Accepts one or more arguments)
+    - **Required**: No
+    - **Example Usage**: `--filenames file1.txt file2.pdf`
+
+- `-s`, `--silent`: Enables silent mode, which minimizes the output of the script.
+    - **Type**: Store True (Flag/Boolean)
+    - **Required**: No
+    - **Example Usage**: `--silent`
+
+- `-n`, `--n_parallel`: Sets the number of parallel uploads. If not specified, defaults to 5.
+    - **Type**: Integer
+    - **Default**: 5
+    - **Required**: No
+    - **Example Usage**: `--n_parallel 10`
+
+**Note:** You may want to run the upload command below multiple times as a warm-up; the first time the Triton service is
 hit, it tends to take an unusually long time to respond.
 
+Extract using pymupdf
+
 ```bash
-time python script/quickstart/upload.py -c ${HAYSTACK_PATH_COLLECTION} \
-   --metadata extraction_method=tika \
-   --silent --n_parallel=15 --filenames [pdf_name].pdf
-   
 time python script/quickstart/upload.py -c ${MORPHEUS_EXTRACT_SPLIT} \
-   --metadata extraction_method=morpheus \
-   --silent --n_parallel=15 --filenames [pdf_name].pdf
+  --metadata ingest::service=morpheus \
+  --metadata ingest::extract_methods=pymupdf \
+  --metadata ingest::extract=true \
+  --metadata ingest::split=true \
+  --silent --n_parallel=15 \
+  --filenames '../morpheus-pdf-ingest-ms/data/pdf_ingest_testing/the-un-security-council
+  -handbook-by-scr-1.pdf'
+  
+Processing 1 files...
+
+real    0m2.576s
+user    0m0.080s
+sys     0m0.013s
 ```
 
-At present stat collection is a manual process from trace logs.
-
-### For the Haystack pipeline:
+Extract using haystack
 
 ```bash
-retrieval-ms-1  | INFO:     Using Tika to process PDFs.
-retrieval-ms-1  | INFO:     TIKA ELAPSED: 7236.22189 ms
-retrieval-ms-1  | INFO:     Nemo Document split: 160.444888 ms.
-retrieval-ms-1  | INFO:     Nemo Document embedding: 13578.185228 ms.
+time python script/quickstart/upload.py -c ${MORPHEUS_EXTRACT_SPLIT} \
+  --metadata ingest::service=morpheus \
+  --metadata ingest::extract_methods=haystack \
+  --metadata ingest::extract=true \
+  --metadata ingest::split=true \
+  --silent --n_parallel=15 \
+  --filenames '../morpheus-pdf-ingest-ms/data/pdf_ingest_testing/the-un-security-council
+  -handbook-by-scr-1.pdf'
+  
+Processing 1 files...
+
+real    0m3.804s
+user    0m0.074s
+sys     0m0.016s
 ```
 
-### For the Morpheus pipeline:
+Extract using Tika
 
 ```bash
-morpheus-ms-1  | DEBUG:morpheus_pdf_ingest.modules.redis_task_source:latency::redis_source_retrieve: 33.609341 msec.
-morpheus-ms-1  | DEBUG:morpheus_pdf_ingest.modules.redis_task_source:throughput::redis_source_retrieve: -2.9753633074805006e-05 MB/sec.
-morpheus-ms-1  | DEBUG:root:pdf_text_extractor since ts_send: 15.98558 msec.
-morpheus-ms-1  | DEBUG:root:pdf_text_extractor elapsed time 213.460169 msec.
-morpheus-ms-1  | DEBUG:root:nemo_document_splitter since ts_send: 8.10594 msec.
-morpheus-ms-1  | DEBUG:root:nemo_document_splitter elapsed time 34.773735 msec.
+time python script/quickstart/upload.py -c ${TIKA_TEST} --metadata 
+ingest::service=tika --silent --n_parallel=15 --filenames '../morpheus-pdf-ingest-ms/data/pdf_ingest_testing/the-un-security-council-handbook-by-scr-1.pdf'
+Processing 1 files...
+
+real    0m3.070s
+user    0m0.079s
+sys     0m0.017s
 ```
+
+
