@@ -206,10 +206,12 @@ INFO:morpheus.pipeline.pipeline:====Building Segment Complete!====
 ### Example document submission to the morpheus-ms service
 
 Each of the following can be run from the host machine or from within the morpheus-ms container.
-Host: python ./src/util/upload_to_ingest_ms.py ...
-Container: python upload_to_ingest_ms.py ...
+
+- Host: `python ./src/util/upload_to_ingest_ms.py ...`
+- Container: `python upload_to_ingest_ms.py ...`
 
 Submit a text file, with no splitting.
+
 **Note:** You will receive a response containing a single document, which is the entire text file -- NO-OP.
 
 ```bash
@@ -223,6 +225,7 @@ This ebook is for the u... (truncated)
 ```
 
 Submit a text file with a splitting task.
+
 **Note:** You will receive back a response with multiple documents, each containing a chunk of the original text file.
 
 ```bash
@@ -236,6 +239,7 @@ This ebook is for the u... (truncated)
 ```
 
 Submit a PDF file with a splitting task.
+
 **Note:** This will not currently produce what you want as it will try to split one giant base64 encoded string. This
 should be updated to decode the base64 string and then split it into chunks.
 
@@ -249,7 +253,9 @@ python ./src/util/upload_to_ingest_ms.py --file_source ./data/pdf_ingest_testing
 ```
 
 Submit a PDF file with splitting and extraction tasks.
+
 **Note:** This works for pymupdf, haystack, and unstructured, if you have an API key.
+
 **Note:** You can specify multiple extraction methods, but we currently won't do the right thing and produce two
 sets of outputs. TODO.
 
