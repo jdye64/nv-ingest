@@ -13,6 +13,8 @@ from redis import asyncio as aioredis
 
 logger = logging.getLogger(__name__)
 
+UNSTRUCTURED_API_KEY = os.environ['UNSTRUCTURED_API_KEY']
+
 
 async def submit_job_and_wait_for_response(redis_client, job_data, tasks, task_queue, timeout=90):
     """
@@ -211,6 +213,9 @@ async def main(file_source, redis_host, redis_port, enable_pdf_extract, enable_s
         tasks.append({
             "type": "pdf_extract",
             "properties": {
+                "type": "haystack",
+                "api_key": UNSTRUCTURED_API_KEY,
+                "unstructured_url": "http://localhost:8003",
                 "extract_text": True,
                 "extract_images": False,
                 "extract_tables": False
