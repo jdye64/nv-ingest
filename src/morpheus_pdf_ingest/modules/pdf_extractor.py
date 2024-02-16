@@ -17,7 +17,6 @@ import functools
 import io
 import logging
 
-import fitz
 import mrc
 import mrc.core.operators as ops
 from morpheus._lib.messages import MessageMeta
@@ -29,6 +28,7 @@ from morpheus_pdf_ingest.schemas.pdf_extractor_schema import PDFExtractorSchema
 from morpheus_pdf_ingest.util.flow_control import filter_by_task
 from morpheus_pdf_ingest.util.tracing import latency_logger
 from morpheus_pdf_ingest.util.tracing import traceable
+from morpheus_pdf_ingest.modules import pdf
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +37,7 @@ PDFExtractorLoaderFactory = ModuleLoaderFactory("pdf_text_extractor",
                                                 "morpheus_pdf_ingest",
                                                 PDFExtractorSchema)
 
-
-def _process_pdf_bytes(df, extract_text: bool = False, extract_images: bool = False,
-                       extract_tables: bool = False):
+def _process_pdf_bytes(df, task_props):
     """
     Processes a cuDF DataFrame containing PDF files in base64 encoding.
     Each PDF's content is replaced with its extracted text.
@@ -51,29 +49,38 @@ def _process_pdf_bytes(df, extract_text: bool = False, extract_images: bool = Fa
     - A cuDF DataFrame with the PDF content replaced by the extracted text.
     """
 
-    # Define a helper function to decode and extract text from a base64 encoded PDF
-    def decode_and_extract(base64_content, extract_text: bool, extract_images: bool,
-                           extract_tables: bool):
+    #def decode_and_extract(base64_content, task_props):
+    def decode_and_extract(base64_row, task_props, default="pymupdf"):
+
+        # Base64 content to extract
+        base64_content = base64_row["content"]
+        # Row data to include in extraction
+        bool_index = base64_row.index.isin(("content",))
+        row_data = base64_row[~bool_index]
+        task_props.update({"row_data": row_data})
         # Decode the base64 content
         pdf_bytes = base64.b64decode(base64_content)
         # Load the PDF
         pdf_stream = io.BytesIO(pdf_bytes)
-        doc = fitz.open(stream=pdf_stream, filetype="pdf")
-        text = ""
-        # Extract text from each page
-        for page in doc:
-            text += page.get_text()
-        doc.close()  # Close the document
+        # Type of extraction method to use
+        extract_type = task_props.get("type", "pymupdf")
+        if not hasattr(pdf, extract_type):
+            extract_type = default        
+        try:
+            func = getattr(pdf, extract_type, default)
+        except Exception as e:
+            logger.error(f"Error loading extractor: {e}")
 
-        return text.replace('+', ' ')
+        text = func(pdf_stream, **task_props)
+
+        return text
 
     try:
         # Apply the helper function to each row in the 'content' column
-        _decode_and_extract = functools.partial(decode_and_extract, extract_text=extract_text,
-                                                extract_images=extract_images, extract_tables=extract_tables)
+        _decode_and_extract = functools.partial(decode_and_extract, task_props=task_props)        
         logger.debug(f"Extracting text from PDFs: {df['file_name']}")
         logger.debug(df)
-        df['content'] = df['content'].apply(_decode_and_extract)
+        df['content'] = df.apply(_decode_and_extract, axis=1)
     except:
         # TODO(Devin): Retry / graceful fallback, etc.. if extraction fails
         logger.error("Failed to extract text from PDFs.")
@@ -91,16 +98,11 @@ def _pdf_text_extractor(builder: mrc.Builder):
     def parse_files(ctrl_msg: ControlMessage) -> ControlMessage:
         while (ctrl_msg.has_task('pdf_extract')):
             # get task
-            task = ctrl_msg.remove_task('pdf_extract')
-            task_props = task.get('properties', {})
-            extract_text = task_props.get('extract_text', False)
-            extract_images = task_props.get('extract_images', False)
-            extract_tables = task_props.get('extract_tables', False)
-
+            task_props = ctrl_msg.remove_task('pdf_extract')
             df = ctrl_msg.payload().df.to_pandas()
 
             # Return text, image, or table
-            df = _process_pdf_bytes(df, extract_text, extract_images, extract_tables)
+            df = _process_pdf_bytes(df, task_props)
 
             ctrl_msg.payload(MessageMeta(df=df))
 
