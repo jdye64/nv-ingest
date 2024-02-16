@@ -400,7 +400,7 @@ Extract using pymupdf
 
 ```bash
 time python script/quickstart/upload.py -c ${MORPHEUS_EXTRACT_SPLIT} \
-  --metadata ingest::service=morpheus \
+  --metadata ingest::service=nv-ingest \
   --metadata ingest::extract_methods=pymupdf \
   --metadata ingest::extract=true \
   --metadata ingest::split=true \
@@ -419,7 +419,7 @@ Extract using haystack
 
 ```bash
 time python script/quickstart/upload.py -c ${MORPHEUS_EXTRACT_SPLIT} \
-  --metadata ingest::service=morpheus \
+  --metadata ingest::service=nv-ingest \
   --metadata ingest::extract_methods=haystack \
   --metadata ingest::extract=true \
   --metadata ingest::split=true \
