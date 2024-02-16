@@ -48,16 +48,25 @@ git submodule update --init --recursive
 
 ./scripts/fetch_data.py fetch all # pull down all the LFS artifacts for Morpheus, including pre-built models
 ```
+
 Note the path to the Morpheus repository; we will need it in the next step.
+
+Go to the `morpheus-pdf-ingest-ms` directory and open `.env` with your favorite editor, we will add some envrionment
+variables.
+
+`.env`
+
+```bash
+`MORPHEUS_PDF_INGEST_ROOT=[PATH TO MORPHEUS PDF INGEST MS ROOT]`
+`MORPHEUS_ROOT=[PATH TO MORPHEUS ROOT]`
+`MODEL_NAME=intfloat/e5-small-v2`
+```
 
 ### Clone the Morpheus-ms repository
 
 ```bash
 git clone https://gitlab-master.nvidia.com/drobison/morpheus-pdf-ingest-ms
 ```
-
-Go to the `morpheus-pdf-ingest-ms` directory and open `.env` with your favorite editor.
-Replace the value of `MORPHEUS_ROOT` with the path to the Morpheus repository from the previous step.
 
 ### Build Morpheus 24.03 (morpheus-ms-base:24.03) release container
 
@@ -67,10 +76,12 @@ docker compose build morpheus-ms-base
 
 ### Create Triton model
 
-By default, the model is `intfloat/e5-small-v2`. You can the model by editing `MODEL_NAME` in `.env`.
+By default, the model is `intfloat/e5-small-v2`. You can override the model by editing `MODEL_NAME` in `.env`.
+
 ```bash
 docker compose run morpheus-ms-base
 ```
+
 ```
 Created Triton Model at /models/triton-model-repo/intfloat/e5-small-v2
 Total time: 8.81 sec
@@ -78,20 +89,25 @@ Total time: 8.81 sec
 
 ### Start supporting services
 
-You can start Redis and Triton Inference Server using the provided docker-compose file. Use `docker compose up` to start one or both of them. Triton is optional at the moment -- unless you are testing ingestion embedding creation.
+You can start Redis and Triton Inference Server using the provided docker-compose file. Use `docker compose up` to start
+one or both of them. Triton is optional at the moment -- unless you are testing ingestion embedding creation.
+
 ```bash
 docker compose pull redis triton
 docker compose up -d redis triton
 ```
+
 The `-d` option will start the containers in "detached" mode in the background.
 
 Make sure the triton server is running and the models are loaded with no errors reported.
+
 ```bash
 $ docker ps
 CONTAINER ID   IMAGE                                   COMMAND                  CREATED              STATUS              PORTS                                                           NAMES
 4e051d750bdc   nvcr.io/nvidia/tritonserver:23.12-py3   "/opt/nvidia/nvidia_…"   About a minute ago   Up About a minute   0.0.0.0:8000-8002->8000-8002/tcp, :::8000-8002->8000-8002/tcp   morpheus-pdf-ingest-ms-triton-1
 de13d0d34d57   redis/redis-stack                       "/entrypoint.sh"         About a minute ago   Up About a minute   0.0.0.0:6379->6379/tcp, :::6379->6379/tcp, 8001/tcp             morpheus-pdf-ingest-ms-redis-1
 ```
+
 ```bash
 $ docker logs morpheus-pdf-ingest-ms-triton-1
 ```
@@ -104,6 +120,7 @@ $ docker compose run -d morpheus-ms
 ```
 
 Verify `pipeline.py` is working as expected.
+
 ```bash
 $ docker ps                                                                                                                                    
 CONTAINER ID   IMAGE                                   COMMAND                  CREATED              STATUS              PORTS                                                           NAMES   
@@ -151,12 +168,21 @@ INFO:morpheus.pipeline.pipeline:====Building Segment Complete!====
 ### Submit a PDF to the morpheus-ms service
 
 This will submit a PDF directly to the morpheus-ms service, bypassing the Nemo Retriever pipeline
+
 ```bash
 # In another terminal, submit a PDF to the morpheus-ms service
 # Nothing formal in this yet, add whatever PDFs you want to the data/pdf_ingest_testing directory
 # Useful: https://www.gutenberg.org/browse/scores/top
+
+# Inside the morpheus-ms container
 $ docker compose run morpheus-ms bash
-(morpheus) root@0810733-lcedt:/workspace# python submit_to_morpheus_ms.py \
+$ python submit_to_morpheus_ms.py \
+  --file_source ./data/[pdf_name].pdf \
+  --enable_pdf_extract \
+  --enable_split
+
+# Outside the morpheus-ms container
+$ python ./src/util/submit_to_morpheus_ms.py \
   --file_source ./data/[pdf_name].pdf \
   --enable_pdf_extract \
   --enable_split
@@ -164,8 +190,10 @@ $ docker compose run morpheus-ms bash
 
 ## Launch the Nemo Retriever pipeline with the morpheus-ms service
 
-Note: As of 9 Feb, 2024 you will need to pull the Devin's experimental Nemo Retrieval pipeline branch.
-Note: Currently, only the 'index' side of the Nemo pipeline has hooks into the morpheus-ms, 'query' side still needs
+**Note:** if you have deployed morpheus-ms, redis, or triton services, you will need to stop them before starting the
+Nemo Retriever pipeline.
+
+**Note:** As of 9 Feb, 2024 you will need to pull the Devin's experimental Nemo Retrieval pipeline branch.
 work.
 
 ### Clone the experimental Nemo Retrieval pipeline branch
@@ -213,7 +241,7 @@ The Haystack pipeline will run the pipeline defined in `[nemo_retriever]/pipelin
 initial pdf text extraction will be done by the Tika service, and the text will then be chunked, embedded, and
 uploaded to Milvus by nemo defined haystack components.
 
-The Morpheus pipeline will run the pipeline defined in `[nemo_retriever]/pipelines/morpheus_extract_split.mustache`, 
+The Morpheus pipeline will run the pipeline defined in `[nemo_retriever]/pipelines/morpheus_extract_split.mustache`,
 this will call out to the morpheus-ms to do pdf text extraction, chunking, and embedding, then return the results to the
 Haystack DocumentWriter component for upload.
 
