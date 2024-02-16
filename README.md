@@ -25,7 +25,7 @@
     - Triton needs models to run.
     - The pipeline.py script starts a Morpheus pipeline that monitors a Redis list for new jobs, and then processes
       them, and returns a result.
-    - We can use the src/util/submit_to_morpheus_ms.py script to submit a PDF to the Morpheus-ms service, good for
+    - We can use the src/util/upload_to_ingest_ms.py script to submit a PDF to the Morpheus-ms service, good for
       fast iteration and experimentation.
 - Once we've independently tested the Morpheus-ms, we can deploy it into the Nemo Retriever cluster and test it there.
     - The modified Nemo Retriever cluster and insertion hooks for Morpheus-ms can be found in Devin's private branch of
@@ -165,27 +165,106 @@ INFO:morpheus.pipeline.single_port_stage:Added stage: <redis_task_sink-5; Linear
 INFO:morpheus.pipeline.pipeline:====Building Segment Complete!====
 ```
 
-### Submit a PDF to the morpheus-ms service
+## Testing with the upload_to_ingest_ms.py script
 
-This will submit a PDF directly to the morpheus-ms service, bypassing the Nemo Retriever pipeline
+### Command-line Interface Options
+
+- `--file_source`: Specifies the list of file sources or paths to be processed. This option can be repeated to add
+  multiple file sources.
+    - **Type**: String
+    - **Multiple**: Yes
+    - **Default**: Empty list
+    - **Example Usage**: `--file_source path/to/file1.txt --file_source path/to/file2.pdf`
+
+- `--redis-host`: Sets the DNS name for the Redis server.
+    - **Type**: String
+    - **Default**: `localhost`
+    - **Example Usage**: `--redis-host my.redis.server`
+
+- `--redis-port`: Specifies the port on which the Redis server is running.
+    - **Type**: String
+    - **Default**: `6379`
+    - **Example Usage**: `--redis-port 6379`
+
+- `--extract`: Enables the PDF text extraction task. This is a flag option.
+    - **Type**: Flag (Boolean)
+    - **Default**: False (not set)
+    - **Example Usage**: `--extract`
+
+- `--split`: Enables the text splitting task. This is a flag option.
+    - **Type**: Flag (Boolean)
+    - **Default**: False (not set)
+    - **Example Usage**: `--split`
+
+- `--extract_method`: Specifies the type(s) of extraction method to use. This option can be repeated to specify multiple
+  extraction methods.
+    - **Choices**: `pymupdf`, `haystack`, `unstructured_io`, `unstructured_service`
+    - **Case Sensitive**: No
+    - **Multiple**: Yes
+    - **Example Usage**: `--extract_method pymupdf --extract_method haystack`
+
+### Example document submission to the morpheus-ms service
+
+Each of the following can be run from the host machine or from within the morpheus-ms container.
+Host: python ./src/util/upload_to_ingest_ms.py ...
+Container: python upload_to_ingest_ms.py ...
+
+Submit a text file, with no splitting.
+**Note:** You will receive a response containing a single document, which is the entire text file -- NO-OP.
 
 ```bash
-# In another terminal, submit a PDF to the morpheus-ms service
-# Nothing formal in this yet, add whatever PDFs you want to the data/pdf_ingest_testing directory
-# Useful: https://www.gutenberg.org/browse/scores/top
+python upload_to_ingest_ms.py --file_source ./data/plain_text/pg84.txt
+2024-02-16 01:10:29,112 - __main__ - INFO - Read plain text content: The Project Gutenberg eBook of Frankenstein; Or, The Modern Prometheus
+    
+This ebook is for the u... (truncated)
+2024-02-16 01:10:29,112 - __main__ - INFO - Content length: 438839
+2024-02-16 01:10:29,118 - __main__ - INFO - Waiting for response on channel 'response_5536050b-388d-4ad1-b021-602940d3d9fd'...
+2024-02-16 01:10:29,202 - __main__ - INFO - Received 1 documents from source: ./data/plain_text/pg84.txt
+```
 
-# Inside the morpheus-ms container
-$ docker compose run morpheus-ms bash
-$ python submit_to_morpheus_ms.py \
-  --file_source ./data/[pdf_name].pdf \
-  --enable_pdf_extract \
-  --enable_split
+Submit a text file with a splitting task.
+**Note:** You will receive back a response with multiple documents, each containing a chunk of the original text file.
 
-# Outside the morpheus-ms container
-$ python ./src/util/submit_to_morpheus_ms.py \
-  --file_source ./data/[pdf_name].pdf \
-  --enable_pdf_extract \
-  --enable_split
+```bash
+python ./src/util/upload_to_ingest_ms.py --file_source ./data/plain_text/pg84.txt --split
+2024-02-16 01:12:49,721 - __main__ - INFO - Read plain text content: The Project Gutenberg eBook of Frankenstein; Or, The Modern Prometheus
+    
+This ebook is for the u... (truncated)
+2024-02-16 01:12:49,721 - __main__ - INFO - Content length: 438839
+2024-02-16 01:12:49,727 - __main__ - INFO - Waiting for response on channel 'response_6e3ef2a6-6c22-4e48-b3c0-9b9275e12050'...
+2024-02-16 01:12:49,888 - __main__ - INFO - Received 1445 documents from source: ./data/plain_text/pg84.txt
+```
+
+Submit a PDF file with a splitting task.
+**Note:** This will not currently produce what you want as it will try to split one giant base64 encoded string. This
+should be updated to decode the base64 string and then split it into chunks.
+
+```bash
+python ./src/util/upload_to_ingest_ms.py --file_source ./data/pdf_ingest_testing/the-un-security-council-handbook-by-scr-
+1.pdf --split
+2024-02-16 01:14:50,497 - __main__ - INFO - Encoded PDF content: JVBERi0xLjcNJeLjz9MNCjEwNTIgMCBvYmoNPDwvTGluZWFyaXplZCAxL0wgNzIyNzI2L08gMTA1NS9FIDI1MDk1L04gMTE2L1Qg... (truncated)
+2024-02-16 01:14:50,497 - __main__ - INFO - Content length: 3213532
+2024-02-16 01:14:50,522 - __main__ - INFO - Waiting for response on channel 'response_51818492-a539-480b-87ad-f1b26980c1c5'...
+2024-02-16 01:14:51,037 - __main__ - INFO - Received 7142 documents from source: ./data/pdf_ingest_testing/the-un-security-council-handbook-by-scr-1.pdf
+```
+
+Submit a PDF file with splitting and extraction tasks.
+**Note:** This works for pymupdf, haystack, and unstructured, if you have an API key.
+**Note:** You can specify multiple extraction methods, but we currently won't do the right thing and produce two
+sets of outputs. TODO.
+
+```bash
+python ./src/util/upload_to_ingest_ms.py --file_source ./data/pdf_ingest_testing/the-un-security-council-handbook-by-scr-1.pdf --split --extract --extract_method=haystack
+2024-02-16 01:19:40,301 - __main__ - INFO - Encoded PDF content: JVBERi0xLjcNJeLjz9MNCjEwNTIgMCBvYmoNPDwvTGluZWFyaXplZCAxL0wgNzIyNzI2L08gMTA1NS9FIDI1MDk1L04gMTE2L1Qg... (truncated)
+2024-02-16 01:19:40,301 - __main__ - INFO - Content length: 3213532
+2024-02-16 01:19:40,324 - __main__ - INFO - Waiting for response on channel 'response_52dcd900-349a-4f2e-a886-1e1fcaf5f094'...
+2024-02-16 01:19:41,906 - __main__ - INFO - Received 847 documents from source: ./data/pdf_ingest_testing/the-un-security-council-handbook-by-scr-1.pdf
+
+python ./src/util/upload_to_ingest_ms.py --file_source ./data/pdf_ingest_testing/the-un-security-council-handbook-by-scr-1.pdf --split --extract --extract_method=pymupdf
+2024-02-16 01:20:17,233 - __main__ - INFO - Encoded PDF content: JVBERi0xLjcNJeLjz9MNCjEwNTIgMCBvYmoNPDwvTGluZWFyaXplZCAxL0wgNzIyNzI2L08gMTA1NS9FIDI1MDk1L04gMTE2L1Qg... (truncated)
+2024-02-16 01:20:17,233 - __main__ - INFO - Content length: 3213532
+2024-02-16 01:20:17,256 - __main__ - INFO - Waiting for response on channel 'response_21e69092-14a7-4f2f-a531-7ee7b4e62ed8'...
+2024-02-16 01:20:17,603 - __main__ - INFO - Received 819 documents from source: ./data/pdf_ingest_testing/the-un-security-council-handbook-by-scr-1.pdf
 ```
 
 ## Launch the Nemo Retriever pipeline with the morpheus-ms service

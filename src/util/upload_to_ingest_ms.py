@@ -13,7 +13,9 @@ from redis import asyncio as aioredis
 
 logger = logging.getLogger(__name__)
 
-UNSTRUCTURED_API_KEY = os.environ['UNSTRUCTURED_API_KEY']
+UNSTRUCTURED_API_KEY = os.environ.get('UNSTRUCTURED_API_KEY', None)
+UNSTRUCTURED_URL = os.environ.get('UNSTRUCTURED_URL', "http://localhost:8003")
+EXTRACTABLE_FILE_TYPES = ['pdf']
 
 
 async def submit_job_and_wait_for_response(redis_client, job_data, tasks, task_queue, timeout=90):
@@ -122,8 +124,9 @@ async def process_file(file_path):
         A dictionary containing the file name, id, and extracted content.
     """
     try:
-        content = await extract_file_content(file_path)
         file_name = os.path.basename(file_path)
+        content = await extract_file_content(file_path)
+
         return {"file_name": file_name, "id": file_name, "content": content}
     except Exception as e:
         logger.error(f"Error processing file {file_path}: {e}")
@@ -184,13 +187,54 @@ async def load_data_from_path(path):
               help='List of file sources/paths to be processed.')
 @click.option('--redis-host', default='localhost', help="DNS name for Redis.")
 @click.option('--redis-port', default='6379', help="Port for Redis.")
-@click.option('--enable_pdf_extract', is_flag=True, help="Enable PDF text extraction task.")
-@click.option('--enable_split', is_flag=True, help="Enable text splitting task.")
-def cli(file_source, redis_host, redis_port, enable_pdf_extract, enable_split):
-    asyncio.run(main(file_source, redis_host, redis_port, enable_pdf_extract, enable_split))
+@click.option('--extract', is_flag=True, help="Enable PDF text extraction task.")
+@click.option('--split', is_flag=True, help="Enable text splitting task.")
+@click.option('--extract_method',
+              type=click.Choice(['pymupdf', 'haystack', 'unstructured_io', 'unstructured_service'],
+                                case_sensitive=False), multiple=True,
+              help='Specifies the type(s) of extraction to use.')
+def cli(file_source, redis_host, redis_port, extract, extract_method, split):
+    asyncio.run(main(file_source, redis_host, redis_port, extract, extract_method, split))
 
 
-async def main(file_source, redis_host, redis_port, enable_pdf_extract, enable_split):
+def build_extraction_tasks(methods, file_type):
+    tasks = []
+    if (not methods) or (file_type not in EXTRACTABLE_FILE_TYPES):
+        logger.info("No extraction tasks specified or file type does not require extraction.")
+        return tasks
+
+    common_properties = {
+        "extract_text": True,
+        "extract_images": False,
+        "extract_tables": False
+    }
+
+    # Define default properties for unstructured tasks
+    unstructured_properties = {
+        "api_key": UNSTRUCTURED_API_KEY,
+        "unstructured_url": UNSTRUCTURED_URL,
+    }
+
+    # Add other task types based on _extract_methods
+    for method in methods:
+        task_props = common_properties.copy()
+        task_props['method'] = method
+        task = {'type': 'pdf_extract', 'properties': task_props}
+
+        if method == 'pymupdf':
+            tasks.append(task)
+        elif method in ['haystack', 'unstructured-local', 'unstructured-service']:
+            task['properties'].update(unstructured_properties)
+        else:
+            pass  # Others
+
+        logger.info('Adding task: %s', json.dumps(task, indent=2))
+        tasks.append(task)
+
+    return tasks
+
+
+async def main(file_source, redis_host, redis_port, extract, extract_method, split):
     logger = logging.getLogger(__name__)
     logger.setLevel(logging.INFO)
     console_handler = logging.StreamHandler(sys.stdout)
@@ -208,48 +252,36 @@ async def main(file_source, redis_host, redis_port, enable_pdf_extract, enable_s
         logger.error("No data source provided.")
         return
 
-    tasks = []
-    if enable_pdf_extract:
-        tasks.append({
-            "type": "pdf_extract",
-            "properties": {
-                "type": "haystack",
-                "api_key": UNSTRUCTURED_API_KEY,
-                "unstructured_url": "http://localhost:8003",
-                "extract_text": True,
-                "extract_images": False,
-                "extract_tables": False
-            }
-        })
-
-    if enable_split:
-        tasks.append({
-            "type": "split",
-            "properties": {
-                "split_by": "word",
-                "split_length": 250,
-                "split_overlap": 30,
-                "max_character_length": 1900,
-                "sentence_window_size": 0,
-            }
-        })
-
-    # The rest of your main function goes here, which processes each file source.
-
     for source in file_source:
         try:
-            # Assuming load_data_from_paths is modified to work with a single path and return encoded content
+            tasks = []
+            if split:
+                tasks.append({
+                    "type": "split",
+                    "properties": {
+                        "split_by": "word",
+                        "split_length": 250,
+                        "split_overlap": 30,
+                        "max_character_length": 1900,
+                        "sentence_window_size": 0,
+                    }
+                })
+
+            if extract:
+                file_type = os.path.basename(source).split('.')[-1].lower()
+                extract_tasks = build_extraction_tasks(extract_method, file_type)
+                tasks.extend(extract_tasks)
+
             job_data = await load_data_from_path(source)
             response = await submit_job_and_wait_for_response(redis_client, job_data, tasks, task_queue,
                                                               timeout=300)
 
-            trace_tags = response.get("trace", {})
+            # trace_tags = response.get("trace", {})
             df_data = pd.DataFrame.from_dict(json.loads(response.get("data", {})))
 
             # Assuming multiple documents could be processed
             logger.info(f"Received {len(df_data['content'])} documents from source: {source}")
 
-            # Example of saving a single document's content to a file
             with open(f"{source}_response.json", "w") as file:
                 file.write(df_data["content"].iloc[0])
             with open(f"{source}_response_data.csv", "w") as file:
@@ -259,7 +291,6 @@ async def main(file_source, redis_host, redis_port, enable_pdf_extract, enable_s
             import traceback
             traceback.print_exc()
             logger.error(f"Failed to process document {source}: {str(e)}")
-            # Consider whether to continue processing other files or abort
 
 
 if __name__ == '__main__':

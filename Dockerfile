@@ -22,6 +22,6 @@ RUN source activate morpheus \
     && rm -rf src 
 
 COPY src/pipeline.py ./
-COPY src/util/submit_to_morpheus_ms.py ./
+COPY src/util/upload_to_ingest_ms.py ./
 
 CMD ["python", "/workspace/pipeline.py"]

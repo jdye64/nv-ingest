@@ -63,17 +63,19 @@ def _process_pdf_bytes(df, task_props):
         # Load the PDF
         pdf_stream = io.BytesIO(pdf_bytes)
         # Type of extraction method to use
-        extract_type = task_props.get("type", "pymupdf")
-        if not hasattr(pdf, extract_type):
-            extract_type = default        
+        extract_method = task_props.get("method", "pymupdf")
+        if not hasattr(pdf, extract_method):
+            extract_method = default
         try:
-            func = getattr(pdf, extract_type, default)
+            func = getattr(pdf, extract_method, default)
+            text = func(pdf_stream, **task_props)
+
+            return text
         except Exception as e:
             logger.error(f"Error loading extractor: {e}")
 
-        text = func(pdf_stream, **task_props)
-
-        return text
+        # TODO: propagate error back and tag message as failed.
+        return ""
 
     try:
         # Apply the helper function to each row in the 'content' column

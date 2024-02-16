@@ -20,10 +20,5 @@ logger = logging.getLogger(__name__)
 
 
 class PDFExtractorSchema(BaseModel):
-    batch_size: int = 32
-    chunk_overlap: int = 51
-    chunk_size: int = 512
-    num_threads: int = 10
-
     class Config:
         extra = "forbid"
