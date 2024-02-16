@@ -22,6 +22,8 @@ from morpheus.messages import ControlMessage
 from morpheus.pipeline.pipeline import Pipeline
 from morpheus.stages.general.linear_modules_source import LinearModuleSourceStage
 from morpheus.stages.general.linear_modules_stage import LinearModulesStage
+# from morpheus.stages.inference.triton_inference_stage import TritonInferenceStage
+# from morpheus.stages.preprocess.preprocess_nlp_stage import PreprocessNLPStage
 
 from morpheus_pdf_ingest.modules.nemo_doc_splitter import NemoDocSplitterLoaderFactory
 from morpheus_pdf_ingest.modules.pdf_extractor import PDFExtractorLoaderFactory
@@ -77,9 +79,7 @@ def validate_source_config(source_info: typing.Dict[str, any]) -> None:
 def setup_nemo_docsplitter_pipe(pipe: Pipeline, config: Config):
     source_module_loader = RedisTaskSourceLoaderFactory.get_instance(module_name="redis_listener",
                                                                      module_config={
-                                                                         "redis_listener": {
-                                                                             "redis_host": "redis",
-                                                                         }
+                                                                         "redis_host": "localhost",
                                                                      })
 
     source_stage = pipe.add_stage(
@@ -102,7 +102,7 @@ def setup_nemo_docsplitter_pipe(pipe: Pipeline, config: Config):
 
     sink_module_loader = RedisTaskSinkLoaderFactory.get_instance(module_name="redis_task_sink",
                                                                  module_config={
-                                                                     "redis_host": "redis",
+                                                                     "redis_host": "localhost",
                                                                  })
     sink_stage = pipe.add_stage(
         LinearModulesStage(config, sink_module_loader,
@@ -120,9 +120,7 @@ def setup_nemo_docsplitter_pipe(pipe: Pipeline, config: Config):
 def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
     source_module_loader = RedisTaskSourceLoaderFactory.get_instance(module_name="redis_listener",
                                                                      module_config={
-                                                                         "redis_listener": {
-                                                                             "redis_host": "redis",
-                                                                         }
+                                                                         "redis_host": "localhost",
                                                                      })
 
     source_stage = pipe.add_stage(
@@ -169,14 +167,14 @@ def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
     #    "model_kwargs": {
     #        "force_convert_inputs": True,
     #        "model_name": "intfloat/e5-small-v2",
-    #        "server_url": "triton:8001",
+    #        "server_url": "localhost:8001",
     #        "use_shared_memory": True
     #    }
     # }
     # embedding_stage = pipe.add_stage(TritonInferenceStage(config, **embeddings_config.get('model_kwargs', {})))
     sink_module_loader = RedisTaskSinkLoaderFactory.get_instance(module_name="redis_task_sink",
                                                                  module_config={
-                                                                     "redis_host": "redis",
+                                                                     "redis_host": "localhost",
                                                                  })
     sink_stage = pipe.add_stage(
         LinearModulesStage(config, sink_module_loader,
