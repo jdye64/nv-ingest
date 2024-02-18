@@ -196,7 +196,8 @@ INFO:morpheus.pipeline.pipeline:====Building Segment Complete!====
     - **Default**: False (not set)
     - **Example Usage**: `--split`
 
-- `--extract_method`: Specifies the type(s) of extraction method to use. This option can be repeated to specify multiple extraction methods.
+- `--extract_method`: Specifies the type(s) of extraction method to use. This option can be repeated to specify multiple
+  extraction methods.
     - **Choices**: `pymupdf`, `haystack`, `unstructured_io`, `unstructured_service`
     - **Case Sensitive**: No
     - **Multiple**: Yes
@@ -221,7 +222,6 @@ INFO:morpheus.pipeline.pipeline:====Building Segment Complete!====
     - **Type**: Flag (Boolean)
     - **Default**: False (not set)
     - **Example Usage**: `--dry-run`
-
 
 ### Example document submission to the morpheus-ms service
 
@@ -465,5 +465,65 @@ real    0m3.070s
 user    0m0.079s
 sys     0m0.017s
 ```
+
+## Creating a dataset
+
+### Usage
+
+```shell
+python gen_dataset [OPTIONS]
+```
+
+This script samples files from a specified source directory according to defined proportions and a total size target. It
+offers options for caching the file list, outputting a sampled file list, and validating the output.
+
+### Options
+
+- `--source_directory`: Specifies the path to the source directory where files will be scanned for sampling.
+    - **Type**: String
+    - **Required**: Yes
+    - **Example**: `--source_directory ./data`
+
+- `--size`: Defines the total size of files to sample. You can use suffixes (KB, MB, GB).
+    - **Type**: String
+    - **Required**: Yes
+    - **Example**: `--size 500MB`
+
+- `--sample`: Specifies file types and their proportions of the total size. Can be used multiple times for different
+  file types.
+    - **Type**: String
+    - **Required**: No
+    - **Multiple**: Yes
+    - **Example**: `--sample pdf=40 --sample txt=60`
+
+- `--cache_file`: If provided, caches the scanned file list as JSON at this path.
+    - **Type**: String
+    - **Required**: No
+    - **Example**: `--cache_file ./file_list_cache.json`
+
+- `--output_file`: If provided, outputs the list of sampled files as JSON at this path.
+    - **Type**: String
+    - **Required**: No
+    - **Example**: `--output_file ./sampled_files.json`
+
+- `--validate-output`: If set, the script re-validates the `output_file` JSON and logs total bytes for each file type.
+    - **Type**: Flag
+    - **Required**: No
+
+- `--log-level`: Sets the logging level ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'). Default is 'INFO'.
+    - **Type**: Choice
+    - **Required**: No
+    - **Example**: `--log-level DEBUG`
+
+- `--with-replacement`: Sample with replacement. Files can be selected multiple times.
+    - **Type**: Flag
+    - **Default**: True (if omitted, sampling will be with replacement)
+    - **Usage Example**: `--with-replacement` to enable sampling with replacement or omit for default behavior.
+      Use `--no-with-replacement` to disable it and sample without replacement.
+
+### Notes
+
+The script performs a sampling process that respects the specified size and type proportions, generates a detailed file
+list, and provides options for caching and validation to facilitate efficient data handling and integrity checking.
 
 
