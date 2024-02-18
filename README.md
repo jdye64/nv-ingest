@@ -182,7 +182,7 @@ INFO:morpheus.pipeline.pipeline:====Building Segment Complete!====
     - **Example Usage**: `--redis-host my.redis.server`
 
 - `--redis-port`: Specifies the port on which the Redis server is running.
-    - **Type**: String
+    - **Type**: Integer
     - **Default**: `6379`
     - **Example Usage**: `--redis-port 6379`
 
@@ -196,12 +196,32 @@ INFO:morpheus.pipeline.pipeline:====Building Segment Complete!====
     - **Default**: False (not set)
     - **Example Usage**: `--split`
 
-- `--extract_method`: Specifies the type(s) of extraction method to use. This option can be repeated to specify multiple
-  extraction methods.
+- `--extract_method`: Specifies the type(s) of extraction method to use. This option can be repeated to specify multiple extraction methods.
     - **Choices**: `pymupdf`, `haystack`, `unstructured_io`, `unstructured_service`
     - **Case Sensitive**: No
     - **Multiple**: Yes
     - **Example Usage**: `--extract_method pymupdf --extract_method haystack`
+
+- `--n_workers`: Number of worker threads for the ThreadPoolExecutor.
+    - **Type**: Integer
+    - **Default**: `5`
+    - **Example Usage**: `--n_workers 10`
+
+- `--log-level`: Sets the logging level for the application.
+    - **Choices**: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`
+    - **Default**: `INFO`
+    - **Example Usage**: `--log-level DEBUG`
+
+- `--concurrency_mode`: Choose the concurrency mode for task execution.
+    - **Choices**: `thread`, `process`
+    - **Default**: `thread`
+    - **Example Usage**: `--concurrency_mode process`
+
+- `--dry-run`: Prints the steps to be executed without actually performing any operations. This is a flag option.
+    - **Type**: Flag (Boolean)
+    - **Default**: False (not set)
+    - **Example Usage**: `--dry-run`
+
 
 ### Example document submission to the morpheus-ms service
 

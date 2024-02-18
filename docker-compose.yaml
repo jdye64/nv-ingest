@@ -60,6 +60,10 @@ services:
       dockerfile: "./Dockerfile"
     volumes:
       - ${MORPHEUS_PDF_INGEST_ROOT}/data:/workspace/data
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_MORPHEUS_TASK_QUEUE=morpheus_task_queue
     deploy:
       resources:
         reservations:
