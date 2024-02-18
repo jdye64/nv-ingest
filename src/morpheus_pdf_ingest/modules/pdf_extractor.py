@@ -24,11 +24,11 @@ from morpheus.messages import ControlMessage
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
 
+from morpheus_pdf_ingest.modules import pdf
 from morpheus_pdf_ingest.schemas.pdf_extractor_schema import PDFExtractorSchema
 from morpheus_pdf_ingest.util.flow_control import filter_by_task
 from morpheus_pdf_ingest.util.tracing import latency_logger
 from morpheus_pdf_ingest.util.tracing import traceable
-from morpheus_pdf_ingest.modules import pdf
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +36,7 @@ MODULE_NAME = "pdf_text_extractor"
 PDFExtractorLoaderFactory = ModuleLoaderFactory("pdf_text_extractor",
                                                 "morpheus_pdf_ingest",
                                                 PDFExtractorSchema)
+
 
 def _process_pdf_bytes(df, task_props):
     """
@@ -49,7 +50,7 @@ def _process_pdf_bytes(df, task_props):
     - A cuDF DataFrame with the PDF content replaced by the extracted text.
     """
 
-    #def decode_and_extract(base64_content, task_props):
+    # def decode_and_extract(base64_content, task_props):
     def decode_and_extract(base64_row, task_props, default="pymupdf"):
 
         # Base64 content to extract
@@ -79,7 +80,7 @@ def _process_pdf_bytes(df, task_props):
 
     try:
         # Apply the helper function to each row in the 'content' column
-        _decode_and_extract = functools.partial(decode_and_extract, task_props=task_props)        
+        _decode_and_extract = functools.partial(decode_and_extract, task_props=task_props)
         logger.debug(f"Extracting text from PDFs: {df['file_name']}")
         logger.debug(df)
         df['content'] = df.apply(_decode_and_extract, axis=1)

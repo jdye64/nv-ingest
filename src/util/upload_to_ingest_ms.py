@@ -6,7 +6,9 @@ import os
 import sys
 import time
 import uuid
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed, ProcessPoolExecutor
+from statistics import mean, median
 
 import click
 import redis
@@ -345,7 +347,7 @@ def process_source(source, redis_client, task_queue, extract, extract_method, sp
     job_data = load_data_from_path(source)
     response = submit_job_and_wait_for_response(redis_client, job_data, tasks, task_queue, timeout=300)
 
-    return data_size
+    return response, data_size
 
 
 def main(file_source, redis_host, redis_port, extract, extract_method, split, dry_run):
@@ -382,6 +384,8 @@ def main(file_source, redis_host, redis_port, extract, extract_method, split, dr
     - This function initializes a Redis client and a ThreadPoolExecutor for concurrent processing.
     - The function calculates and logs the total data processed and the overall processing speed in megabytes per second.
     """
+    global executor
+
     redis_client = redis.Redis(host=redis_host, port=redis_port, decode_responses=True)
     task_queue = os.environ.get("TASK_QUEUE_NAME", "morpheus_task_queue")
 
@@ -393,16 +397,39 @@ def main(file_source, redis_host, redis_port, extract, extract_method, split, dr
     progress_bar = tqdm(total=total_files, desc="Processing files", unit="file")
     total_data_processed = 0  # Total data processed in bytes
 
+    if not matching_files:
+        logger.warning("No files found matching the specified patterns.")
+        return
+    else:
+        logger.info(f"Found {total_files} matching files.")
+        logger.info(f"Processing {matching_files} files...")
+
     future_to_file = {
         executor.submit(process_source, source, redis_client, task_queue, extract, extract_method, split): source
         for source in matching_files}
 
+    stage_elapsed_times = defaultdict(list)
+
     for future in as_completed(future_to_file):
         source = future_to_file[future]
         try:
-            data_processed = future.result()
+            response, data_processed = future.result()
             total_data_processed += data_processed
             progress_bar.update(1)
+
+            # Extract trace data from response
+            trace_data = response.get('trace', {})
+
+            # Calculate elapsed time for each stage and store it
+            for key, entry_time in trace_data.items():
+                if 'entry' in key:
+                    exit_key = key.replace('entry', 'exit')
+                    exit_time = trace_data.get(exit_key)
+                    if exit_time:
+                        stage_name = key.split('::')[2]  # Extract stage name
+                        elapsed_time = exit_time - entry_time
+                        stage_elapsed_times[stage_name].append(elapsed_time)
+
             # Calculate the average speed up to this point
             current_time_ns = time.time_ns()
             elapsed_time_s = (current_time_ns - start_time_ns) / 1_000_000_000
@@ -412,6 +439,16 @@ def main(file_source, redis_host, redis_port, extract, extract_method, split, dr
             logger.error(f"Error processing file {source}: {str(e)}")
 
     progress_bar.close()
+
+    # Calculate and log stats for each stage
+    total_computation_time = sum([sum(times) for times in stage_elapsed_times.values()])
+    for stage, times in stage_elapsed_times.items():
+        avg_time = mean(times)
+        med_time = median(times)
+        total_stage_time = sum(times)
+        percent_of_total = (total_stage_time / total_computation_time) * 100 if total_computation_time > 0 else 0
+        logger.info(
+            f"{stage}: Avg: {avg_time / 1e6:.2f} ms, Median: {med_time / 1e6:.2f} ms, Total % of Computation: {percent_of_total:.2f}%")
 
     total_elapsed_time_ns = time.time_ns() - start_time_ns
     total_elapsed_time_s = total_elapsed_time_ns / 1_000_000_000  # Convert nanoseconds to seconds
@@ -430,7 +467,7 @@ def main(file_source, redis_host, redis_port, extract, extract_method, split, dr
 @click.option('--redis-port', default='6379', help="Port for Redis.", type=int)
 @click.option('--extract', is_flag=True, help="Enable PDF text extraction task.")
 @click.option('--split', is_flag=True, help="Enable text splitting task.")
-@click.option('--extract_method',
+@click.option('--extract_method', default=['pymupdf'],
               type=click.Choice(['pymupdf', 'haystack', 'unstructured_io', 'unstructured_service'],
                                 case_sensitive=False), multiple=True,
               help='Specifies the type(s) of extraction to use.')
@@ -450,6 +487,7 @@ def cli(file_source, redis_host, redis_port, extract, extract_method, split, n_w
     configure_logging(log_level.upper())
     try:
         setup_global_executor(n_workers=n_workers)  # TODO(fix concurrency)
+        logger.info((extract, extract_method))
         main(file_source, redis_host, redis_port, extract, extract_method, split, dry_run)
     except Exception as e:
         logger.error(f"An error occurred: {e}")

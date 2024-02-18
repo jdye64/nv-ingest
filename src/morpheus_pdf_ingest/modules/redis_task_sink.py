@@ -72,15 +72,16 @@ def _redis_task_sink(builder: mrc.Builder):
             "data": df.to_json(orient='records'),
         }
 
-        # if (do_trace_tagging):
-        #    traces = {}
-        #    # meta_list = message.list_metadata()
-        #    # logger.info(f"meta_list: {meta_list}")
-        #    # for key in message.list_metadata():
-        #    #    if (key.startswith("trace::")):
-        #    #        traces[key] = message.get_metadata(key)
+        do_trace_tagging = message.get_metadata('add_trace_tagging', True)
+        if (do_trace_tagging):
+            traces = {}
+            meta_list = message.list_metadata()
 
-        #    ret_val_json["trace"] = traces
+            for key in meta_list:
+                if (key.startswith("trace::")):
+                    traces[key] = message.get_metadata(key)
+
+            ret_val_json["trace"] = traces
 
         # Send the JSON data to the Redis listener
         response_channel = message.get_metadata('response_channel')

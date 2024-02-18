@@ -63,14 +63,14 @@ def traceable(trace_name=None):
             trace_prefix = trace_name if trace_name else func.__name__
 
             if do_trace_tagging:
-                ts_entry = time.clock_gettime_ns(time.CLOCK_MONOTONIC)
+                ts_entry = time.time_ns()
                 message.set_metadata("trace::entry::{}".format(trace_prefix), ts_entry)
 
             # Call the decorated function
             result = func(*args, **kwargs)
 
             if do_trace_tagging:
-                ts_exit = time.clock_gettime_ns(time.CLOCK_MONOTONIC)
+                ts_exit = time.time_ns()
                 message.set_metadata("trace::exit::{}".format(trace_prefix), ts_exit)
 
             return result
