@@ -21,7 +21,6 @@ logger = logging.getLogger(__name__)
 
 # Define a helper function to use unstructured-io to extract text from a base64 encoded bytestram PDF
 def pymupdf(pdf_stream, extract_text: bool, extract_images: bool, extract_tables: bool, **kwargs):
-
     """
     Helper function to use PyMuPDF to extract text from a bytestream PDF.
 
@@ -42,17 +41,12 @@ def pymupdf(pdf_stream, extract_text: bool, extract_images: bool, extract_tables
     -------
     str
         A string of extracted text.
-    """    
+    """
 
-    logger.info(f"Extracting PDF with PyMuPDF backend.")
+    # logger.debug(f"Extracting PDF with PyMuPDF backend.")
 
-    doc = fitz.open(stream=pdf_stream, filetype="pdf")
-    text_list = []
-    # Extract text from each page
-    for page in doc:
-        text_list.append(page.get_text())
-
-    doc.close()  # Close the document
+    with fitz.open(stream=pdf_stream, filetype="pdf") as doc:
+        text_list = [page.get_text() for page in doc]
 
     text = "".join(text_list).replace('+', ' ')
 

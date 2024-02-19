@@ -23,7 +23,6 @@ from mrc.core import operators as ops
 from pydantic import ValidationError
 
 from morpheus_pdf_ingest.schemas.redis_task_sink_schema import RedisTaskSinkSchema
-from morpheus_pdf_ingest.util.tracing import latency_logger
 from morpheus_pdf_ingest.util.tracing import traceable
 
 logger = logging.getLogger(__name__)
@@ -61,15 +60,16 @@ def _redis_task_sink(builder: mrc.Builder):
     redis_client = redis.Redis(host=redis_host, port=redis_port, db=0)
 
     @traceable(MODULE_NAME)
-    @latency_logger(MODULE_NAME)
+    # @latency_logger(MODULE_NAME)
     def process_and_forward(message: ControlMessage):
-        df = message.payload().df
+        with message.payload().mutable_dataframe() as mdf:
+            df_json = mdf.to_json(orient='records')
 
         # Log the received DataFrame
         # logger.debug(f"\nReceived DataFrame:\n{df}")
 
         ret_val_json = {
-            "data": df.to_json(orient='records'),
+            "data": df_json,
         }
 
         do_trace_tagging = message.get_metadata('add_trace_tagging', True)
@@ -88,7 +88,7 @@ def _redis_task_sink(builder: mrc.Builder):
 
         redis_client.rpush(response_channel, json.dumps(ret_val_json))
 
-        logger.info(f"Forwarded message to Redis channel '{response_channel}'.")
+        # logger.info(f"Forwarded message to Redis channel '{response_channel}'.")
 
         return message
 

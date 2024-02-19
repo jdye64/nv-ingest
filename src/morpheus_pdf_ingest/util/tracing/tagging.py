@@ -63,8 +63,12 @@ def traceable(trace_name=None):
             trace_prefix = trace_name if trace_name else func.__name__
 
             if do_trace_tagging:
+                ts_send = message.get_metadata("latency::ts_send", None)
                 ts_entry = time.time_ns()
-                message.set_metadata("trace::entry::{}".format(trace_prefix), ts_entry)
+                message.set_metadata(f"trace::entry::{trace_prefix}", ts_entry)
+                if (ts_send):
+                    message.set_metadata(f"trace::entry::{trace_prefix}_channel_in", ts_send)
+                    message.set_metadata(f"trace::exit::{trace_prefix}_channel_in", ts_entry)
 
             # Call the decorated function
             result = func(*args, **kwargs)
@@ -72,6 +76,7 @@ def traceable(trace_name=None):
             if do_trace_tagging:
                 ts_exit = time.time_ns()
                 message.set_metadata("trace::exit::{}".format(trace_prefix), ts_exit)
+                message.set_metadata("latency::ts_send", ts_exit)
 
             return result
 

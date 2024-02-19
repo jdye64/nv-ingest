@@ -16,6 +16,7 @@
 import logging
 from typing import List, Literal, Any
 
+import cudf
 import mrc
 import pandas as pd
 from more_itertools import windowed
@@ -28,7 +29,6 @@ from pydantic import ValidationError
 
 from morpheus_pdf_ingest.schemas.nemo_doc_splitter_schema import DocumentSplitterSchema
 from morpheus_pdf_ingest.util.flow_control import filter_by_task
-from morpheus_pdf_ingest.util.tracing import latency_logger
 from morpheus_pdf_ingest.util.tracing import traceable
 
 logger = logging.getLogger(__name__)
@@ -141,12 +141,12 @@ def _nemo_document_splitter(builder: mrc.Builder):
 
     @filter_by_task(["split"])
     @traceable(MODULE_NAME)
-    @latency_logger(MODULE_NAME)
+    # @latency_logger(MODULE_NAME)
     def split_and_forward(message: ControlMessage):
         # Assume that df is going to have a 'content' column
         while (message.has_task('split')):
             task = message.remove_task('split')
-            logger.info(f"Processing task: {task}")
+            # logger.info(f"Processing task: {task}")
             task_props = task.get("properties", {})
 
             # Validate that all 'content' values are not None
@@ -162,9 +162,9 @@ def _nemo_document_splitter(builder: mrc.Builder):
             max_character_length = task_props.get('max_character_length', validated_config.max_character_length)
             sentence_window_size = task_props.get('sentence_window_size', validated_config.sentence_window_size)
 
-            logger.info(f"Splitting documents with split_by: {split_by}, split_length: {split_length}, "
-                        f"split_overlap: {split_overlap}, max_character_length: {max_character_length}, "
-                        f"sentence_window_size: {sentence_window_size}")
+            # logger.info(f"Splitting documents with split_by: {split_by}, split_length: {split_length}, "
+            #            f"split_overlap: {split_overlap}, max_character_length: {max_character_length}, "
+            #            f"sentence_window_size: {sentence_window_size}")
 
             split_docs = []
             for _, row in df.iterrows():
@@ -174,7 +174,7 @@ def _nemo_document_splitter(builder: mrc.Builder):
                 split_docs.extend(_build_split_documents(row, text_splits, sentence_window_size=sentence_window_size))
 
             split_docs_df = pd.DataFrame(split_docs)
-            message_meta = MessageMeta(df=split_docs_df)
+            message_meta = MessageMeta(df=cudf.from_pandas(split_docs_df))
             message.payload(message_meta)
 
         return message
