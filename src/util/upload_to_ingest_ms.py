@@ -11,6 +11,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed, ProcessPoolExecutor
 from statistics import mean, median
 
+import chardet
 import click
 import redis
 from tqdm import tqdm
@@ -120,7 +121,7 @@ def build_extraction_tasks(methods, file_type):
 def extract_file_content(path):
     """
     Extracts content from a file synchronously. Supports PDF files, which are read as binary and encoded in base64,
-    and plain text files, which are read directly.
+    and plain text files, which are read with detected encoding.
 
     Parameters
     ----------
@@ -130,7 +131,7 @@ def extract_file_content(path):
     Returns
     -------
     str
-        The extracted content of the file, base64 encoded for PDFs and plain text for text files.
+        The extracted content of the file, base64 encoded for PDFs and in plain text for text files.
 
     Raises
     ------
@@ -140,17 +141,23 @@ def extract_file_content(path):
     if path.endswith('.pdf'):
         # For PDF files, read as binary and encode in base64
         with open(path, 'rb') as file:
-            content = base64.b64encode(file.read()).decode('utf-8')
+            encoding = 'utf-8'
+            content = base64.b64encode(file.read()).decode(encoding)
             logger.debug(f"Encoded PDF content: {content[:100]}... (truncated)")
-    else:  # Assume everything else is text for now.
-        # For plain text files, read as text
-        with open(path, 'r', encoding='utf-8') as file:
+    else:
+        # Detect encoding for non-PDF files
+        with open(path, 'rb') as file:
+            raw_data = file.read(5000)
+            result = chardet.detect(raw_data)
+            encoding = result['encoding']
+
+        # Re-open the file with the detected encoding
+        with open(path, 'r', encoding=encoding) as file:
             content = file.read()
-            logger.debug(f"Read plain text content: {content[:100]}... (truncated)")
+            logger.debug(f"Read plain text content with detected encoding ({encoding}): {content[:100]}... (truncated)")
 
     logger.debug(f"Content length: {len(content)}")
-
-    return content
+    return content, encoding
 
 
 def process_file(file_path):
@@ -169,9 +176,9 @@ def process_file(file_path):
     """
     try:
         file_name = os.path.basename(file_path)
-        content = extract_file_content(file_path)  # Call the synchronous function directly
+        content, embedding = extract_file_content(file_path)  # Call the synchronous function directly
 
-        return {"file_name": file_name, "id": file_name, "content": content}
+        return {"file_name": file_name, "id": file_name, "content": content, "embedding": embedding}
     except Exception as e:
         logger.error(f"Error processing file {file_path}: {e}")
         raise
@@ -198,7 +205,7 @@ def load_data_from_path(path):
     """
 
     tasks = []
-    result = {"file_name": [], "id": [], "content": []}
+    result = {"file_name": [], "id": [], "content": [], "embedding": []}
 
     if not os.path.exists(path):
         raise FileNotFoundError(f"The path {path} does not exist.")
@@ -206,9 +213,10 @@ def load_data_from_path(path):
         raise ValueError("The provided path is not a file.")
 
     file_data = process_file(file_path=path)
+    result["content"].append(file_data["content"])
+    result["embedding"].append(file_data["embedding"])
     result["file_name"].append(file_data["file_name"])
     result["id"].append(file_data["id"])
-    result["content"].append(file_data["content"])
 
     return result
 
@@ -493,7 +501,8 @@ def cli(file_source, dataset_json, redis_host, redis_port, extract, extract_meth
             file_source = json.load(f)
 
         # Avoid processing files in the same order every time, we don't want to process all pdfs, then txt, etc...
-        file_source = random.shuffle(file_source['sampled_files'])
+        file_source = file_source['sampled_files']
+        random.shuffle(file_source)
 
     try:
         setup_global_executor(n_workers=n_workers)  # TODO(fix concurrency)
