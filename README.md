@@ -293,6 +293,16 @@ python ./src/util/upload_to_ingest_ms.py --file_source ./data/pdf_ingest_testing
 2024-02-16 01:20:17,603 - __main__ - INFO - Received 819 documents from source: ./data/pdf_ingest_testing/the-un-security-council-handbook-by-scr-1.pdf
 ```
 
+### Create a dataset for performance comparison and use it to feed upload_to_ingest_ms.py
+
+```bash
+python ./src/util/gen_dataset.py --source_directory=./data --size=1GB --sample pdf=60 --sample txt=40 --output_file \
+  test_output.json --validate-output
+
+python src/util/upload_to_ingest_ms.py --dataset_json ./test_output.json --split --extract --extract_method=pymupdf \
+  --n_workers=10
+```
+
 ## Launch the Nemo Retriever pipeline with the morpheus-ms service
 
 **Note:** if you have deployed morpheus-ms, redis, or triton services, you will need to stop them before starting the

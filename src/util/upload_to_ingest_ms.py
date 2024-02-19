@@ -105,9 +105,7 @@ def build_extraction_tasks(methods, file_type):
         task_props['method'] = method
         task = {'type': 'pdf_extract', 'properties': task_props}
 
-        if method == 'pymupdf':
-            tasks.append(task)
-        elif method in ['haystack', 'unstructured-local', 'unstructured-service']:
+        if method in ['haystack', 'unstructured-local', 'unstructured-service']:
             task['properties'].update(unstructured_properties)
         else:
             pass  # Others
@@ -180,47 +178,36 @@ def process_file(file_path):
 
 def load_data_from_path(path):
     """
-    Loads data from a specified path, supporting both files and directories.
-    Utilizes parallel processing to efficiently handle multiple files.
+    Loads data from a specified file path.
 
     Parameters
     ----------
     path : str
-        The path to a file or directory.
+        The path to a file.
 
     Returns
     -------
     dict
-        A dictionary with keys 'file_name', 'id', and 'content', containing details for each processed file.
+        A dictionary with keys 'file_name', 'id', and 'content', containing details for the processed file.
 
     Raises
     ------
     FileNotFoundError
-        If the specified path does not exist.
-    ValueError
-        If the path is neither a file nor a directory.
+        If the specified path does not exist or is not a file.
     """
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"The path {path} does not exist.")
 
-    if os.path.isdir(path):
-        # Collect all file paths in the directory
-        file_paths = [os.path.join(root, file) for root, _, files in os.walk(path) for file in files]
-    elif os.path.isfile(path):
-        file_paths = [path]
-    else:
-        raise ValueError("The provided path is neither a file nor a directory.")
-
+    tasks = []
     result = {"file_name": [], "id": [], "content": []}
 
-    future_to_file = {executor.submit(process_file, file_path): file_path for file_path in file_paths}
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"The path {path} does not exist.")
+    if not os.path.isfile(path):
+        raise ValueError("The provided path is not a file.")
 
-    for future in as_completed(future_to_file):
-        file_data = future.result()
-        if file_data and 'error' not in file_data:
-            result["file_name"].append(file_data["file_name"])
-            result["id"].append(file_data["id"])
-            result["content"].append(file_data["content"])
+    file_data = process_file(file_path=path)
+    result["file_name"].append(file_data["file_name"])
+    result["id"].append(file_data["id"])
+    result["content"].append(file_data["content"])
 
     return result
 
@@ -261,6 +248,7 @@ def submit_job_and_wait_for_response(redis_client, job_data, tasks, task_queue, 
         "tasks": tasks,
         "latency::ts_send": time.time_ns()
     })
+
     response_channel = f"response_{job_id}"
 
     redis_client.rpush(task_queue, job_payload)
@@ -400,10 +388,8 @@ def main(file_source, redis_host, redis_port, extract, extract_method, split, dr
     if not matching_files:
         logger.warning("No files found matching the specified patterns.")
         return
-    else:
-        logger.info(f"Found {total_files} matching files.")
-        logger.info(f"Processing {matching_files} files...")
 
+    abs_start = time.time_ns()
     future_to_file = {
         executor.submit(process_source, source, redis_client, task_queue, extract, extract_method, split): source
         for source in matching_files}
@@ -430,7 +416,7 @@ def main(file_source, redis_host, redis_port, extract, extract_method, split, dr
                         elapsed_time = exit_time - entry_time
                         stage_elapsed_times[stage_name].append(elapsed_time)
 
-            # Calculate the average speed up to this point
+            # Calculate the average speed-up to this point
             current_time_ns = time.time_ns()
             elapsed_time_s = (current_time_ns - start_time_ns) / 1_000_000_000
             average_speed = (total_data_processed / (1024 * 1024)) / elapsed_time_s
@@ -438,17 +424,30 @@ def main(file_source, redis_host, redis_port, extract, extract_method, split, dr
         except Exception as e:
             logger.error(f"Error processing file {source}: {str(e)}")
 
+    abs_elapsed = time.time_ns() - abs_start
     progress_bar.close()
 
-    # Calculate and log stats for each stage
-    total_computation_time = sum([sum(times) for times in stage_elapsed_times.values()])
+    total_trace_elapsed = sum([sum(times) for times in stage_elapsed_times.values()])
+    unresolved_time = abs_elapsed - total_trace_elapsed  # Calculate unresolved time
+    logger.info(unresolved_time / 1e9)
+
     for stage, times in stage_elapsed_times.items():
         avg_time = mean(times)
         med_time = median(times)
         total_stage_time = sum(times)
-        percent_of_total = (total_stage_time / total_computation_time) * 100 if total_computation_time > 0 else 0
+        percent_of_total = (total_stage_time / total_trace_elapsed) * 100 if total_trace_elapsed > 0 else 0
         logger.info(
-            f"{stage}: Avg: {avg_time / 1e6:.2f} ms, Median: {med_time / 1e6:.2f} ms, Total % of Computation: {percent_of_total:.2f}%")
+            f"{stage}: Avg: {avg_time / 1e6:.2f} ms, Median: {med_time / 1e6:.2f} ms, Total Time: {total_stage_time / 1e6:.2f} ms, Total % of Trace Computation: {percent_of_total:.2f}%")
+
+    # After iterating through all stages and logging their stats, log the unresolved time
+    if total_trace_elapsed > 0 and unresolved_time > 0:
+        percent_unresolved = (unresolved_time / abs_elapsed) * 100
+        logger.info(
+            f"Unresolved time: {unresolved_time / 1e6:.2f} ms, Percent of Total Elapsed: {percent_unresolved:.2f}%")
+    elif unresolved_time <= 0:
+        logger.info("No unresolved time detected. Trace times account for the entire elapsed duration.")
+    else:
+        logger.error("Error calculating unresolved time.")
 
     total_elapsed_time_ns = time.time_ns() - start_time_ns
     total_elapsed_time_s = total_elapsed_time_ns / 1_000_000_000  # Convert nanoseconds to seconds
@@ -463,6 +462,7 @@ def main(file_source, redis_host, redis_port, extract, extract_method, split, dr
 @click.command()
 @click.option('--file_source', multiple=True, default=[], type=str,
               help='List of file sources/paths to be processed.')
+@click.option("--dataset_json", type=str, help="Path to a JSON file containing a list of file sources.")
 @click.option('--redis-host', default='localhost', help="DNS name for Redis.")
 @click.option('--redis-port', default='6379', help="Port for Redis.", type=int)
 @click.option('--extract', is_flag=True, help="Enable PDF text extraction task.")
@@ -477,17 +477,24 @@ def main(file_source, redis_host, redis_port, extract, extract_method, split, dr
 @click.option('--concurrency_mode', default='thread', type=click.Choice(['thread', 'process'], case_sensitive=False),
               help="Choose 'thread' for ThreadPoolExecutor or 'process' for ProcessPoolExecutor.")
 @click.option('--dry-run', is_flag=True, help="Prints the steps to be executed without performing them.")
-def cli(file_source, redis_host, redis_port, extract, extract_method, split, n_workers, log_level, dry_run,
-        concurrency_mode):
+def cli(file_source, dataset_json, redis_host, redis_port, extract, extract_method, split, n_workers, log_level,
+        dry_run, concurrency_mode):
     """
     CLI entry point for processing files. Configures and executes the main processing function based on user inputs.
 
     The function initializes a global ThreadPoolExecutor and then calls the main processing function with the provided options.
     """
     configure_logging(log_level.upper())
+
+    extract_method = list(extract_method)
+    # if a dataset is specified, use it to override the file_source
+    if dataset_json:
+        with open(dataset_json, 'r') as f:
+            file_source = json.load(f)
+        file_source = file_source['sampled_files']
+
     try:
         setup_global_executor(n_workers=n_workers)  # TODO(fix concurrency)
-        logger.info((extract, extract_method))
         main(file_source, redis_host, redis_port, extract, extract_method, split, dry_run)
     except Exception as e:
         logger.error(f"An error occurred: {e}")

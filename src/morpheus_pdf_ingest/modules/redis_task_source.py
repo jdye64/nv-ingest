@@ -71,15 +71,14 @@ def _redis_task_source(builder: mrc.Builder):
         """
         while True:
             _, job_payload = redis_client.blpop([task_queue])
-            ts_fetched = time.clock_gettime_ns(time.CLOCK_MONOTONIC)
+            ts_fetched = time.time_ns()
 
             # Debug Tracing
-            ts_entry = time.clock_gettime_ns(time.CLOCK_MONOTONIC)
+            ts_entry = time.time_ns()
             try:
                 job_data = json.loads(job_payload)
                 # logger.info(f"job data:\n{json.dumps(job_data, indent=2)}")
                 data = job_data.pop('data', {})
-                logger.info(f"Job data:\n{json.dumps(job_data, indent=2)}")
                 do_trace_tagging = job_data.pop('add_trace_tagging', False)
                 tasks = job_data.pop('tasks', [])
                 task_id = job_data.pop('task_id')
@@ -90,7 +89,7 @@ def _redis_task_source(builder: mrc.Builder):
 
                 df = cudf.DataFrame(data)
                 message_meta = MessageMeta(df=df)
-                logger.info(f"Received message with {len(df)} rows, cols: {df.columns}")
+                logger.debug(f"Received message with {len(df)} rows, cols: {df.columns}")
 
                 control_message = ControlMessage()
                 control_message.payload(message_meta)
@@ -98,12 +97,12 @@ def _redis_task_source(builder: mrc.Builder):
                 control_message.set_metadata('task_id', task_id)
 
                 for task in tasks:
-                    logger.info("Tasks: %s", json.dumps(task, indent=2))
+                    logger.debug("Tasks: %s", json.dumps(task, indent=2))
                     control_message.add_task(task['type'], task['properties'])
 
                 # Debug Tracing
                 if do_trace_tagging:
-                    ts_exit = time.clock_gettime_ns(time.CLOCK_MONOTONIC)
+                    ts_exit = time.time_ns()
                     control_message.set_metadata("config::add_trace_tagging", do_trace_tagging)
                     control_message.set_metadata("trace::entry::redis_task_source", ts_entry)
                     control_message.set_metadata("trace::exit::redis_task_source", ts_exit)
@@ -118,7 +117,7 @@ def _redis_task_source(builder: mrc.Builder):
                         colorize(f"throughput::redis_source_retrieve: {throughput_mb} MB/sec.",
                                  ColorCodes.BLUE))
 
-                control_message.set_metadata("latency::ts_send", time.clock_gettime_ns(time.CLOCK_MONOTONIC))
+                control_message.set_metadata("latency::ts_send", time.time_ns())
 
                 yield control_message
             except Exception as exc:

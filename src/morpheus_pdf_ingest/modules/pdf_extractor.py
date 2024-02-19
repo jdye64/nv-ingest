@@ -16,6 +16,7 @@ import base64
 import functools
 import io
 import logging
+import traceback
 
 import mrc
 import mrc.core.operators as ops
@@ -69,6 +70,7 @@ def _process_pdf_bytes(df, task_props):
             extract_method = default
         try:
             func = getattr(pdf, extract_method, default)
+            logger.info("Running extraction method: %s", extract_method)
             text = func(pdf_stream, **task_props)
 
             return text
@@ -85,7 +87,7 @@ def _process_pdf_bytes(df, task_props):
         logger.debug(df)
         df['content'] = df.apply(_decode_and_extract, axis=1)
     except:
-        # TODO(Devin): Retry / graceful fallback, etc.. if extraction fails
+        traceback.print_exc()
         logger.error("Failed to extract text from PDFs.")
 
     return df
