@@ -63,7 +63,7 @@ def _redis_task_sink(builder: mrc.Builder):
     # @latency_logger(MODULE_NAME)
     def process_and_forward(message: ControlMessage):
         with message.payload().mutable_dataframe() as mdf:
-            df_json = mdf.to_json(orient='records')
+            df_json = mdf.to_pandas().to_json(orient='records')
 
         # Log the received DataFrame
         # logger.debug(f"\nReceived DataFrame:\n{df}")

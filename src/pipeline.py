@@ -34,27 +34,6 @@ from morpheus_pdf_ingest.modules.redis_task_source import RedisTaskSourceLoaderF
 
 logger = logging.getLogger(__name__)
 
-CONNECTION_TRACKER = {}
-
-file_sources = [
-    './data/pdf_ingest_testing/*.pdf',
-]
-
-_source_config = [{
-    'type': 'filesystem',
-    'name': 'filesystem-test',
-    'config': {
-        "batch_size": 1,
-        "enable_monitor": True,
-        "extractor_config": {
-            "chunk_size": 512,
-            "num_threads": 1,
-        },
-        "filenames": file_sources,
-        "vdb_resource_name": "pdf_ingest_testing"
-    }
-}]
-
 
 def validate_source_config(source_info: typing.Dict[str, any]) -> None:
     """
@@ -252,6 +231,7 @@ if (__name__ == "__main__"):
     config.pipeline_batch_size = 256
     config.enable_monitor = True
     config.feature_length = 512
+    config.num_threads = 10
     config.model_max_batch_size = 256
     config.mode = PipelineModes.NLP
 

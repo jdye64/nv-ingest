@@ -3,6 +3,7 @@ import glob
 import json
 import logging
 import os
+import random
 import sys
 import time
 import uuid
@@ -429,7 +430,6 @@ def main(file_source, redis_host, redis_port, extract, extract_method, split, dr
 
     total_trace_elapsed = sum([sum(times) for times in stage_elapsed_times.values()])
     unresolved_time = abs_elapsed - total_trace_elapsed  # Calculate unresolved time
-    logger.info(unresolved_time / 1e9)
 
     for stage, times in stage_elapsed_times.items():
         avg_time = mean(times)
@@ -491,7 +491,9 @@ def cli(file_source, dataset_json, redis_host, redis_port, extract, extract_meth
     if dataset_json:
         with open(dataset_json, 'r') as f:
             file_source = json.load(f)
-        file_source = file_source['sampled_files']
+
+        # Avoid processing files in the same order every time, we don't want to process all pdfs, then txt, etc...
+        file_source = random.shuffle(file_source['sampled_files'])
 
     try:
         setup_global_executor(n_workers=n_workers)  # TODO(fix concurrency)

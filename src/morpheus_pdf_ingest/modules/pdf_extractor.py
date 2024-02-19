@@ -13,12 +13,14 @@
 # limitations under the License.
 
 import base64
-import uuid
 import functools
 import io
 import logging
+import queue
+import time
 import traceback
-from concurrent.futures import ProcessPoolExecutor
+import uuid
+from concurrent.futures import ProcessPoolExecutor, Future
 
 import cudf
 import mrc
@@ -31,7 +33,6 @@ from morpheus.utils.module_utils import register_module
 from morpheus_pdf_ingest.modules import pdf
 from morpheus_pdf_ingest.schemas.pdf_extractor_schema import PDFExtractorSchema
 from morpheus_pdf_ingest.util.flow_control import filter_by_task
-from morpheus_pdf_ingest.util.tracing import traceable
 
 logger = logging.getLogger(__name__)
 
@@ -39,12 +40,6 @@ MODULE_NAME = "pdf_text_extractor"
 PDFExtractorLoaderFactory = ModuleLoaderFactory("pdf_text_extractor",
                                                 "morpheus_pdf_ingest",
                                                 PDFExtractorSchema)
-
-# Global dictionary to store ControlMessages temporarily
-control_messages = {}
-
-# Initialize a ProcessPoolExecutor
-executor = ProcessPoolExecutor()
 
 
 def _process_pdf_bytes(df, task_props):
@@ -94,7 +89,7 @@ def _process_pdf_bytes(df, task_props):
     try:
         # Apply the helper function to each row in the 'content' column
         _decode_and_extract = functools.partial(decode_and_extract, task_props=task_props)
-        logger.debug(f"Extracting text from PDF: {df['file_name']}")
+        logger.debug(f"processing: {df['file_name'][0]}")
         # logger.debug(df)
         df['content'] = df.apply(_decode_and_extract, axis=1)
     except Exception as e:
@@ -108,23 +103,108 @@ def _process_pdf_bytes(df, task_props):
 def _pdf_text_extractor(builder: mrc.Builder):
     module_config = builder.get_current_module_config()
 
-    @filter_by_task(["pdf_extract"])
-    @traceable(MODULE_NAME)
-    # @latency_logger(MODULE_NAME)
-    def parse_files(ctrl_msg: ControlMessage) -> ControlMessage:
-        while (ctrl_msg.has_task('pdf_extract')):
-            # get task
-            task_props = ctrl_msg.remove_task('pdf_extract')
-            with ctrl_msg.payload().mutable_dataframe() as mdf:
-                df = mdf.to_pandas()
+    # TODO(Devin): Add schema and make worker pool configurable
+    # Global dictionary to store ControlMessages temporarily
+    control_messages = {}
 
-            # Return text, image, or table
-            df = _process_pdf_bytes(df, task_props)
+    # Initialize a ProcessPoolExecutor
+    executor = ProcessPoolExecutor(max_workers=10)
+    futures_queue = queue.Queue()
 
-            ctrl_msg.payload(MessageMeta(df=cudf.from_pandas(df)))
+    def forward_func(ctrl_msg: ControlMessage):
+        nonlocal control_messages
+        nonlocal futures_queue
 
-        return ctrl_msg
+        # Create a unique task_id for the control message
+        task_id = str(uuid.uuid4())
 
-    node = builder.make_node("pdf_extractor", ops.map(parse_files), ops.filter(lambda x: x is not None))
-    builder.register_module_input("input", node)
-    builder.register_module_output("output", node)
+        # Mark the entry time for forwarding
+        ts_entry = time.time_ns()
+        ctrl_msg.set_metadata("trace::entry::forward", ts_entry)
+
+        # Store the ControlMessage in the global dictionary with the created task_id
+        control_messages[task_id] = (ctrl_msg, None)  # No task_props in this case
+
+        # Create a future that is ready to be immediately completed
+        future = Future()
+        future.set_result(None)  # Indicate that no operation was performed
+        future.bypass = True
+        future.task_id = task_id
+        future.retries = 0  # No retries needed for a forward operation
+
+        # Push the ready future to the futures_queue
+        futures_queue.put(future)
+
+    @filter_by_task(["pdf_extract"], forward_func=forward_func)
+    def parse_files(ctrl_msg: ControlMessage) -> None:
+        ts_entry = time.time_ns()
+        ctrl_msg.set_metadata("trace::entry::pdf_extract", ts_entry)
+        task_props = ctrl_msg.remove_task('pdf_extract')
+        submit_task(ctrl_msg, task_props)
+
+    def submit_task(ctrl_msg, task_props, retry_count=0):
+        nonlocal control_messages
+        nonlocal futures_queue
+
+        task_id = str(uuid.uuid4())
+        with ctrl_msg.payload().mutable_dataframe() as mdf:
+            df = mdf.to_pandas()
+
+        # Store the ControlMessage in the global dictionary
+        # Maybe attach to future instead
+        control_messages[task_id] = (ctrl_msg, task_props)
+
+        # Submit the task to the process pool
+        future = executor.submit(_process_pdf_bytes, df, task_props)
+        future.task_id = task_id
+        future.retries = retry_count
+
+        futures_queue.put(future)
+
+    def process_completed_tasks():
+        """
+        Continuously processes completed tasks. Stops when stop_event is set and the queue is empty.
+
+        Parameters:
+        - stop_event: Threading.Event() used to signal when to stop processing.
+        """
+        nonlocal futures_queue
+
+        while True:
+            try:
+                # Non-blocking get with timeout to remain responsive to stop_event
+                future = futures_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue  # Queue is empty, loop back to check stop_event and try again
+
+            # Process the completed future
+            # TODO(Devin): More error checking
+            result = future.result()  # Wait for the future to complete if not already done
+            ctrl_msg, task_props = control_messages.pop(future.task_id, None)
+            try:
+                if ctrl_msg:
+                    ts_exit = time.time_ns()
+                    if (not hasattr(future, "bypass")):
+                        ctrl_msg.payload(MessageMeta(df=cudf.from_pandas(result)))
+
+                    ctrl_msg.set_metadata("trace::exit::pdf_extract", ts_exit)
+                    ctrl_msg.set_metadata("latency::ts_send", ts_exit)
+                    yield ctrl_msg
+
+            except Exception as e:
+                logging.error(f"Error processing task {future.task_id}: {e}")
+                retry_count = future.retries
+                if (retry_count < 3):  # TODO(Devin) : Make configurable
+                    future.retries += 1
+                    futures_queue.put(ctrl_msg, task_props, retry_count)
+                else:
+                    logging.error(f"Failed to process task {future.task_id} after {retry_count} retries")
+                    ctrl_msg.set_metadata("cm_failed", True)  # TODO(Devin): bring in failure handlers
+
+    # Create a node for processing incoming messages and submitting tasks
+    input_node = builder.make_node("pdf_extractor", ops.map(parse_files), ops.filter(lambda x: x is not None))
+    builder.register_module_input("input", input_node)
+
+    # Create a source node for handling completed tasks
+    completed_task_node = builder.make_source("output_source", process_completed_tasks)
+    builder.register_module_output("output", completed_task_node)

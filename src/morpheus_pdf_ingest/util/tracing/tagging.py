@@ -55,6 +55,7 @@ def traceable(trace_name=None):
         @functools.wraps(func)
         def wrapper_trace_tagging(*args, **kwargs):
             # Assuming the first argument is always the message
+            ts_fetched = time.time_ns()
             message = args[0]
 
             do_trace_tagging = ((message.has_metadata("config::add_trace_tagging") is True) and
@@ -68,14 +69,14 @@ def traceable(trace_name=None):
                 message.set_metadata(f"trace::entry::{trace_prefix}", ts_entry)
                 if (ts_send):
                     message.set_metadata(f"trace::entry::{trace_prefix}_channel_in", ts_send)
-                    message.set_metadata(f"trace::exit::{trace_prefix}_channel_in", ts_entry)
+                    message.set_metadata(f"trace::exit::{trace_prefix}_channel_in", ts_fetched)
 
             # Call the decorated function
             result = func(*args, **kwargs)
 
             if do_trace_tagging:
                 ts_exit = time.time_ns()
-                message.set_metadata("trace::exit::{}".format(trace_prefix), ts_exit)
+                message.set_metadata(f"trace::exit::{trace_prefix}", ts_exit)
                 message.set_metadata("latency::ts_send", ts_exit)
 
             return result
