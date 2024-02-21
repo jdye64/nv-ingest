@@ -476,7 +476,7 @@ def main(file_source, redis_host, redis_port, extract, extract_method, split, dr
 @click.option('--extract', is_flag=True, help="Enable PDF text extraction task.")
 @click.option('--split', is_flag=True, help="Enable text splitting task.")
 @click.option('--extract_method', default=['pymupdf'],
-              type=click.Choice(['pymupdf', 'haystack', 'unstructured_io', 'unstructured_service'],
+              type=click.Choice(['pymupdf', 'haystack', 'tika', 'unstructured_io', 'unstructured_service'],
                                 case_sensitive=False), multiple=True,
               help='Specifies the type(s) of extraction to use.')
 @click.option('--n_workers', default=5, help="Number of worker threads for the ThreadPoolExecutor.", type=int)

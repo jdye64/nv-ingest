@@ -35,6 +35,11 @@ services:
     ports:
       - "6379:6379"
 
+  tika:
+    image: apache/tika:latest
+    ports:
+      - "9998:9998"
+
   triton:
     image: "nvcr.io/nvidia/tritonserver:23.12-py3"
     command: >

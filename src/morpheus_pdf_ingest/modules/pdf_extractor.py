@@ -89,8 +89,7 @@ def _process_pdf_bytes(df, task_props):
     try:
         # Apply the helper function to each row in the 'content' column
         _decode_and_extract = functools.partial(decode_and_extract, task_props=task_props)
-        logger.debug(f"processing: {df['file_name'][0]}")
-        # logger.debug(df)
+        logger.debug(f"processing ({task_props.get('method', None)}): {df['file_name'][0]}")
         df['content'] = df.apply(_decode_and_extract, axis=1)
     except Exception as e:
         traceback.print_exc()
@@ -196,10 +195,11 @@ def _pdf_text_extractor(builder: mrc.Builder):
                 retry_count = future.retries
                 if (retry_count < 3):  # TODO(Devin) : Make configurable
                     future.retries += 1
-                    futures_queue.put(ctrl_msg, task_props, retry_count)
+                    submit_task(ctrl_msg, task_props, retry_count=future.retries)
                 else:
                     logging.error(f"Failed to process task {future.task_id} after {retry_count} retries")
                     ctrl_msg.set_metadata("cm_failed", True)  # TODO(Devin): bring in failure handlers
+                    yield ctrl_msg
 
     # Create a node for processing incoming messages and submitting tasks
     input_node = builder.make_node("pdf_extractor", ops.map(parse_files), ops.filter(lambda x: x is not None))

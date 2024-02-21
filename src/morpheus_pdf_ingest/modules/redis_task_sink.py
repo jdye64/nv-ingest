@@ -110,7 +110,7 @@ def _redis_task_sink(builder: mrc.Builder):
 
         # logger.info(f"Forwarded message to Redis channel '{response_channel}'.")
 
-        return message
+        return None
 
     process_node = builder.make_node("process_and_forward", ops.map(process_and_forward))
 
