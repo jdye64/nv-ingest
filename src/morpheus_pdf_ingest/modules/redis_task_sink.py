@@ -13,6 +13,7 @@
 # limitations under the License.
 import json
 import logging
+import time
 
 import mrc
 import redis
@@ -21,6 +22,7 @@ from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
 from mrc.core import operators as ops
 from pydantic import ValidationError
+from redis import RedisError
 
 from morpheus_pdf_ingest.schemas.redis_task_sink_schema import RedisTaskSinkSchema
 from morpheus_pdf_ingest.util.tracing import traceable
@@ -55,13 +57,31 @@ def _redis_task_sink(builder: mrc.Builder):
     # Use validated_config for further operations
     redis_host = validated_config.redis_host
     redis_port = validated_config.redis_port
+    redis_client = None
 
-    # Initialize Redis client
-    redis_client = redis.Redis(host=redis_host, port=redis_port, db=0)
+    def get_redis_client():
+        """Attempt to connect to Redis and return the client."""
+
+        try:
+            client = redis.Redis(host=redis_host, port=redis_port, db=0)
+            client.ping()  # Attempt to ping Redis to check if the connection is alive
+            return client
+        except RedisError as e:
+            logger.error(f"Failed to connect to Redis: {e}")
+            return None
 
     @traceable(MODULE_NAME)
     # @latency_logger(MODULE_NAME)
     def process_and_forward(message: ControlMessage):
+        nonlocal redis_client
+
+        # TODO(Devin): Limit retries?
+        while (redis_client is None or not redis_client.ping()):
+            logger.info("Reconnecting to Redis...")
+            redis_client = get_redis_client()
+            if redis_client is None:
+                time.sleep(5)  # Wait before retrying to avoid flooding with connection attempts
+
         with message.payload().mutable_dataframe() as mdf:
             df_json = mdf.to_pandas().to_json(orient='records')
 
