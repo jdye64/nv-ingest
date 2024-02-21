@@ -29,11 +29,11 @@ def pymupdf(pdf_stream, extract_text: bool, extract_images: bool, extract_tables
     pdf_stream : io.BytesIO
         A bytestream PDF.
     extract_text : bool
-        Specifies whether or not to extract text.
+        Specifies whether to extract text.
     extract_images : bool
-        Specifies whether or not to extract images.        
+        Specifies whether to extract images.
     extract_tables : bool
-        Specifies whether or not to extract tables.    
+        Specifies whether to extract tables.
     **kwargs
         The keyword arguments are used for additional extraction parameters.                 
 
