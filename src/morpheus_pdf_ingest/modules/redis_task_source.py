@@ -60,6 +60,7 @@ def _redis_task_source(builder: mrc.Builder):
     # Use validated_config for further operations
     redis_host = validated_config.redis_host
     redis_port = validated_config.redis_port
+    redis_client = None
     task_queue = validated_config.task_queue
 
     def get_redis_client():
@@ -71,8 +72,6 @@ def _redis_task_source(builder: mrc.Builder):
         except RedisError as e:
             logger.error(f"Failed to connect to Redis: {e}")
             return None
-
-    redis_client = get_redis_client()
 
     def fetch_messages() -> ControlMessage:
         """
