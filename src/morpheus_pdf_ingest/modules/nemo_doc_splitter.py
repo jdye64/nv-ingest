@@ -149,8 +149,7 @@ def _nemo_document_splitter(builder: mrc.Builder):
             task_props = task.get("properties", {})
 
             # Validate that all 'content' values are not None
-            with message.payload().mutable_dataframe() as mdf:
-                df = mdf.to_pandas()
+            df = message.payload().copy_dataframe().to_pandas()
 
             if df['content'].isnull().any():
                 raise ValueError(
