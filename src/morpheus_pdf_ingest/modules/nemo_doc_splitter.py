@@ -18,10 +18,9 @@ from typing import List, Literal, Any
 
 import cudf
 import mrc
-import pandas as pd
 from more_itertools import windowed
-from morpheus._lib.messages import MessageMeta
 from morpheus.messages import ControlMessage
+from morpheus.messages import MessageMeta
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
 from mrc.core import operators as ops
@@ -175,8 +174,7 @@ def _nemo_document_splitter(builder: mrc.Builder):
                                                  max_character_length=max_character_length)
                 split_docs.extend(_build_split_documents(row, text_splits, sentence_window_size=sentence_window_size))
 
-            split_docs_df = pd.DataFrame(split_docs)
-            message_meta = MessageMeta(df=cudf.from_pandas(split_docs_df))
+            message_meta = MessageMeta(df=cudf.DataFrame(split_docs))
             message.payload(message_meta)
 
         return message

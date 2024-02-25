@@ -25,8 +25,8 @@ from concurrent.futures import ProcessPoolExecutor, Future
 import cudf
 import mrc
 import mrc.core.operators as ops
-from morpheus._lib.messages import MessageMeta
 from morpheus.messages import ControlMessage
+from morpheus.messages import MessageMeta
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
 
@@ -145,9 +145,13 @@ def _pdf_text_extractor(builder: mrc.Builder):
         nonlocal control_messages
         nonlocal futures_queue
 
+        # Implementing backpressure feedback loop
+        while futures_queue.qsize() >= 100:  # Queue size cap
+            logging.warning("futures_queue is full, waiting for space...")
+            time.sleep(1)  # Backoff for 1 second before trying again
+
         task_id = str(uuid.uuid4())
-        with ctrl_msg.payload().mutable_dataframe() as mdf:
-            df = mdf.to_pandas()
+        df = ctrl_msg.payload().copy_dataframe().to_pandas()
 
         # Store the ControlMessage in the global dictionary
         # Maybe attach to future instead

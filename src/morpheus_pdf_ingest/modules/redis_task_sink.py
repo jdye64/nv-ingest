@@ -82,8 +82,8 @@ def _redis_task_sink(builder: mrc.Builder):
             if redis_client is None:
                 time.sleep(5)  # Wait before retrying to avoid flooding with connection attempts
 
-        with message.payload().mutable_dataframe() as mdf:
-            df_json = mdf.to_pandas().to_json(orient='records')
+        df = message.payload().copy_dataframe()
+        df_json = df.to_json(orient='records')
 
         # Log the received DataFrame
         # logger.debug(f"\nReceived DataFrame:\n{df}")
@@ -110,7 +110,9 @@ def _redis_task_sink(builder: mrc.Builder):
 
         # logger.info(f"Forwarded message to Redis channel '{response_channel}'.")
 
-        return None
+        message = None
+
+        return message
 
     process_node = builder.make_node("process_and_forward", ops.map(process_and_forward))
 
