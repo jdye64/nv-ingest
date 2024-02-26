@@ -23,6 +23,7 @@ import uuid
 from concurrent.futures import ProcessPoolExecutor, Future
 
 import cudf
+import pandas as pd
 import mrc
 import mrc.core.operators as ops
 from morpheus.messages import ControlMessage
@@ -89,13 +90,25 @@ def _process_pdf_bytes(df, task_props):
     try:
         # Apply the helper function to each row in the 'content' column
         _decode_and_extract = functools.partial(decode_and_extract, task_props=task_props)
-        logger.debug(f"processing ({task_props.get('method', None)}): {df['file_name'][0]}")
-        df['content'] = df.apply(_decode_and_extract, axis=1)
+        logger.debug(f"processing ({task_props.get('method', None)}): {df['file_name'][0]}")        
+        sr_extraction = df.apply(_decode_and_extract, axis=1)
+        sr_extraction = sr_extraction.explode().dropna()
+
+        if not sr_extraction.empty:
+
+            extracted_df = pd.DataFrame(
+                sr_extraction.to_list(), 
+                columns=[
+                    'document_type', 
+                    'metadata'])
+        else:
+            return pd.DataFrame(columns=["document_type", "metadata"])
+
     except Exception as e:
         traceback.print_exc()
         logger.error(f"Failed to extract text from PDF: {e}")
 
-    return df
+    return extracted_df
 
 
 @register_module(MODULE_NAME, "morpheus_pdf_ingest")

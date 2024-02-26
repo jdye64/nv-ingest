@@ -101,7 +101,7 @@ def build_extraction_tasks(methods, file_type):
 
     common_properties = {
         "extract_text": True,
-        "extract_images": False,
+        "extract_images": True,
         "extract_tables": False
     }
 

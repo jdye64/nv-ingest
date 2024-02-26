@@ -58,11 +58,12 @@ services:
               count: all
               capabilities: [ gpu ]
 
-  morpheus-ms:
-    image: "morpheus-ms:24.03"
+  morpheus-ms-runtime:
+    image: "morpheus-ms-runtime:24.03"
     build:
       context: ${MORPHEUS_PDF_INGEST_ROOT}
       dockerfile: "./Dockerfile"
+      target: runtime
     volumes:
       - ${MORPHEUS_PDF_INGEST_ROOT}/data:/workspace/data
     environment:
@@ -76,3 +77,26 @@ services:
             - driver: nvidia
               count: all
               capabilities: [ gpu ]
+
+  morpheus-ms-dev:
+    image: "morpheus-ms-dev:24.03"
+    build:
+      context: ${MORPHEUS_PDF_INGEST_ROOT}
+      dockerfile: "./Dockerfile"
+      target: development
+    volumes:
+      - ${MORPHEUS_PDF_INGEST_ROOT}/data:/workspace/data
+      - ${MORPHEUS_PDF_INGEST_ROOT}/src:/workspace/src
+    stdin_open: true
+    tty: true      
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_MORPHEUS_TASK_QUEUE=morpheus_task_queue
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]              

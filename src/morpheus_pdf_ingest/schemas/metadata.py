@@ -80,6 +80,12 @@ class MetadataSchema(BaseModelNoExt):
     content_metadata: ContentMetadataSchema
     text_metadata: TextMetadataSchema
     image_metadata: ImageMetadataSchema
+    
+
+class ExtractedDocumentType(str, Enum):
+    text = 'text'
+    unstructured_image = 'unstructured_image'
+    structured_image = 'structured_image'    
 
 
 def validate_metadata(metadata: Dict[str, Any]) -> MetadataSchema:
