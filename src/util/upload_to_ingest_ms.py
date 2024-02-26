@@ -23,8 +23,6 @@ UNSTRUCTURED_URL = os.environ.get('UNSTRUCTURED_URL', "http://localhost:8003")
 LLAMA_CLOUD_API_KEY = os.environ.get("LLAMA_CLOUD_API_KEY", None)
 EXTRACTABLE_FILE_TYPES = ['pdf']
 
-executor = None
-
 
 def configure_logging(level_name):
     """
@@ -44,18 +42,30 @@ def configure_logging(level_name):
     logger.setLevel(numeric_level)
 
 
-def setup_global_executor(n_workers, concurrency_mode='thread'):
+def setup_global_executor(n_workers, concurrency_mode='thread', use_dask=False):
     """
     Initializes the global ThreadPoolExecutor with the specified number of worker threads.
 
     Parameters:
     - n_workers (int): The number of worker threads to use in the ThreadPoolExecutor.
     """
-    global executor
-    executor_class = ThreadPoolExecutor if concurrency_mode == 'thread' else ProcessPoolExecutor
-    executor = executor_class(max_workers=n_workers)
 
-    logger.info(f"Global {str(executor_class)} initialized with {n_workers} workers.")
+    if use_dask:
+        from dask.distributed import Client
+
+        if n_workers == 0:
+            n_workers = None  # Use default
+        if concurrency_mode == 'thread':
+            executor = Client(n_workers=n_workers, threads_per_worker=1, processes=False)
+        else:
+            executor = Client(n_workers=n_workers, threads_per_worker=1)
+        logger.info(f"Global dask client initialized with {n_workers} workers.")
+    else:
+        executor_class = ThreadPoolExecutor if concurrency_mode == 'thread' else ProcessPoolExecutor
+        executor = executor_class(max_workers=n_workers)
+        logger.info(f"Global {str(executor_class)} initialized with {n_workers} workers.")
+
+    return executor
 
 
 def build_extraction_tasks(methods, file_type):
@@ -92,7 +102,7 @@ def build_extraction_tasks(methods, file_type):
 
     common_properties = {
         "extract_text": True,
-        "extract_images": False,
+        "extract_images": True,
         "extract_tables": False
     }
 
@@ -298,8 +308,11 @@ def generate_matching_files(file_sources):
     for file_path in files:
         yield file_path
 
+def process_source(source, id, redis_host, redis_port, task_queue, extract, extract_method, split):
+    redis_client = redis.Redis(host=redis_host, port=redis_port, decode_responses=True)
+    return _process_source(source, id, redis_client, task_queue, extract, extract_method, split)
 
-def process_source(source, redis_client, task_queue, extract, extract_method, split):
+def _process_source(source, id, redis_client, task_queue, extract, extract_method, split):
     """
     Processes a single source file by applying specified tasks such as splitting and extracting content,
     and submits these tasks along with the job data to a specified Redis task queue.
@@ -355,7 +368,7 @@ def process_source(source, redis_client, task_queue, extract, extract_method, sp
     return response, data_size
 
 
-def main(file_source, redis_host, redis_port, extract, extract_method, split, dry_run):
+def main(file_source, redis_host, redis_port, extract, extract_method, split, dry_run, concurrency_options):
     """
     Processes files from specified sources using given extraction and splitting methods,
     and performs actions based on the specified options.
@@ -389,9 +402,7 @@ def main(file_source, redis_host, redis_port, extract, extract_method, split, dr
     - This function initializes a Redis client and a ThreadPoolExecutor for concurrent processing.
     - The function calculates and logs the total data processed and the overall processing speed in megabytes per second.
     """
-    global executor
 
-    redis_client = redis.Redis(host=redis_host, port=redis_port, decode_responses=True)
     task_queue = os.environ.get("TASK_QUEUE_NAME", "morpheus_task_queue")
 
     start_time_ns = time.time_ns()
@@ -407,39 +418,60 @@ def main(file_source, redis_host, redis_port, extract, extract_method, split, dr
         return
 
     abs_start = time.time_ns()
-    future_to_file = {
-        executor.submit(process_source, source, redis_client, task_queue, extract, extract_method, split): source
-        for source in matching_files}
+    #from dask.distributed import performance_report
 
-    stage_elapsed_times = defaultdict(list)
+    use_dask = concurrency_options["use_dask"]
+    with setup_global_executor(**concurrency_options) as executor:
+        #with performance_report(filename="dask-report.html"):
 
-    for future in as_completed(future_to_file):
-        source = future_to_file[future]
-        try:
-            response, data_processed = future.result()
-            total_data_processed += data_processed
-            progress_bar.update(1)
+            if use_dask or concurrency_options["concurrency_mode"] == "process":
+                func = process_source
+                args = (redis_host, redis_port, task_queue, extract, extract_method, split)
+            else:
+                redis_client = redis.Redis(host=redis_host, port=redis_port, decode_responses=True)
+                func = _process_source
+                args = (redis_client, task_queue, extract, extract_method, split)
+            future_to_file = {
+                executor.submit(func, source, uuid.uuid4(), *args) : source
+                for source in matching_files
+            }
 
-            # Extract trace data from response
-            trace_data = response.get('trace', {})
+            stage_elapsed_times = defaultdict(list)
 
-            # Calculate elapsed time for each stage and store it
-            for key, entry_time in trace_data.items():
-                if 'entry' in key:
-                    exit_key = key.replace('entry', 'exit')
-                    exit_time = trace_data.get(exit_key)
-                    if exit_time:
-                        stage_name = key.split('::')[2]  # Extract stage name
-                        elapsed_time = exit_time - entry_time
-                        stage_elapsed_times[stage_name].append(elapsed_time)
+            if use_dask:
+                from dask.distributed import as_completed as dask_as_completed
 
-            # Calculate the average speed-up to this point
-            current_time_ns = time.time_ns()
-            elapsed_time_s = (current_time_ns - start_time_ns) / 1_000_000_000
-            average_speed = (total_data_processed / (1024 * 1024)) / elapsed_time_s
-            progress_bar.set_postfix_str(f"Avg speed: {average_speed:.2f} MB/s", refresh=True)
-        except Exception as e:
-            logger.error(f"Error processing file {source}: {str(e)}")
+                _as_completed = dask_as_completed
+            else:
+                _as_completed = as_completed
+
+            for future in _as_completed(future_to_file):
+                source = future_to_file[future]
+                try:
+                    response, data_processed = future.result()
+                    total_data_processed += data_processed
+                    progress_bar.update(1)
+
+                    # Extract trace data from response
+                    trace_data = response.get('trace', {})
+
+                    # Calculate elapsed time for each stage and store it
+                    for key, entry_time in trace_data.items():
+                        if 'entry' in key:
+                            exit_key = key.replace('entry', 'exit')
+                            exit_time = trace_data.get(exit_key)
+                            if exit_time:
+                                stage_name = key.split('::')[2]  # Extract stage name
+                                elapsed_time = exit_time - entry_time
+                                stage_elapsed_times[stage_name].append(elapsed_time)
+
+                    # Calculate the average speed-up to this point
+                    current_time_ns = time.time_ns()
+                    elapsed_time_s = (current_time_ns - start_time_ns) / 1_000_000_000
+                    average_speed = (total_data_processed / (1024 * 1024)) / elapsed_time_s
+                    progress_bar.set_postfix_str(f"Avg speed: {average_speed:.2f} MB/s", refresh=True)
+                except Exception as e:
+                    logger.error(f"Error processing file {source}: {str(e)}")
 
     abs_elapsed = time.time_ns() - abs_start
     progress_bar.close()
@@ -487,14 +519,15 @@ def main(file_source, redis_host, redis_port, extract, extract_method, split, dr
               type=click.Choice(['pymupdf', 'haystack', 'tika', 'unstructured_io', 'unstructured_service', 'llama_parse'],
                                 case_sensitive=False), multiple=True,
               help='Specifies the type(s) of extraction to use.')
-@click.option('--n_workers', default=5, help="Number of worker threads for the ThreadPoolExecutor.", type=int)
+@click.option('--use_dask', is_flag=True, help="Use dask for concurrency")
+@click.option('--n_workers', default=5, help="Number of workers for the ThreadPoolExecutor or dask.", type=int)
 @click.option('--log-level', default='INFO',
               help="Sets the logging level (e.g., DEBUG, INFO, WARNING, ERROR, CRITICAL).")
 @click.option('--concurrency_mode', default='thread', type=click.Choice(['thread', 'process'], case_sensitive=False),
               help="Choose 'thread' for ThreadPoolExecutor or 'process' for ProcessPoolExecutor.")
 @click.option('--dry-run', is_flag=True, help="Prints the steps to be executed without performing them.")
 def cli(file_source, dataset_json, redis_host, redis_port, extract, extract_method, split, n_workers, log_level,
-        dry_run, concurrency_mode):
+        dry_run, concurrency_mode, use_dask):
     """
     CLI entry point for processing files. Configures and executes the main processing function based on user inputs.
 
@@ -513,8 +546,21 @@ def cli(file_source, dataset_json, redis_host, redis_port, extract, extract_meth
         random.shuffle(file_source)
 
     try:
-        setup_global_executor(n_workers=n_workers)  # TODO(fix concurrency)
-        main(file_source, redis_host, redis_port, extract, extract_method, split, dry_run)
+        concurrency_options = {
+            "n_workers": n_workers,
+            "concurrency_mode": concurrency_mode,
+            "use_dask": use_dask,
+        }
+        main(
+            file_source,
+            redis_host,
+            redis_port,
+            extract,
+            extract_method,
+            split,
+            dry_run,
+            concurrency_options,
+        )
     except Exception as e:
         logger.error(f"An error occurred: {e}")
         raise

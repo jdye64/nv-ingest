@@ -23,10 +23,11 @@ import uuid
 from concurrent.futures import ProcessPoolExecutor, Future
 
 import cudf
+import pandas as pd
 import mrc
 import mrc.core.operators as ops
-from morpheus._lib.messages import MessageMeta
 from morpheus.messages import ControlMessage
+from morpheus.messages import MessageMeta
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
 
@@ -89,13 +90,25 @@ def _process_pdf_bytes(df, task_props):
     try:
         # Apply the helper function to each row in the 'content' column
         _decode_and_extract = functools.partial(decode_and_extract, task_props=task_props)
-        logger.debug(f"processing ({task_props.get('method', None)}): {df['file_name'][0]}")
-        df['content'] = df.apply(_decode_and_extract, axis=1)
+        logger.debug(f"processing ({task_props.get('method', None)}): {df['file_name'][0]}")        
+        sr_extraction = df.apply(_decode_and_extract, axis=1)
+        sr_extraction = sr_extraction.explode().dropna()
+
+        if not sr_extraction.empty:
+
+            extracted_df = pd.DataFrame(
+                sr_extraction.to_list(), 
+                columns=[
+                    'document_type', 
+                    'metadata'])
+        else:
+            return pd.DataFrame(columns=["document_type", "metadata"])
+
     except Exception as e:
         traceback.print_exc()
         logger.error(f"Failed to extract text from PDF: {e}")
 
-    return df
+    return extracted_df
 
 
 @register_module(MODULE_NAME, "morpheus_pdf_ingest")
@@ -145,9 +158,13 @@ def _pdf_text_extractor(builder: mrc.Builder):
         nonlocal control_messages
         nonlocal futures_queue
 
+        # Implementing backpressure feedback loop
+        while futures_queue.qsize() >= 100:  # Queue size cap
+            logging.warning("futures_queue is full, waiting for space...")
+            time.sleep(1)  # Backoff for 1 second before trying again
+
         task_id = str(uuid.uuid4())
-        with ctrl_msg.payload().mutable_dataframe() as mdf:
-            df = mdf.to_pandas()
+        df = ctrl_msg.payload().copy_dataframe().to_pandas()
 
         # Store the ControlMessage in the global dictionary
         # Maybe attach to future instead

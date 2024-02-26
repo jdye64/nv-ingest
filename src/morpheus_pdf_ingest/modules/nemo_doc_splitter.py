@@ -18,16 +18,16 @@ from typing import List, Literal, Any
 
 import cudf
 import mrc
-import pandas as pd
 from more_itertools import windowed
-from morpheus._lib.messages import MessageMeta
 from morpheus.messages import ControlMessage
+from morpheus.messages import MessageMeta
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
 from mrc.core import operators as ops
 from pydantic import ValidationError
 
 from morpheus_pdf_ingest.schemas.nemo_doc_splitter_schema import DocumentSplitterSchema
+from morpheus_pdf_ingest.schemas.metadata import ExtractedDocumentType
 from morpheus_pdf_ingest.util.flow_control import filter_by_task
 from morpheus_pdf_ingest.util.tracing import traceable
 
@@ -43,8 +43,7 @@ def _build_split_documents(row, text_splits: List[str], sentence_window_size: in
         if text is None or not text.strip():
             continue
 
-        metadata = row.meta if hasattr(row, 'meta') and isinstance(row.meta, dict) else {}
-        metadata["source_id"] = row.id
+        metadata = row.metadata if hasattr(row, 'metadata') and isinstance(row.metadata, dict) else {}
         if window_size > 0:
             window_text = "".join(
                 text_splits[
@@ -53,7 +52,10 @@ def _build_split_documents(row, text_splits: List[str], sentence_window_size: in
             )
             metadata["window"] = window_text
             metadata["original_text"] = text
-        documents.append({"content": text, "meta": metadata})
+            
+        documents.append({
+            "document_type": ExtractedDocumentType.text,
+            "metadata": metadata})
 
     return documents
 
@@ -109,7 +111,14 @@ def _split_long_text(text: str, max_character_length: int) -> List[str]:
 
 
 def _process_content(row, validated_config):
-    units = _split_into_units(row['content'], validated_config.split_by)
+
+    content = row['metadata']["content"]
+
+    if content is None:
+        raise ValueError(
+            "DocumentSplitter only works with text documents but one or more 'content' values are None.")
+
+    units = _split_into_units(content, validated_config.split_by)
     text_splits = _concatenate_units(units, validated_config.split_length, validated_config.split_overlap,
                                      max_character_length=validated_config.max_character_length)
     split_docs = _build_split_documents(row, text_splits,
@@ -150,13 +159,19 @@ def _nemo_document_splitter(builder: mrc.Builder):
             task_props = task.get("properties", {})
 
             # Validate that all 'content' values are not None
-            with message.payload().mutable_dataframe() as mdf:
-                df = mdf.to_pandas()
+            df = message.payload().copy_dataframe().to_pandas()
 
-            if df['content'].isnull().any():
-                raise ValueError(
-                    "DocumentSplitter only works with text documents but one or more 'content' values are None.")
+            
+            # Filter to text only
+            bool_index = df["document_type"] == ExtractedDocumentType.text
+            df_filtered = df.loc[bool_index]
 
+            if df_filtered.empty:
+                message_meta = MessageMeta(df=cudf.from_pandas(df))
+                message.payload(message_meta)      
+
+                return message
+            
             # Override parameters if set
             split_by = task_props.get('split_by', validated_config.split_by)
             split_length = task_props.get('split_length', validated_config.split_length)
@@ -169,14 +184,27 @@ def _nemo_document_splitter(builder: mrc.Builder):
             #            f"sentence_window_size: {sentence_window_size}")
 
             split_docs = []
-            for _, row in df.iterrows():
-                units = _split_into_units(row['content'], split_by)
+            for _, row in df_filtered.iterrows():
+                content = row['metadata']["content"]
+
+                if content is None:
+                    raise ValueError(
+                        "DocumentSplitter only works with text documents but one or more 'content' values are None.")
+
+                units = _split_into_units(content, split_by)
                 text_splits = _concatenate_units(units, split_length, split_overlap,
                                                  max_character_length=max_character_length)
                 split_docs.extend(_build_split_documents(row, text_splits, sentence_window_size=sentence_window_size))
 
             split_docs_df = pd.DataFrame(split_docs)
+            
+            # Return both processed text and other document types
+            split_docs_df = pd.concat(
+                [split_docs_df, df[~bool_index]], 
+                axis=0).reset_index(drop=True)
+
             message_meta = MessageMeta(df=cudf.from_pandas(split_docs_df))
+
             message.payload(message_meta)
 
         return message

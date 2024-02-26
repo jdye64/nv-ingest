@@ -21,7 +21,7 @@ import traceback
 import cudf
 import mrc
 import redis
-from morpheus._lib.messages import MessageMeta
+from morpheus.messages import MessageMeta
 from morpheus.messages import ControlMessage
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
@@ -103,9 +103,7 @@ def _redis_task_source(builder: mrc.Builder):
 
                 response_channel = f"response_{task_id}"
 
-                df = cudf.DataFrame(data)
-                message_meta = MessageMeta(df=df)
-                # logger.debug(f"Received message with {len(df)} rows, cols: {df.columns}")
+                message_meta = MessageMeta(df=cudf.DataFrame(data))
 
                 control_message = ControlMessage()
                 control_message.payload(message_meta)
