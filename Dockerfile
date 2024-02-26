@@ -18,6 +18,7 @@ RUN source activate morpheus \
       sentence_transformers==2.3.1 \
       unstructured-client==0.18.0 \
       farm-haystack[all-gpu]==1.24.1 \
+      aiohttp==3.9.3 \
     && pip install . \
     && rm -rf src 
 

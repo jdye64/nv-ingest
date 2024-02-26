@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 UNSTRUCTURED_API_KEY = os.environ.get('UNSTRUCTURED_API_KEY', None)
 UNSTRUCTURED_URL = os.environ.get('UNSTRUCTURED_URL', "http://localhost:8003")
+LLAMA_CLOUD_API_KEY = os.environ.get("LLAMA_CLOUD_API_KEY", None)
 EXTRACTABLE_FILE_TYPES = ['pdf']
 
 executor = None
@@ -65,7 +66,7 @@ def build_extraction_tasks(methods, file_type):
     ----------
     methods : list of str
         The extraction methods to be applied. Possible values might include 'pymupdf',
-        'haystack', 'unstructured-local', and 'unstructured-service'.
+        'haystack', 'unstructured_local', 'unstructured_service', and 'llama_parse'.
     file_type : str
         The type of the file to be processed (e.g., 'pdf', 'txt').
 
@@ -101,14 +102,21 @@ def build_extraction_tasks(methods, file_type):
         "unstructured_url": UNSTRUCTURED_URL,
     }
 
+    # Define default properties for LlamaParse tasks
+    llama_parse_properties = {
+        "api_key": LLAMA_CLOUD_API_KEY,
+    }
+
     # Add other task types based on _extract_methods
     for method in methods:
         task_props = common_properties.copy()
         task_props['method'] = method
         task = {'type': 'pdf_extract', 'properties': task_props}
 
-        if method in ['haystack', 'unstructured-local', 'unstructured-service']:
-            task['properties'].update(unstructured_properties)
+        if method in ["haystack", "unstructured_local", "unstructured_service"]:
+            task["properties"].update(unstructured_properties)
+        elif method in ["llama_parse"]:
+            task["properties"].update(llama_parse_properties)
         else:
             pass  # Others
 
@@ -250,7 +258,7 @@ def submit_job_and_wait_for_response(redis_client, job_data, tasks, task_queue, 
     """
     job_id = str(uuid.uuid4())
     job_payload = json.dumps({
-        "add_trace_tagging": True,
+        "config::add_trace_tagging": True,
         "data": job_data,
         "data_size_bytes": len(json.dumps(job_data)),
         "task_id": job_id,
@@ -476,7 +484,7 @@ def main(file_source, redis_host, redis_port, extract, extract_method, split, dr
 @click.option('--extract', is_flag=True, help="Enable PDF text extraction task.")
 @click.option('--split', is_flag=True, help="Enable text splitting task.")
 @click.option('--extract_method', default=['pymupdf'],
-              type=click.Choice(['pymupdf', 'haystack', 'tika', 'unstructured_io', 'unstructured_service'],
+              type=click.Choice(['pymupdf', 'haystack', 'tika', 'unstructured_io', 'unstructured_service', 'llama_parse'],
                                 case_sensitive=False), multiple=True,
               help='Specifies the type(s) of extraction to use.')
 @click.option('--n_workers', default=5, help="Number of worker threads for the ThreadPoolExecutor.", type=int)
