@@ -1,9 +1,7 @@
-from pydantic import BaseModel, ValidationError
-from typing import Optional
-from pydantic import conint
+from pydantic import BaseModel
+
+from morpheus_pdf_ingest.schemas.redis_client_schema import RedisClientSchema
+
 
 class RedisTaskSinkSchema(BaseModel):
-    redis_host: str = 'redis'
-    redis_port: conint(gt=0, lt=65536) = 6379  # Validate port is in a valid range
-
-    # Add additional fields if the module has more configurable parameters
+    redis_client: RedisClientSchema = RedisClientSchema()

@@ -27,6 +27,7 @@ class TaskTypeEnum(str, Enum):
 
 class TracingOptionsSchema(BaseModelNoExt):
     trace: bool = False
+    ts_send: int
 
 
 class IngestTaskSplitSchema(BaseModelNoExt):
@@ -71,7 +72,7 @@ class IngestTaskSchema(BaseModelNoExt):
         IngestTaskSplitSchema,
     ]
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def check_task_properties_type(cls, values):
         task_type, task_properties = values.get('type'), values.get('task_properties')
         if task_type and task_properties:
@@ -102,6 +103,7 @@ class JobPayloadSchema(BaseModelNoExt):
     content: List[Union[str, bytes]]
     source_name: List[str]
     source_id: List[Union[str, int]]
+    document_type: List[str]
 
 
 class IngestJobSchema(BaseModelNoExt):
