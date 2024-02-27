@@ -64,8 +64,10 @@ def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
     logger.info(f"REDIS_PORT: {redis_port}")
     source_module_loader = RedisTaskSourceLoaderFactory.get_instance(module_name="redis_listener",
                                                                      module_config={
-                                                                         "redis_host": redis_host,
-                                                                         "redis_port": redis_port
+                                                                         "redis_client": {
+                                                                            "host": redis_host,
+                                                                            "port": redis_port,
+                                                                         }
                                                                      })
 
     source_stage = pipe.add_stage(
@@ -119,8 +121,10 @@ def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
     # embedding_stage = pipe.add_stage(TritonInferenceStage(config, **embeddings_config.get('model_kwargs', {})))
     sink_module_loader = RedisTaskSinkLoaderFactory.get_instance(module_name="redis_task_sink",
                                                                  module_config={
-                                                                     "redis_host": redis_host,
-                                                                     "redis_port": redis_port
+                                                                     "redis_client": {
+                                                                        "host": redis_host,
+                                                                        "port": redis_port,
+                                                                     }
                                                                  })
     sink_stage = pipe.add_stage(
         LinearModulesStage(config, sink_module_loader,

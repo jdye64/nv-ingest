@@ -59,8 +59,8 @@ def _redis_task_source(builder: mrc.Builder):
         raise
 
     redis_client = RedisClient(
-        host=validated_config.redis_client.redis_host,
-        port=validated_config.redis_client.redis_port,
+        host=validated_config.redis_client.host,
+        port=validated_config.redis_client.port,
         db=0,  # Assuming DB is 0, make configurable if needed
         max_retries=validated_config.redis_client.max_retries,
         max_backoff=validated_config.redis_client.max_backoff,
