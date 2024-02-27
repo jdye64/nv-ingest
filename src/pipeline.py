@@ -57,53 +57,6 @@ def validate_source_config(source_info: typing.Dict[str, any]) -> None:
         raise ValueError(f"Each source must have 'type', 'name', and 'config':\n {source_info}")
 
 
-def setup_nemo_docsplitter_pipe(pipe: Pipeline, config: Config):
-    redis_host = os.environ.get("REDIS_HOST", "localhost")
-    redis_port = os.environ.get("REDIS_PORT", "6379")
-    logger.info(f"{redis_host}")
-    logger.info(f"{redis_port}")
-    source_module_loader = RedisTaskSourceLoaderFactory.get_instance(module_name="redis_listener",
-                                                                     module_config={
-                                                                         "redis_host": redis_host,
-                                                                         "redis_port": redis_port
-                                                                     })
-
-    source_stage = pipe.add_stage(
-        LinearModuleSourceStage(config, source_module_loader, output_type=ControlMessage, output_port_name="output"))
-
-    nemo_splitter_loader = NemoDocSplitterLoaderFactory.get_instance(module_name="nemo_doc_splitter",
-                                                                     module_config={
-                                                                         "split_by": "word",
-                                                                         "split_length": 250,
-                                                                         "split_overlap": 30,
-                                                                         "max_character_length": 1900,
-                                                                     })
-
-    nemo_splitter_stage = pipe.add_stage(
-        LinearModulesStage(config, nemo_splitter_loader,
-                           input_type=ControlMessage,
-                           output_type=ControlMessage,
-                           input_port_name="input",
-                           output_port_name="output"))
-
-    sink_module_loader = RedisTaskSinkLoaderFactory.get_instance(module_name="redis_task_sink",
-                                                                 module_config={
-                                                                     "redis_host": redis_host,
-                                                                     "redis_port": redis_port
-                                                                 })
-    sink_stage = pipe.add_stage(
-        LinearModulesStage(config, sink_module_loader,
-                           input_type=ControlMessage,
-                           output_type=ControlMessage,
-                           input_port_name="input",
-                           output_port_name="output"))
-
-    pipe.add_edge(source_stage, nemo_splitter_stage)
-    pipe.add_edge(nemo_splitter_stage, sink_stage)
-
-    return sink_stage
-
-
 def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
     redis_host = os.environ.get("REDIS_HOST", "localhost")
     redis_port = os.environ.get("REDIS_PORT", "6379")
@@ -189,28 +142,18 @@ def pipeline(pipeline_config: Config) -> float:
     logging.info("Starting pipeline setup")
 
     pipe = Pipeline(pipeline_config)
-    start_abs = time.clock_gettime_ns(time.CLOCK_MONOTONIC)
+    start_abs = time.time_ns()
 
-    # vdb_sources = process_vdb_sources(pipe, pipeline_config, _source_config)
-    # cm_sink = pipe.add_stage(InMemorySinkStage(pipeline_config))
-
-    # Create HTTP source
-    # setup_nemo_docsplitter_pipe(pipe, pipeline_config)
     setup_pdf_ingest_pipe(pipe, pipeline_config)
 
-    # Connect HTTP source
-
-    # for source_output in vdb_sources:
-    #    pipe.add_edge(source_output, cm_sink)
-
-    end_setup = start_run = time.clock_gettime_ns(time.CLOCK_MONOTONIC)
+    end_setup = start_run = time.time_ns()
     setup_elapsed = (end_setup - start_abs) / 1e9
     logging.info(f"Pipeline setup completed in {setup_elapsed:.2f} seconds")
 
     logging.info("Running pipeline")
     pipe.run()
 
-    end_run = time.clock_gettime_ns(time.CLOCK_MONOTONIC)
+    end_run = time.time_ns()
     run_elapsed = (end_run - start_run) / 1e9
     total_elapsed = (end_run - start_abs) / 1e9
 
@@ -231,7 +174,7 @@ if (__name__ == "__main__"):
     config.pipeline_batch_size = 256
     config.enable_monitor = True
     config.feature_length = 512
-    config.num_threads = 10
+    config.num_threads = os.cpu_count()
     config.model_max_batch_size = 256
     config.mode = PipelineModes.NLP
 

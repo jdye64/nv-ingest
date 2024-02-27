@@ -14,18 +14,16 @@
 
 import logging
 
-from morpheus_pdf_ingest.util.converters import bytetools
-from morpheus_pdf_ingest.schemas.metadata import ExtractedDocumentType
-
-import numpy as np
-
 import fitz
+
+from morpheus_pdf_ingest.schemas.metadata import ExtractedDocumentType
+from morpheus_pdf_ingest.util.converters import bytetools
 
 logger = logging.getLogger(__name__)
 
 
 # Define a helper function to use unstructured-io to extract text from a base64 encoded bytestram PDF
-def pymupdf(pdf_stream, extract_text: bool, extract_images: bool, extract_tables: bool, **kwargs):
+def pymupdf(pdf_stream, extract_text: bool, extract_images: bool, extract_tables: bool, **kwargs) -> list:
     """
     Helper function to use PyMuPDF to extract text from a bytestream PDF.
 
@@ -63,29 +61,28 @@ def pymupdf(pdf_stream, extract_text: bool, extract_images: bool, extract_tables
         for page_idx in range(len(doc)):
 
             page = doc[page_idx]
-            
+
             # extract page text
             if (extract_text):
                 page_text = page.get_text().replace('+', ' ')
 
                 # append only text was extracted
                 if len(page_text) > 1:
-                    
                     page_txt_metadata = metadata.copy()
                     page_txt_metadata.update({
                         "page_number": page_idx,
                         "document_type": ExtractedDocumentType.text
-                        })                
+                    })
 
                     page_txt_metadata = {
                         "content": page_text,
                         "metadata": page_txt_metadata,
-                        }
-                    
+                    }
+
                     page_text_payload = [
-                        ExtractedDocumentType.text, 
+                        ExtractedDocumentType.text,
                         page_txt_metadata
-                        ]
+                    ]
 
                     extracted_data.append(page_text_payload)
 
@@ -96,11 +93,10 @@ def pymupdf(pdf_stream, extract_text: bool, extract_images: bool, extract_tables
 
                 if img_list:
 
-                    #loop over images on page
+                    # loop over images on page
                     for img_idx, img in enumerate(img_list, start=1):
-                        
                         # get the XREF of the image
-                        xref = img[0] 
+                        xref = img[0]
                         # extract image
                         pix = doc.extract_image(xref)
                         # convert image bytes to hex to work with cuDF
@@ -110,17 +106,17 @@ def pymupdf(pdf_stream, extract_text: bool, extract_images: bool, extract_tables
                         page_unstr_img_metadata.update({
                             "page_number": page_idx,
                             "document_type": ExtractedDocumentType.unstructured_image
-                            })                
+                        })
 
                         page_unstr_img_metadata = {
                             "content": unstr_img_hex,
                             "metadata": page_unstr_img_metadata,
-                            }
-                        
+                        }
+
                         page_unstr_img_payload = [
-                            ExtractedDocumentType.unstructured_image, 
+                            ExtractedDocumentType.unstructured_image,
                             page_unstr_img_metadata,
-                            ]
+                        ]
 
                         extracted_data.append(page_unstr_img_payload)
 

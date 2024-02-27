@@ -6,6 +6,7 @@ import os
 import random
 import sys
 import time
+import traceback
 import uuid
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed, ProcessPoolExecutor
@@ -15,6 +16,8 @@ import chardet
 import click
 import redis
 from tqdm import tqdm
+
+from morpheus_pdf_ingest.schemas.ingest_job import validate_ingest_job, DocumentTypeEnum
 
 logger = logging.getLogger(__name__)
 
@@ -120,13 +123,19 @@ def build_extraction_tasks(methods, file_type):
     # Add other task types based on _extract_methods
     for method in methods:
         task_props = common_properties.copy()
-        task_props['method'] = method
-        task = {'type': 'pdf_extract', 'properties': task_props}
+        task = {
+            'type': 'extract',
+            "task_properties": {
+                'method': method,
+                'document_type': file_type,
+                'params': task_props
+            }
+        }
 
-        if method in ["haystack", "unstructured_local", "unstructured_service"]:
-            task["properties"].update(unstructured_properties)
+        if method in ['unstructured-local', 'unstructured-service']:
+            task['task_properties']['params'].update(unstructured_properties)
         elif method in ["llama_parse"]:
-            task["properties"].update(llama_parse_properties)
+            task['task_properties']['params'].update(llama_parse_properties)
         else:
             pass  # Others
 
@@ -156,16 +165,20 @@ def extract_file_content(path):
     ValueError
         If the file type is unsupported.
     """
-    if path.endswith('.pdf'):
+    document_type = os.path.basename(path).split('.')[-1].lower()
+    if document_type not in DocumentTypeEnum.__members__:  # Check if file type is supported
+        raise ValueError(f"Unsupported file type: {document_type}")
+
+    if (document_type != DocumentTypeEnum.txt.name.lower()):
         # For PDF files, read as binary and encode in base64
         with open(path, 'rb') as file:
             encoding = 'utf-8'
             content = base64.b64encode(file.read()).decode(encoding)
-            logger.debug(f"Encoded PDF content: {content[:100]}... (truncated)")
+            logger.debug(f"Encoded {document_type} content: {content[:100]}... (truncated)")
     else:
         # Detect encoding for non-PDF files
         with open(path, 'rb') as file:
-            raw_data = file.read(5000)
+            raw_data = file.read(50000)
             result = chardet.detect(raw_data)
             encoding = result['encoding']
 
@@ -175,7 +188,7 @@ def extract_file_content(path):
             logger.debug(f"Read plain text content with detected encoding ({encoding}): {content[:100]}... (truncated)")
 
     logger.debug(f"Content length: {len(content)}")
-    return content, encoding
+    return content, document_type
 
 
 def process_file(file_path):
@@ -194,9 +207,9 @@ def process_file(file_path):
     """
     try:
         file_name = os.path.basename(file_path)
-        content, embedding = extract_file_content(file_path)  # Call the synchronous function directly
+        content, document_type = extract_file_content(file_path)  # Call the synchronous function directly
 
-        return {"file_name": file_name, "id": file_name, "content": content, "embedding": embedding}
+        return {"source_name": file_name, "source_id": file_name, "content": content, "document_type": document_type}
     except Exception as e:
         logger.error(f"Error processing file {file_path}: {e}")
         raise
@@ -223,7 +236,7 @@ def load_data_from_path(path):
     """
 
     tasks = []
-    result = {"file_name": [], "id": [], "content": [], "embedding": []}
+    result = {"source_name": [], "source_id": [], "content": [], "document_type": []}
 
     if not os.path.exists(path):
         raise FileNotFoundError(f"The path {path} does not exist.")
@@ -232,11 +245,19 @@ def load_data_from_path(path):
 
     file_data = process_file(file_path=path)
     result["content"].append(file_data["content"])
-    result["embedding"].append(file_data["embedding"])
-    result["file_name"].append(file_data["file_name"])
-    result["id"].append(file_data["id"])
+    result["document_type"].append(file_data["document_type"])
+    result["source_name"].append(file_data["source_name"])
+    result["source_id"].append(file_data["source_id"])
 
     return result
+
+
+def debug_print_job_payload(job_payload):
+    import copy
+
+    payload = copy.deepcopy(job_payload)
+    payload['job_payload']['content'][0] = payload['job_payload']['content'][0][:20] + '...'
+    logger.info(json.dumps(payload, indent=2))
 
 
 def submit_job_and_wait_for_response(redis_client, job_data, tasks, task_queue, timeout=90):
@@ -267,14 +288,19 @@ def submit_job_and_wait_for_response(redis_client, job_data, tasks, task_queue, 
         If no response is received within the timeout period.
     """
     job_id = str(uuid.uuid4())
-    job_payload = json.dumps({
-        "config::add_trace_tagging": True,
-        "data": job_data,
-        "data_size_bytes": len(json.dumps(job_data)),
-        "task_id": job_id,
+    job_desc = {
+        "job_payload": job_data,
+        "job_id": job_id,
         "tasks": tasks,
-        "latency::ts_send": time.time_ns()
-    })
+        "tracing_options": {
+            "trace": True,
+            "ts_send": time.time_ns()
+        }
+    }
+
+    # debug_print_job_payload(job_desc)
+    validate_ingest_job(job_desc)
+    job_payload = json.dumps(job_desc)
 
     response_channel = f"response_{job_id}"
 
@@ -308,9 +334,11 @@ def generate_matching_files(file_sources):
     for file_path in files:
         yield file_path
 
+
 def process_source(source, id, redis_host, redis_port, task_queue, extract, extract_method, split):
     redis_client = redis.Redis(host=redis_host, port=redis_port, decode_responses=True)
     return _process_source(source, id, redis_client, task_queue, extract, extract_method, split)
+
 
 def _process_source(source, id, redis_client, task_queue, extract, extract_method, split):
     """
@@ -347,7 +375,7 @@ def _process_source(source, id, redis_client, task_queue, extract, extract_metho
     if split:
         tasks.append({
             "type": "split",
-            "properties": {
+            "task_properties": {
                 "split_by": "word",
                 "split_length": 250,
                 "split_overlap": 30,
@@ -362,10 +390,14 @@ def _process_source(source, id, redis_client, task_queue, extract, extract_metho
         tasks.extend(extract_tasks)
 
     data_size = os.path.getsize(source)
-    job_data = load_data_from_path(source)
-    response = submit_job_and_wait_for_response(redis_client, job_data, tasks, task_queue, timeout=300)
 
-    return response, data_size
+    try:
+        job_data = load_data_from_path(source)
+        response = submit_job_and_wait_for_response(redis_client, job_data, tasks, task_queue, timeout=300)
+
+        return response, data_size
+    except Exception as e:
+        return None, 0
 
 
 def main(file_source, redis_host, redis_port, extract, extract_method, split, dry_run, concurrency_options):
@@ -418,60 +450,65 @@ def main(file_source, redis_host, redis_port, extract, extract_method, split, dr
         return
 
     abs_start = time.time_ns()
-    #from dask.distributed import performance_report
+    # from dask.distributed import performance_report
 
     use_dask = concurrency_options["use_dask"]
     with setup_global_executor(**concurrency_options) as executor:
-        #with performance_report(filename="dask-report.html"):
+        # with performance_report(filename="dask-report.html"):
 
-            if use_dask or concurrency_options["concurrency_mode"] == "process":
-                func = process_source
-                args = (redis_host, redis_port, task_queue, extract, extract_method, split)
-            else:
-                redis_client = redis.Redis(host=redis_host, port=redis_port, decode_responses=True)
-                func = _process_source
-                args = (redis_client, task_queue, extract, extract_method, split)
-            future_to_file = {
-                executor.submit(func, source, uuid.uuid4(), *args) : source
-                for source in matching_files
-            }
+        if use_dask or concurrency_options["concurrency_mode"] == "process":
+            func = process_source
+            args = (redis_host, redis_port, task_queue, extract, extract_method, split)
+        else:
+            redis_client = redis.Redis(host=redis_host, port=redis_port, decode_responses=True)
+            func = _process_source
+            args = (redis_client, task_queue, extract, extract_method, split)
+        future_to_file = {
+            executor.submit(func, source, uuid.uuid4(), *args): source
+            for source in matching_files
+        }
 
-            stage_elapsed_times = defaultdict(list)
+        stage_elapsed_times = defaultdict(list)
 
-            if use_dask:
-                from dask.distributed import as_completed as dask_as_completed
+        if use_dask:
+            from dask.distributed import as_completed as dask_as_completed
 
-                _as_completed = dask_as_completed
-            else:
-                _as_completed = as_completed
+            _as_completed = dask_as_completed
+        else:
+            _as_completed = as_completed
 
-            for future in _as_completed(future_to_file):
-                source = future_to_file[future]
-                try:
-                    response, data_processed = future.result()
-                    total_data_processed += data_processed
-                    progress_bar.update(1)
+        for future in _as_completed(future_to_file):
+            source = future_to_file[future]
+            try:
+                response, data_processed = future.result()
+                total_data_processed += data_processed
+                progress_bar.update(1)
 
-                    # Extract trace data from response
-                    trace_data = response.get('trace', {})
+                if (response is None):
+                    logger.error(f"Error processing file {source}: No response received.")
+                    continue
 
-                    # Calculate elapsed time for each stage and store it
-                    for key, entry_time in trace_data.items():
-                        if 'entry' in key:
-                            exit_key = key.replace('entry', 'exit')
-                            exit_time = trace_data.get(exit_key)
-                            if exit_time:
-                                stage_name = key.split('::')[2]  # Extract stage name
-                                elapsed_time = exit_time - entry_time
-                                stage_elapsed_times[stage_name].append(elapsed_time)
+                # Extract trace data from response
+                trace_data = response.get('trace', {})
 
-                    # Calculate the average speed-up to this point
-                    current_time_ns = time.time_ns()
-                    elapsed_time_s = (current_time_ns - start_time_ns) / 1_000_000_000
-                    average_speed = (total_data_processed / (1024 * 1024)) / elapsed_time_s
-                    progress_bar.set_postfix_str(f"Avg speed: {average_speed:.2f} MB/s", refresh=True)
-                except Exception as e:
-                    logger.error(f"Error processing file {source}: {str(e)}")
+                # Calculate elapsed time for each stage and store it
+                for key, entry_time in trace_data.items():
+                    if 'entry' in key:
+                        exit_key = key.replace('entry', 'exit')
+                        exit_time = trace_data.get(exit_key)
+                        if exit_time:
+                            stage_name = key.split('::')[2]  # Extract stage name
+                            elapsed_time = exit_time - entry_time
+                            stage_elapsed_times[stage_name].append(elapsed_time)
+
+                # Calculate the average speed-up to this point
+                current_time_ns = time.time_ns()
+                elapsed_time_s = (current_time_ns - start_time_ns) / 1_000_000_000
+                average_speed = (total_data_processed / (1024 * 1024)) / elapsed_time_s
+                progress_bar.set_postfix_str(f"Avg speed: {average_speed:.2f} MB/s", refresh=True)
+            except Exception as e:
+                traceback.print_exc()
+                logger.error(f"Error processing file {source}: {str(e)}")
 
     abs_elapsed = time.time_ns() - abs_start
     progress_bar.close()
@@ -527,12 +564,15 @@ def main(file_source, redis_host, redis_port, extract, extract_method, split, dr
               help="Choose 'thread' for ThreadPoolExecutor or 'process' for ProcessPoolExecutor.")
 @click.option('--dry-run', is_flag=True, help="Prints the steps to be executed without performing them.")
 def cli(file_source, dataset_json, redis_host, redis_port, extract, extract_method, split, n_workers, log_level,
-        dry_run, concurrency_mode, use_dask):
+        concurrency_mode, use_dask, dry_run):
     """
     CLI entry point for processing files. Configures and executes the main processing function based on user inputs.
 
     The function initializes a global ThreadPoolExecutor and then calls the main processing function with the provided options.
     """
+    # Check if --extract_method is defined but --extract is not specified
+    if extract_method and not extract:
+        raise click.UsageError("The --extract option must be specified when using --extract_method.")
     configure_logging(log_level.upper())
 
     extract_method = list(extract_method)
