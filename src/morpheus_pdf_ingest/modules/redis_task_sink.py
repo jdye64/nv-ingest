@@ -13,10 +13,8 @@
 # limitations under the License.
 import json
 import logging
-import time
 
 import mrc
-import redis
 from morpheus.messages import ControlMessage
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
@@ -25,6 +23,7 @@ from pydantic import ValidationError
 from redis import RedisError
 
 from morpheus_pdf_ingest.schemas.redis_task_sink_schema import RedisTaskSinkSchema
+from morpheus_pdf_ingest.util.redis import RedisClient
 from morpheus_pdf_ingest.util.tracing import traceable
 
 logger = logging.getLogger(__name__)
@@ -35,16 +34,6 @@ RedisTaskSinkLoaderFactory = ModuleLoaderFactory("redis_task_sink", "morpheus_pd
 
 @register_module(MODULE_NAME, "morpheus_pdf_ingest")
 def _redis_task_sink(builder: mrc.Builder):
-    """
-    A pipeline module that prints message payloads, adds an 'embeddings' column,
-    and forwards the payload to a Redis channel.
-
-    Parameters
-    ----------
-    builder : mrc.Builder
-        The Morpheus builder to which the pipeline modules will be added.
-    """
-
     module_config = builder.get_current_module_config()
     try:
         validated_config = RedisTaskSinkSchema(**module_config)
@@ -54,63 +43,42 @@ def _redis_task_sink(builder: mrc.Builder):
         logger.error(log_error_message)
         raise ValueError(log_error_message)
 
-    # Use validated_config for further operations
-    redis_host = validated_config.redis_host
-    redis_port = validated_config.redis_port
-    redis_client = None
-
-    def get_redis_client():
-        """Attempt to connect to Redis and return the client."""
-
-        try:
-            client = redis.Redis(host=redis_host, port=redis_port, db=0)
-            client.ping()  # Attempt to ping Redis to check if the connection is alive
-            return client
-        except RedisError as e:
-            logger.error(f"Failed to connect to Redis: {e}")
-            return None
+    # Initialize RedisClient with the validated configuration
+    redis_client = RedisClient(
+        host=validated_config.redis_client.redis_host,
+        port=validated_config.redis_client.redis_port,
+        db=0,  # Assuming DB is always 0 for simplicity, make configurable if needed
+        max_retries=validated_config.redis_client.max_retries,
+        max_backoff=validated_config.redis_client.max_backoff,
+        connection_timeout=validated_config.redis_client.connection_timeout,
+        use_ssl=validated_config.redis_client.use_ssl  # Ensure these exist in RedisTaskSinkSchema or set defaults
+    )
 
     @traceable(MODULE_NAME)
-    # @latency_logger(MODULE_NAME)
     def process_and_forward(message: ControlMessage):
-        nonlocal redis_client
-
-        # TODO(Devin): Limit retries?
-        while (redis_client is None or not redis_client.ping()):
-            logger.info("Reconnecting to Redis...")
-            redis_client = get_redis_client()
-            if redis_client is None:
-                time.sleep(5)  # Wait before retrying to avoid flooding with connection attempts
-
         df = message.payload().copy_dataframe()
         df_json = df.to_json(orient='records')
-
-        # Log the received DataFrame
-        # logger.debug(f"\nReceived DataFrame:\n{df}")
+        logger.info(f"Received DataFrame with {len(df)} rows.")
 
         ret_val_json = {
             "data": df_json,
         }
 
         do_trace_tagging = message.get_metadata('add_trace_tagging', True)
-        if (do_trace_tagging):
+        if do_trace_tagging:
             traces = {}
             meta_list = message.list_metadata()
-
             for key in meta_list:
-                if (key.startswith("trace::")):
+                if key.startswith("trace::"):
                     traces[key] = message.get_metadata(key)
-
             ret_val_json["trace"] = traces
 
-        # Send the JSON data to the Redis listener
         response_channel = message.get_metadata('response_channel')
-
-        redis_client.rpush(response_channel, json.dumps(ret_val_json))
-
-        # logger.info(f"Forwarded message to Redis channel '{response_channel}'.")
-
-        message = None
+        try:
+            redis_client.get_client().rpush(response_channel, json.dumps(ret_val_json))
+            logger.info(f"Forwarded message to Redis channel '{response_channel}'.")
+        except RedisError as e:
+            logger.error(f"Failed to forward message to Redis: {e}")
 
         return message
 

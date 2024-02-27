@@ -11,7 +11,8 @@ def valid_job_payload():
     return {
         "content": ["sample content", b"binary content"],
         "source_name": ["source1", "source2"],
-        "source_id": ["id1", 2]
+        "source_id": ["id1", 2],
+        "document_type": ["pdf", "text"]
     }
 
 
@@ -128,7 +129,8 @@ def test_multiple_task_types():
         "job_payload": {
             "content": ["sample content"],
             "source_name": ["source1"],
-            "source_id": ["id1"]
+            "source_id": ["id1"],
+            "document_type": ["pdf"]
         },
         "job_id": "12345",
         "tasks": [
@@ -157,6 +159,7 @@ def test_multiple_task_types():
             }
         ]
     }
+
     validated_data = validate_ingest_job(job_data)
     assert validated_data is not None
 

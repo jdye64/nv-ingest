@@ -14,10 +14,12 @@
 
 
 import logging
+import traceback
 from typing import List, Literal, Any
 
 import cudf
 import mrc
+import pandas as pd
 from more_itertools import windowed
 from morpheus.messages import ControlMessage
 from morpheus.messages import MessageMeta
@@ -26,8 +28,8 @@ from morpheus.utils.module_utils import register_module
 from mrc.core import operators as ops
 from pydantic import ValidationError
 
-from morpheus_pdf_ingest.schemas.nemo_doc_splitter_schema import DocumentSplitterSchema
 from morpheus_pdf_ingest.schemas.metadata import ExtractedDocumentType
+from morpheus_pdf_ingest.schemas.nemo_doc_splitter_schema import DocumentSplitterSchema
 from morpheus_pdf_ingest.util.flow_control import filter_by_task
 from morpheus_pdf_ingest.util.tracing import traceable
 
@@ -52,7 +54,7 @@ def _build_split_documents(row, text_splits: List[str], sentence_window_size: in
             )
             metadata["window"] = window_text
             metadata["original_text"] = text
-            
+
         documents.append({
             "document_type": ExtractedDocumentType.text,
             "metadata": metadata})
@@ -111,7 +113,6 @@ def _split_long_text(text: str, max_character_length: int) -> List[str]:
 
 
 def _process_content(row, validated_config):
-
     content = row['metadata']["content"]
 
     if content is None:
@@ -150,28 +151,27 @@ def _nemo_document_splitter(builder: mrc.Builder):
 
     @filter_by_task(["split"])
     @traceable(MODULE_NAME)
-    # @latency_logger(MODULE_NAME)
     def split_and_forward(message: ControlMessage):
-        # Assume that df is going to have a 'content' column
-        while (message.has_task('split')):
+        try:
+            # Assume that df is going to have a 'content' column
             task = message.remove_task('split')
             # logger.info(f"Processing task: {task}")
-            task_props = task.get("properties", {})
+            task_props = task.get("task_properties", {})
 
             # Validate that all 'content' values are not None
-            df = message.payload().copy_dataframe().to_pandas()
+            with message.payload().mutable_dataframe() as mdf:
+                df = mdf.to_pandas()
 
-            
             # Filter to text only
             bool_index = df["document_type"] == ExtractedDocumentType.text
             df_filtered = df.loc[bool_index]
 
             if df_filtered.empty:
                 message_meta = MessageMeta(df=cudf.from_pandas(df))
-                message.payload(message_meta)      
+                message.payload(message_meta)
 
                 return message
-            
+
             # Override parameters if set
             split_by = task_props.get('split_by', validated_config.split_by)
             split_length = task_props.get('split_length', validated_config.split_length)
@@ -197,17 +197,20 @@ def _nemo_document_splitter(builder: mrc.Builder):
                 split_docs.extend(_build_split_documents(row, text_splits, sentence_window_size=sentence_window_size))
 
             split_docs_df = pd.DataFrame(split_docs)
-            
+
             # Return both processed text and other document types
             split_docs_df = pd.concat(
-                [split_docs_df, df[~bool_index]], 
+                [split_docs_df, df[~bool_index]],
                 axis=0).reset_index(drop=True)
 
             message_meta = MessageMeta(df=cudf.from_pandas(split_docs_df))
 
             message.payload(message_meta)
 
-        return message
+            return message
+        except Exception as e:
+            traceback.print_exc()
+            raise ValueError(f"Failed to split documents: {e}")
 
     split_node = builder.make_node("split_and_forward", ops.map(split_and_forward))
 
