@@ -16,6 +16,7 @@ import base64
 import functools
 import io
 import logging
+import os
 import queue
 import time
 import traceback
@@ -23,9 +24,9 @@ import uuid
 from concurrent.futures import ProcessPoolExecutor, Future
 
 import cudf
-import pandas as pd
 import mrc
 import mrc.core.operators as ops
+import pandas as pd
 from morpheus.messages import ControlMessage
 from morpheus.messages import MessageMeta
 from morpheus.utils.module_utils import ModuleLoaderFactory
@@ -37,9 +38,10 @@ from morpheus_pdf_ingest.util.flow_control import filter_by_task
 
 logger = logging.getLogger(__name__)
 
-MODULE_NAME = "pdf_text_extractor"
-PDFExtractorLoaderFactory = ModuleLoaderFactory("pdf_text_extractor",
-                                                "morpheus_pdf_ingest",
+MODULE_NAME = "pdf_content_extractor"
+MODULE_NAMESPACE = "nv-ingest"
+PDFExtractorLoaderFactory = ModuleLoaderFactory(MODULE_NAME,
+                                                MODULE_NAMESPACE,
                                                 PDFExtractorSchema)
 
 
@@ -49,7 +51,7 @@ def _process_pdf_bytes(df, task_props):
     Each PDF's content is replaced with its extracted text.
 
     Parameters:
-    - df: cuDF DataFrame with columns 'file_name' and 'content' (base64 encoded PDFs).
+    - df: cuDF DataFrame with columns 'source_id' and 'content' (base64 encoded PDFs).
 
     Returns:
     - A cuDF DataFrame with the PDF content replaced by the extracted text.
@@ -63,7 +65,7 @@ def _process_pdf_bytes(df, task_props):
         # Row data to include in extraction
         bool_index = base64_row.index.isin(("content",))
         row_data = base64_row[~bool_index]
-        task_props.update({"row_data": row_data})
+        task_props["params"]["row_data"] = row_data
 
         # Decode the base64 content
         pdf_bytes = base64.b64decode(base64_content)
@@ -73,45 +75,46 @@ def _process_pdf_bytes(df, task_props):
 
         # Type of extraction method to use
         extract_method = task_props.get("method", "pymupdf")
+        extract_params = task_props.get("params", {})
         if not hasattr(pdf, extract_method):
             extract_method = default
         try:
             func = getattr(pdf, extract_method, default)
-            # logger.info("Running extraction method: %s", extract_method)
-            text = func(pdf_stream, **task_props)
+            logger.info("Running extraction method: %s", extract_method)
+            extracted_data = func(pdf_stream, **extract_params)
 
-            return text
+            return extracted_data
         except Exception as e:
+            traceback.print_exc()
             logger.error(f"Error loading extractor: {e}")
-
-        # TODO: propagate error back and tag message as failed.
-        return ""
+            raise
 
     try:
         # Apply the helper function to each row in the 'content' column
         _decode_and_extract = functools.partial(decode_and_extract, task_props=task_props)
-        logger.debug(f"processing ({task_props.get('method', None)}): {df['file_name'][0]}")        
+        logger.debug(f"processing ({task_props.get('method', None)})")
         sr_extraction = df.apply(_decode_and_extract, axis=1)
         sr_extraction = sr_extraction.explode().dropna()
 
         if not sr_extraction.empty:
-
             extracted_df = pd.DataFrame(
-                sr_extraction.to_list(), 
+                sr_extraction.to_list(),
                 columns=[
-                    'document_type', 
+                    'document_type',
                     'metadata'])
         else:
             return pd.DataFrame(columns=["document_type", "metadata"])
+
+        return extracted_df
 
     except Exception as e:
         traceback.print_exc()
         logger.error(f"Failed to extract text from PDF: {e}")
 
-    return extracted_df
+    return df
 
 
-@register_module(MODULE_NAME, "morpheus_pdf_ingest")
+@register_module(MODULE_NAME, MODULE_NAMESPACE)
 def _pdf_text_extractor(builder: mrc.Builder):
     module_config = builder.get_current_module_config()
 
@@ -120,7 +123,8 @@ def _pdf_text_extractor(builder: mrc.Builder):
     control_messages = {}
 
     # Initialize a ProcessPoolExecutor
-    executor = ProcessPoolExecutor(max_workers=10)
+    # Workers don't end up being saturated, over-subscribe to CPU cores
+    executor = ProcessPoolExecutor(max_workers=os.cpu_count() * 2)
     futures_queue = queue.Queue()
 
     def forward_func(ctrl_msg: ControlMessage):
@@ -147,11 +151,11 @@ def _pdf_text_extractor(builder: mrc.Builder):
         # Push the ready future to the futures_queue
         futures_queue.put(future)
 
-    @filter_by_task(["pdf_extract"], forward_func=forward_func)
+    @filter_by_task(["extract"], forward_func=forward_func)
     def parse_files(ctrl_msg: ControlMessage) -> None:
         ts_entry = time.time_ns()
-        ctrl_msg.set_metadata("trace::entry::pdf_extract", ts_entry)
-        task_props = ctrl_msg.remove_task('pdf_extract')
+        ctrl_msg.set_metadata(f"trace::entry::{MODULE_NAME}", ts_entry)
+        task_props = ctrl_msg.remove_task('extract')
         submit_task(ctrl_msg, task_props)
 
     def submit_task(ctrl_msg, task_props, retry_count=0):
@@ -193,18 +197,18 @@ def _pdf_text_extractor(builder: mrc.Builder):
             except queue.Empty:
                 continue  # Queue is empty, loop back to check stop_event and try again
 
-            # Process the completed future
-            # TODO(Devin): More error checking
-            result = future.result()  # Wait for the future to complete if not already done
-            ctrl_msg, task_props = control_messages.pop(future.task_id, None)
             try:
+                result = future.result()  # Wait for the future to complete if not already done
+                ctrl_msg, task_props = control_messages.pop(future.task_id, None)
                 if ctrl_msg:
                     ts_exit = time.time_ns()
                     if (not hasattr(future, "bypass")):
-                        ctrl_msg.payload(MessageMeta(df=cudf.from_pandas(result)))
+                        df = cudf.DataFrame(result, columns=["document_type", "metadata"])
+                        ctrl_msg.payload(MessageMeta(df=df))
 
-                    ctrl_msg.set_metadata("trace::exit::pdf_extract", ts_exit)
+                    ctrl_msg.set_metadata(f"trace::exit::{MODULE_NAME}", ts_exit)
                     ctrl_msg.set_metadata("latency::ts_send", ts_exit)
+
                     yield ctrl_msg
 
             except Exception as e:
@@ -219,7 +223,7 @@ def _pdf_text_extractor(builder: mrc.Builder):
                     yield ctrl_msg
 
     # Create a node for processing incoming messages and submitting tasks
-    input_node = builder.make_node("pdf_extractor", ops.map(parse_files), ops.filter(lambda x: x is not None))
+    input_node = builder.make_node("pdf_content_extractor", ops.map(parse_files), ops.filter(lambda x: x is not None))
     builder.register_module_input("input", input_node)
 
     # Create a source node for handling completed tasks

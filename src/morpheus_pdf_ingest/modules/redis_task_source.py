@@ -20,22 +20,24 @@ import traceback
 
 import cudf
 import mrc
-import redis
-from morpheus.messages import MessageMeta
 from morpheus.messages import ControlMessage
+from morpheus.messages import MessageMeta
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
 from pydantic import ValidationError
 from redis.exceptions import RedisError
 
+from morpheus_pdf_ingest.schemas import validate_ingest_job
 from morpheus_pdf_ingest.schemas.redis_task_source_schema import RedisTaskSourceSchema
+from morpheus_pdf_ingest.util.redis import RedisClient
 
 logger = logging.getLogger(__name__)
 
-RedisTaskSourceLoaderFactory = ModuleLoaderFactory("redis_task_source", "morpheus_pdf_ingest")
+MODULE_NAME = "redis_task_source"
+RedisTaskSourceLoaderFactory = ModuleLoaderFactory(MODULE_NAME, "morpheus_pdf_ingest")
 
 
-@register_module("redis_task_source", "morpheus_pdf_ingest")
+@register_module(MODULE_NAME, "morpheus_pdf_ingest")
 def _redis_task_source(builder: mrc.Builder):
     """
     A module for receiving messages from a Redis channel, converting them into DataFrames,
@@ -54,91 +56,77 @@ def _redis_task_source(builder: mrc.Builder):
         error_messages = '; '.join([f"{error['loc'][0]}: {error['msg']}" for error in e.errors()])
         log_error_message = f"Invalid Redis Task Source configuration: {error_messages}"
         logger.error(log_error_message)
-
         raise
 
-    # Use validated_config for further operations
-    redis_host = validated_config.redis_host
-    redis_port = validated_config.redis_port
-    redis_client = None
-    task_queue = validated_config.task_queue
+    redis_client = RedisClient(
+        host=validated_config.redis_client.redis_host,
+        port=validated_config.redis_client.redis_port,
+        db=0,  # Assuming DB is 0, make configurable if needed
+        max_retries=validated_config.redis_client.max_retries,
+        max_backoff=validated_config.redis_client.max_backoff,
+        connection_timeout=validated_config.redis_client.connection_timeout,
+        use_ssl=validated_config.redis_client.use_ssl
+    )
 
-    def get_redis_client():
-        """Attempt to connect to Redis and return the client."""
-        try:
-            client = redis.Redis(host=redis_host, port=redis_port, db=0)
-            client.ping()  # Attempt to ping Redis to check if the connection is alive
-            return client
-        except RedisError as e:
-            logger.error(f"Failed to connect to Redis: {e}")
-            return None
+    def fetch_and_process_messages():
+        """Fetch messages from the Redis list and process them."""
+        while True:
+            try:
+                job_payload = redis_client.fetch_message(validated_config.task_queue)
+                ts_fetched = time.time_ns()
+                yield process_message(job_payload, ts_fetched)  # process_message remains unchanged
+            except RedisError:
+                continue  # Reconnection will be attempted on the next fetch
+            except Exception as err:
+                logger.error(f"Unexpected error during message processing: {err}")
+                traceback.print_exc()
 
-    def fetch_messages() -> ControlMessage:
+    def process_message(job_payload: str, ts_fetched: int) -> ControlMessage:
         """
         Fetch messages from the Redis list (task queue) and yield as ControlMessage.
         """
         nonlocal redis_client
 
-        while True:
-            if redis_client is None or not redis_client.ping():
-                logger.info("Reconnecting to Redis...")
-                redis_client = get_redis_client()
-                if redis_client is None:
-                    time.sleep(5)  # Wait before retrying to avoid flooding with connection attempts
-                    continue
+        ts_entry = time.time_ns()
 
-            _, job_payload = redis_client.blpop([task_queue])
-            ts_fetched = time.time_ns()
+        job = json.loads(job_payload)
+        validate_ingest_job(job)
+        job_id = job.pop('job_id')
+        job_payload = job.pop('job_payload', {})
+        job_tasks = job.pop('tasks', [])
 
-            # Debug Tracing
-            ts_entry = time.time_ns()
-            try:
-                job_data = json.loads(job_payload)
-                # logger.info(f"job data:\n{json.dumps(job_data, indent=2)}")
-                data = job_data.pop('data', {})
-                do_trace_tagging = job_data.pop('add_trace_tagging', False)
-                tasks = job_data.pop('tasks', [])
-                task_id = job_data.pop('task_id')
-                ts_send = job_data.pop('latency::ts_send', None)
+        tracing_options = job.pop('tracing_options', {})
+        do_trace_tagging = tracing_options.get('trace', False)
+        ts_send = tracing_options.get('ts_send', None)
 
-                response_channel = f"response_{task_id}"
+        response_channel = f"response_{job_id}"
 
-                message_meta = MessageMeta(df=cudf.DataFrame(data))
+        df = cudf.DataFrame(job_payload)
+        message_meta = MessageMeta(df=df)
 
-                control_message = ControlMessage()
-                control_message.payload(message_meta)
-                control_message.set_metadata('response_channel', response_channel)
-                control_message.set_metadata('task_id', task_id)
+        control_message = ControlMessage()
+        control_message.payload(message_meta)
+        control_message.set_metadata('response_channel', response_channel)
+        control_message.set_metadata('job_id', job_id)
 
-                for task in tasks:
-                    # logger.debug("Tasks: %s", json.dumps(task, indent=2))
-                    control_message.add_task(task['type'], task['properties'])
+        for task in job_tasks:
+            # logger.debug("Tasks: %s", json.dumps(task, indent=2))
+            control_message.add_task(task['type'], task['task_properties'])
 
-                # Debug Tracing
-                if do_trace_tagging:
-                    ts_exit = time.time_ns()
-                    control_message.set_metadata("config::add_trace_tagging", do_trace_tagging)
-                    control_message.set_metadata("trace::entry::redis_task_source", ts_entry)
-                    control_message.set_metadata("trace::exit::redis_task_source", ts_exit)
+        # Debug Tracing
+        if do_trace_tagging:
+            ts_exit = time.time_ns()
+            control_message.set_metadata("config::add_trace_tagging", do_trace_tagging)
+            control_message.set_metadata(f"trace::entry::f{MODULE_NAME}", ts_entry)
+            control_message.set_metadata(f"trace::exit::f{MODULE_NAME}", ts_exit)
 
-                    if (ts_send is not None):
-                        control_message.set_metadata("trace::entry::redis_source_network_in", ts_send)
-                        control_message.set_metadata("trace::exit::redis_source_network_in", ts_fetched)
+            if (ts_send is not None):
+                control_message.set_metadata("trace::entry::redis_source_network_in", ts_send)
+                control_message.set_metadata("trace::exit::redis_source_network_in", ts_fetched)
 
-                    control_message.set_metadata("latency::ts_send", time.time_ns())
+            control_message.set_metadata("latency::ts_send", time.time_ns())
 
-                yield control_message
-            except RedisError as exc:
-                logger.error(f"Redis connection error, attempting to reconnect: {exc}")
-                redis_client = get_redis_client()  # Attempt to reconnect
-                if redis_client is None:
-                    time.sleep(5)  # Wait a bit before retrying to avoid flooding with connection attempts
-                continue
+        return control_message
 
-            except Exception as exc:
-                traceback.print_exc()
-                logger.error(f"Error processing message: {exc}")
-                return None
-
-    node = builder.make_source("fetch_messages", fetch_messages)
+    node = builder.make_source("fetch_messages", fetch_and_process_messages)
     builder.register_module_output("output", node)
