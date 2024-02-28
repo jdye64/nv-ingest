@@ -84,6 +84,7 @@ class MetadataSchema(BaseModelNoExt):
 
 class ExtractedDocumentType(str, Enum):
     text = 'text'
+    markdown = 'markdown'
     unstructured_image = 'unstructured_image'
     structured_image = 'structured_image'    
 

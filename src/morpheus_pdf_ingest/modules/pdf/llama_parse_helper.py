@@ -16,9 +16,11 @@ import asyncio
 import io
 import logging
 import time
+from typing import Any, Dict, List
 
 import aiohttp
 
+from morpheus_pdf_ingest.schemas.metadata import ExtractedDocumentType
 
 DEFAULT_RESULT_TYPE = "text"
 DEFAULT_FILE_NAME = "_.pdf"
@@ -35,7 +37,7 @@ def llama_parse(
     extract_images: bool,
     extract_tables: bool,
     **kwargs,
-):
+) -> List[List[ExtractedDocumentType, Dict[str, Any]]]:
     """
     Helper function to use LlamaParse API to extract text from a bytestream
     PDF.
@@ -55,8 +57,10 @@ def llama_parse(
 
     Returns
     -------
-    str
-        A string of extracted text.
+    List[List[ExtractedDocumentType, Dict[str, Any]]]:
+        A list of extracted data. Each item in the list is a list of
+        [document type, dictionary] pairs, where the dictionary contains
+        content and metadata of the extracted PDF.
     """
     logger.info("Extracting PDF with LlamaParse backend.")
 
@@ -65,24 +69,58 @@ def llama_parse(
         raise ValueError("LLAMA_CLOUD_API_KEY is required.")
 
     result_type = kwargs.get("result_type", DEFAULT_RESULT_TYPE)
+    file_name = kwargs.get("max_timeout", DEFAULT_FILE_NAME)
     check_interval = kwargs.get("check_interval", DEFAULT_CHECK_INTERVAL_SECONDS)
     max_timeout = kwargs.get("max_timeout", DEFAULT_MAX_TIMEOUT_SECONDS)
 
     row_data = kwargs.get("row_data", None)
-    file_name = row_data["id"] if row_data is not None else DEFAULT_FILE_NAME
+    metadata_column = kwargs.get("metadata_column", "metadata")
+    metadata = row_data[metadata_column] if metadata_column in row_data.index else {}
 
-    text = asyncio.run(
-        async_llama_parse(
-            pdf_stream,
-            api_key,
-            file_name=file_name,
-            result_type=result_type,
-            check_interval_seconds=check_interval,
-            max_timeout_seconds=max_timeout,
+    extracted_data = []
+
+    if extract_text:
+        # TODO: As of Feb 2024, LlamaParse returns multi-page documents as one
+        # long text. See if we can break it into pages or LlamaParse adds
+        # support for extracting each page.
+        text = asyncio.run(
+            async_llama_parse(
+                pdf_stream,
+                api_key,
+                file_name=file_name,
+                result_type=result_type,
+                check_interval_seconds=check_interval,
+                max_timeout_seconds=max_timeout,
+            )
         )
-    )
 
-    return text
+        text_metadata = metadata.copy()
+        text_metadata.update(
+            {
+                "content": text,
+                "metadata": {
+                    "document_type": ExtractedDocumentType[result_type],
+                },
+            }
+        )
+
+        payload = [
+            ExtractedDocumentType[result_type],
+            text_metadata,
+        ]
+
+        extracted_data.append(payload)
+
+    # TODO: LlamaParse extracts tables, but we have to extract the tables
+    # ourselves from text/markdown.
+    if extract_tables:
+        pass
+
+    # LlamaParse does not support image extraction as of Feb 2024.
+    if extract_images:
+        pass
+
+    return extracted_data
 
 
 async def async_llama_parse(
