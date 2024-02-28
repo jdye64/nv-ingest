@@ -20,7 +20,8 @@ RUN source activate morpheus \
       PyMuPDF more_itertools \
       sentence_transformers==2.3.1 \
       unstructured-client==0.18.0 \
-      farm-haystack[ocr,inference,pdf,preprocessing,file-conversion]
+      farm-haystack[ocr,inference,pdf,preprocessing,file-conversion] \
+      aiohttp==3.9.3
 
 FROM base as runtime
 

@@ -15,9 +15,11 @@
 from morpheus_pdf_ingest.modules.pdf.haystack_helper import haystack
 from morpheus_pdf_ingest.modules.pdf.unstructured_io_helper import unstructured_io
 from morpheus_pdf_ingest.modules.pdf.pymupdf_helper import pymupdf
+from morpheus_pdf_ingest.modules.pdf.llama_parse_helper import llama_parse
 
 __all__ = [
     "haystack",
     "unstructured_io",
-    "pymupdf"
+    "pymupdf",
+    "llama_parse",
 ]

@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 UNSTRUCTURED_API_KEY = os.environ.get('UNSTRUCTURED_API_KEY', None)
 UNSTRUCTURED_URL = os.environ.get('UNSTRUCTURED_URL', "http://localhost:8003")
+LLAMA_CLOUD_API_KEY = os.environ.get("LLAMA_CLOUD_API_KEY", None)
 EXTRACTABLE_FILE_TYPES = ['pdf']
 
 
@@ -78,7 +79,7 @@ def build_extraction_tasks(methods, file_type):
     ----------
     methods : list of str
         The extraction methods to be applied. Possible values might include 'pymupdf',
-        'haystack', 'unstructured-local', and 'unstructured-service'.
+        'haystack', 'unstructured_local', 'unstructured_service', and 'llama_parse'.
     file_type : str
         The type of the file to be processed (e.g., 'pdf', 'txt').
 
@@ -114,6 +115,11 @@ def build_extraction_tasks(methods, file_type):
         "unstructured_url": UNSTRUCTURED_URL,
     }
 
+    # Define default properties for LlamaParse tasks
+    llama_parse_properties = {
+        "api_key": LLAMA_CLOUD_API_KEY,
+    }
+
     # Add other task types based on _extract_methods
     for method in methods:
         task_props = common_properties.copy()
@@ -128,6 +134,8 @@ def build_extraction_tasks(methods, file_type):
 
         if method in ['unstructured-local', 'unstructured-service']:
             task['task_properties']['params'].update(unstructured_properties)
+        elif method in ["llama_parse"]:
+            task['task_properties']['params'].update(llama_parse_properties)
         else:
             pass  # Others
 
@@ -545,7 +553,7 @@ def main(file_source, redis_host, redis_port, extract, extract_method, split, dr
 @click.option('--extract', is_flag=True, help="Enable PDF text extraction task.")
 @click.option('--split', is_flag=True, help="Enable text splitting task.")
 @click.option('--extract_method', default=['pymupdf'],
-              type=click.Choice(['pymupdf', 'haystack', 'tika', 'unstructured_io', 'unstructured_service'],
+              type=click.Choice(['pymupdf', 'haystack', 'tika', 'unstructured_io', 'unstructured_service', 'llama_parse'],
                                 case_sensitive=False), multiple=True,
               help='Specifies the type(s) of extraction to use.')
 @click.option('--use_dask', is_flag=True, help="Use dask for concurrency")
