@@ -24,10 +24,10 @@ from morpheus.pipeline.pipeline import Pipeline
 from morpheus.stages.general.linear_modules_source import LinearModuleSourceStage
 from morpheus.stages.general.linear_modules_stage import LinearModulesStage
 
-from morpheus_pdf_ingest.modules.nemo_doc_splitter import NemoDocSplitterLoaderFactory
-from morpheus_pdf_ingest.modules.pdf_extractor import PDFExtractorLoaderFactory
-from morpheus_pdf_ingest.modules.redis_task_sink import RedisTaskSinkLoaderFactory
-from morpheus_pdf_ingest.modules.redis_task_source import RedisTaskSourceLoaderFactory
+from nv_ingest.modules.nemo_doc_splitter import NemoDocSplitterLoaderFactory
+from nv_ingest.modules.pdf_extractor import PDFExtractorLoaderFactory
+from nv_ingest.modules.redis_task_sink import RedisTaskSinkLoaderFactory
+from nv_ingest.modules.redis_task_source import RedisTaskSourceLoaderFactory
 
 # from morpheus.stages.inference.triton_inference_stage import TritonInferenceStage
 # from morpheus.stages.preprocess.preprocess_nlp_stage import PreprocessNLPStage

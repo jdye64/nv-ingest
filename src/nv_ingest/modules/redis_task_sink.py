@@ -22,17 +22,17 @@ from mrc.core import operators as ops
 from pydantic import ValidationError
 from redis import RedisError
 
-from morpheus_pdf_ingest.schemas.redis_task_sink_schema import RedisTaskSinkSchema
-from morpheus_pdf_ingest.util.redis import RedisClient
-from morpheus_pdf_ingest.util.tracing import traceable
+from nv_ingest.schemas.redis_task_sink_schema import RedisTaskSinkSchema
+from nv_ingest.util.redis import RedisClient
+from nv_ingest.util.tracing import traceable
 
 logger = logging.getLogger(__name__)
 
 MODULE_NAME = "redis_task_sink"
-RedisTaskSinkLoaderFactory = ModuleLoaderFactory("redis_task_sink", "morpheus_pdf_ingest")
+RedisTaskSinkLoaderFactory = ModuleLoaderFactory("redis_task_sink", "nv_ingest")
 
 
-@register_module(MODULE_NAME, "morpheus_pdf_ingest")
+@register_module(MODULE_NAME, "nv_ingest")
 def _redis_task_sink(builder: mrc.Builder):
     module_config = builder.get_current_module_config()
     try:
@@ -51,14 +51,14 @@ def _redis_task_sink(builder: mrc.Builder):
         max_retries=validated_config.redis_client.max_retries,
         max_backoff=validated_config.redis_client.max_backoff,
         connection_timeout=validated_config.redis_client.connection_timeout,
-        use_ssl=validated_config.redis_client.use_ssl  # Ensure these exist in RedisTaskSinkSchema or set defaults
+        use_ssl=validated_config.redis_client.use_ssl
     )
 
     @traceable(MODULE_NAME)
     def process_and_forward(message: ControlMessage):
-        df = message.payload().copy_dataframe()
-        df_json = df.to_json(orient='records')
-        logger.info(f"Received DataFrame with {len(df)} rows.")
+        with message.payload().mutable_dataframe() as mdf:
+            logger.info(f"Received DataFrame with {len(mdf)} rows.")
+            df_json = mdf.to_json(orient='records')
 
         ret_val_json = {
             "data": df_json,

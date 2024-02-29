@@ -1,8 +1,8 @@
 import pytest
 from pydantic import ValidationError
 
-from morpheus_pdf_ingest.schemas import validate_ingest_job
-from morpheus_pdf_ingest.schemas.ingest_job import (DocumentTypeEnum, TaskTypeEnum)
+from nv_ingest.schemas import validate_ingest_job
+from nv_ingest.schemas.ingest_job import (DocumentTypeEnum, TaskTypeEnum)
 
 
 # Helper Functions

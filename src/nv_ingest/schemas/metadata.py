@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import Enum
 from typing import List, Union, Dict, Any
 
-from morpheus_pdf_ingest.schemas.base_model_noext import BaseModelNoExt
+from nv_ingest.schemas.base_model_noext import BaseModelNoExt
 
 
 ## Do we want types and similar items to be enums or just strings?

@@ -28,10 +28,10 @@ from morpheus.utils.module_utils import register_module
 from mrc.core import operators as ops
 from pydantic import ValidationError
 
-from morpheus_pdf_ingest.schemas.metadata import ExtractedDocumentType
-from morpheus_pdf_ingest.schemas.nemo_doc_splitter_schema import DocumentSplitterSchema
-from morpheus_pdf_ingest.util.flow_control import filter_by_task
-from morpheus_pdf_ingest.util.tracing import traceable
+from nv_ingest.schemas.metadata import ExtractedDocumentType
+from nv_ingest.schemas.nemo_doc_splitter_schema import DocumentSplitterSchema
+from nv_ingest.util.flow_control import filter_by_task
+from nv_ingest.util.tracing import traceable
 
 logger = logging.getLogger(__name__)
 
@@ -130,11 +130,11 @@ def _process_content(row, validated_config):
 
 MODULE_NAME = "nemo_document_splitter"
 
-NemoDocSplitterLoaderFactory = ModuleLoaderFactory("nemo_document_splitter", "morpheus_pdf_ingest",
+NemoDocSplitterLoaderFactory = ModuleLoaderFactory("nemo_document_splitter", "nv_ingest",
                                                    DocumentSplitterSchema)
 
 
-@register_module(MODULE_NAME, "morpheus_pdf_ingest")
+@register_module(MODULE_NAME, "nv_ingest")
 def _nemo_document_splitter(builder: mrc.Builder):
     """
     A pipeline module that splits documents into smaller parts based on the specified criteria.
