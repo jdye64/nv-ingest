@@ -13,13 +13,15 @@
 # limitations under the License.
 
 from nv_ingest.modules.pdf.haystack_helper import haystack
-from nv_ingest.modules.pdf.unstructured_io_helper import unstructured_io
-from nv_ingest.modules.pdf.pymupdf_helper import pymupdf
 from nv_ingest.modules.pdf.llama_parse_helper import llama_parse
+from nv_ingest.modules.pdf.pymupdf_helper import pymupdf
+from nv_ingest.modules.pdf.tika_helper import tika
+from nv_ingest.modules.pdf.unstructured_io_helper import unstructured_io
 
 __all__ = [
     "haystack",
-    "unstructured_io",
-    "pymupdf",
     "llama_parse",
+    "pymupdf",
+    "tika",
+    "unstructured_io",
 ]
