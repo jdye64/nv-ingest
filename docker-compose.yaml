@@ -58,8 +58,8 @@ services:
               count: all
               capabilities: [ gpu ]
 
-  morpheus-ms-runtime:
-    image: "morpheus-ms-runtime:24.03"
+  nv-ingest-ms-runtime:
+    image: "nv-ingest-ms-runtime:24.03"
     build:
       context: ${MORPHEUS_PDF_INGEST_ROOT}
       dockerfile: "./Dockerfile"
@@ -78,8 +78,8 @@ services:
               count: all
               capabilities: [ gpu ]
 
-  morpheus-ms-dev:
-    image: "morpheus-ms-dev:24.03"
+  nv-ingest-ms-dev:
+    image: "nv-ingest-ms-dev:24.03"
     build:
       context: ${MORPHEUS_PDF_INGEST_ROOT}
       dockerfile: "./Dockerfile"

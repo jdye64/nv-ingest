@@ -16,8 +16,8 @@ import logging
 
 import fitz
 
-from morpheus_pdf_ingest.schemas.metadata import ExtractedDocumentType
-from morpheus_pdf_ingest.util.converters import bytetools
+from nv_ingest.schemas.metadata import ExtractedDocumentType
+from nv_ingest.util.converters import bytetools
 
 logger = logging.getLogger(__name__)
 

@@ -24,20 +24,19 @@ from morpheus.messages import ControlMessage
 from morpheus.messages import MessageMeta
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
+from nv_ingest.schemas import validate_ingest_job
+from nv_ingest.schemas.redis_task_source_schema import RedisTaskSourceSchema
+from nv_ingest.util.redis import RedisClient
 from pydantic import ValidationError
 from redis.exceptions import RedisError
-
-from morpheus_pdf_ingest.schemas import validate_ingest_job
-from morpheus_pdf_ingest.schemas.redis_task_source_schema import RedisTaskSourceSchema
-from morpheus_pdf_ingest.util.redis import RedisClient
 
 logger = logging.getLogger(__name__)
 
 MODULE_NAME = "redis_task_source"
-RedisTaskSourceLoaderFactory = ModuleLoaderFactory(MODULE_NAME, "morpheus_pdf_ingest")
+RedisTaskSourceLoaderFactory = ModuleLoaderFactory(MODULE_NAME, "nv_ingest")
 
 
-@register_module(MODULE_NAME, "morpheus_pdf_ingest")
+@register_module(MODULE_NAME, "nv_ingest")
 def _redis_task_source(builder: mrc.Builder):
     """
     A module for receiving messages from a Redis channel, converting them into DataFrames,
@@ -117,8 +116,8 @@ def _redis_task_source(builder: mrc.Builder):
         if do_trace_tagging:
             ts_exit = time.time_ns()
             control_message.set_metadata("config::add_trace_tagging", do_trace_tagging)
-            control_message.set_metadata(f"trace::entry::f{MODULE_NAME}", ts_entry)
-            control_message.set_metadata(f"trace::exit::f{MODULE_NAME}", ts_exit)
+            control_message.set_metadata(f"trace::entry::{MODULE_NAME}", ts_entry)
+            control_message.set_metadata(f"trace::exit::{MODULE_NAME}", ts_exit)
 
             if (ts_send is not None):
                 control_message.set_metadata("trace::entry::redis_source_network_in", ts_send)

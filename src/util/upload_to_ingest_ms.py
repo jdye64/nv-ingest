@@ -15,9 +15,9 @@ from statistics import mean, median
 import chardet
 import click
 import redis
+from nv_ingest.schemas.ingest_job import validate_ingest_job, DocumentTypeEnum
+from nv_ingest.util.redis import RedisClient
 from tqdm import tqdm
-
-from morpheus_pdf_ingest.schemas.ingest_job import validate_ingest_job, DocumentTypeEnum
 
 logger = logging.getLogger(__name__)
 
@@ -211,6 +211,7 @@ def process_file(file_path):
 
         return {"source_name": file_name, "source_id": file_name, "content": content, "document_type": document_type}
     except Exception as e:
+        traceback.print_exc()
         logger.error(f"Error processing file {file_path}: {e}")
         raise
 
@@ -303,19 +304,19 @@ def submit_job_and_wait_for_response(redis_client, job_data, tasks, task_queue, 
     job_payload = json.dumps(job_desc)
 
     response_channel = f"response_{job_id}"
+    response_channel_expiration = int(timeout * 1.05)  # Set expiration to timeout+grace period
 
-    redis_client.rpush(task_queue, job_payload)
-    redis_client.expire(response_channel, int(timeout * 1.05))  # Set expiration to timeout+grace period
-
-    logger.debug(f"Waiting for response on channel '{response_channel}'...")
-    response = redis_client.blpop(response_channel, timeout=timeout)
+    # Use submit_job method of RedisClient
+    try:
+        response = redis_client.submit_job(task_queue, job_desc, response_channel, response_channel_expiration,
+                                           timeout=timeout)
+    except:
+        traceback.print_exc()
+        raise
 
     if response:
-        _, response_data = response
-        redis_client.delete(response_channel)
-        return json.loads(response_data)
+        return response
     else:
-        redis_client.delete(response_channel)
         raise RuntimeError("No response received within timeout period")
 
 
@@ -336,7 +337,8 @@ def generate_matching_files(file_sources):
 
 
 def process_source(source, id, redis_host, redis_port, task_queue, extract, extract_method, split):
-    redis_client = redis.Redis(host=redis_host, port=redis_port, decode_responses=True)
+    # Create RedisClient instead of redis.Redis
+    redis_client = RedisClient(host=redis_host, port=redis_port)
     return _process_source(source, id, redis_client, task_queue, extract, extract_method, split)
 
 
@@ -460,9 +462,10 @@ def main(file_source, redis_host, redis_port, extract, extract_method, split, dr
             func = process_source
             args = (redis_host, redis_port, task_queue, extract, extract_method, split)
         else:
-            redis_client = redis.Redis(host=redis_host, port=redis_port, decode_responses=True)
+            redis_client = RedisClient(host=redis_host, port=redis_port)
             func = _process_source
             args = (redis_client, task_queue, extract, extract_method, split)
+
         future_to_file = {
             executor.submit(func, source, uuid.uuid4(), *args): source
             for source in matching_files
@@ -481,7 +484,6 @@ def main(file_source, redis_host, redis_port, extract, extract_method, split, dr
             source = future_to_file[future]
             try:
                 response, data_processed = future.result()
-                total_data_processed += data_processed
                 progress_bar.update(1)
 
                 if (response is None):
@@ -489,6 +491,7 @@ def main(file_source, redis_host, redis_port, extract, extract_method, split, dr
                     continue
 
                 # Extract trace data from response
+                total_data_processed += data_processed
                 trace_data = response.get('trace', {})
 
                 # Calculate elapsed time for each stage and store it
@@ -558,7 +561,7 @@ def main(file_source, redis_host, redis_port, extract, extract_method, split, dr
               help='Specifies the type(s) of extraction to use.')
 @click.option('--use_dask', is_flag=True, help="Use dask for concurrency")
 @click.option('--n_workers', default=5, help="Number of workers for the ThreadPoolExecutor or dask.", type=int)
-@click.option('--log-level', default='INFO',
+@click.option('--log_level', default='INFO',
               help="Sets the logging level (e.g., DEBUG, INFO, WARNING, ERROR, CRITICAL).")
 @click.option('--concurrency_mode', default='thread', type=click.Choice(['thread', 'process'], case_sensitive=False),
               help="Choose 'thread' for ThreadPoolExecutor or 'process' for ProcessPoolExecutor.")

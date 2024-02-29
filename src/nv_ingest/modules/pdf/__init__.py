@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from morpheus_pdf_ingest.modules.pdf.haystack_helper import haystack
-from morpheus_pdf_ingest.modules.pdf.unstructured_io_helper import unstructured_io
-from morpheus_pdf_ingest.modules.pdf.pymupdf_helper import pymupdf
-from morpheus_pdf_ingest.modules.pdf.llama_parse_helper import llama_parse
+from nv_ingest.modules.pdf.haystack_helper import haystack
+from nv_ingest.modules.pdf.unstructured_io_helper import unstructured_io
+from nv_ingest.modules.pdf.pymupdf_helper import pymupdf
+from nv_ingest.modules.pdf.llama_parse_helper import llama_parse
 
 __all__ = [
     "haystack",

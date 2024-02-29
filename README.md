@@ -14,7 +14,7 @@
     - We'll build the Morpheus-ms container from the Morpheus runtime container, which is built from the Morpheus-Core
       repo.
 - The Morpheus-ms container is, right now, basically the dependencies + entrypoint to run src/pipeline.py
-    - We will build this from the Morpheus-ms repo, which consists of a library morpheus_pdf_ingest, and a pipeline
+    - We will build this from the Morpheus-ms repo, which consists of a library nv_ingest, and a pipeline
       defined in src/pipeline.py
 - We can test the src/pipeline.py code outside the Nemo Retriever cluster without having to use/build the Morpheus-ms
   container, which is nice for development
@@ -127,10 +127,10 @@ CONTAINER ID   IMAGE                                   COMMAND                  
 e72d9908d7ff   morpheus-ms:24.03                       "/opt/conda/bin/tini…"   About a minute ago   Up About a minute                                                                   morpheus
 -pdf-ingest-ms-morpheus-ms-run-e8210add8358
 $ docker logs morpheus-pdf-ingest-ms-morpheus-ms-run-e8210add8358
-DEBUG:morpheus.utils.module_utils:Module 'nemo_document_splitter' was successfully registered with 'morpheus_pdf_ingest' namespace.
-DEBUG:morpheus.utils.module_utils:Module 'pdf_text_extractor' was successfully registered with 'morpheus_pdf_ingest' namespace.
-DEBUG:morpheus.utils.module_utils:Module 'redis_task_sink' was successfully registered with 'morpheus_pdf_ingest' namespace.
-DEBUG:morpheus.utils.module_utils:Module 'redis_task_source' was successfully registered with 'morpheus_pdf_ingest' namespace.
+DEBUG:morpheus.utils.module_utils:Module 'nemo_document_splitter' was successfully registered with 'nv_ingest' namespace.
+DEBUG:morpheus.utils.module_utils:Module 'pdf_text_extractor' was successfully registered with 'nv_ingest' namespace.
+DEBUG:morpheus.utils.module_utils:Module 'redis_task_sink' was successfully registered with 'nv_ingest' namespace.
+DEBUG:morpheus.utils.module_utils:Module 'redis_task_source' was successfully registered with 'nv_ingest' namespace.
 INFO:root:Starting pipeline setup
 INFO:root:Pipeline setup completed in 0.00 seconds
 INFO:root:Running pipeline
@@ -146,20 +146,20 @@ INFO:morpheus.pipeline.pipeline:====Registering Pipeline Complete!====
 INFO:morpheus.pipeline.pipeline:====Starting Pipeline====
 INFO:morpheus.pipeline.pipeline:====Pipeline Started====
 INFO:morpheus.pipeline.pipeline:====Building Segment: main====
-DEBUG:morpheus.utils.module_utils:Module 'redis_task_source' with namespace 'morpheus_pdf_ingest' is successfully loaded.
+DEBUG:morpheus.utils.module_utils:Module 'redis_task_source' with namespace 'nv_ingest' is successfully loaded.
 INFO:morpheus.pipeline.single_output_source:Added source: <redis_listener-0; LinearModuleSourceStage(module_config=<morpheus.utils.module_utils.ModuleLoader object at 0x7f9550635660>, output_port_name=output, output_type=<class 'morpheus._lib.messages.ControlMessage'>)>
   └─> morpheus.ControlMessage
-DEBUG:morpheus.utils.module_utils:Module 'pdf_text_extractor' with namespace 'morpheus_pdf_ingest' is successfully loaded.
+DEBUG:morpheus.utils.module_utils:Module 'pdf_text_extractor' with namespace 'nv_ingest' is successfully loaded.
 INFO:morpheus.pipeline.single_port_stage:Added stage: <pdf_extractor-1; LinearModulesStage(module_config=<morpheus.utils.module_utils.ModuleLoader object at 0x7f95506358d0>, input_port_name=input, output_port_name=output, input_type=<class 'morpheus._lib.messages.ControlMessage'>, output_type=<class 'morpheus._lib.messages.ControlMessage'>)>
   └─ morpheus.ControlMessage -> morpheus.ControlMessage
-DEBUG:morpheus.utils.module_utils:Module 'nemo_document_splitter' with namespace 'morpheus_pdf_ingest' is successfully loaded.
+DEBUG:morpheus.utils.module_utils:Module 'nemo_document_splitter' with namespace 'nv_ingest' is successfully loaded.
 INFO:morpheus.pipeline.single_port_stage:Added stage: <nemo_doc_splitter-2; LinearModulesStage(module_config=<morpheus.utils.module_utils.ModuleLoader object at 0x7f95506359c0>, input_port_name=input, output_port_name=output, input_type=<class 'morpheus._lib.messages.ControlMessage'>, output_type=<class 'morpheus._lib.messages.ControlMessage'>)>
   └─ morpheus.ControlMessage -> morpheus.ControlMessage
 INFO:morpheus.pipeline.single_port_stage:Added stage: <preprocess-nlp-3; PreprocessNLPStage(vocab_hash_file=data/bert-base-uncased-hash.txt, truncation=True, do_lower_case=True, add_special_tokens=False, stride=-1, column=content)>
   └─ morpheus.ControlMessage -> morpheus.MultiInferenceMessage
 INFO:morpheus.pipeline.single_port_stage:Added stage: <inference-4; TritonInferenceStage(model_name=all-MiniLM-L6-v2, server_url=triton:8001, force_convert_inputs=True, use_shared_memory=True, needs_logits=None, inout_mapping=None)>
   └─ morpheus.MultiInferenceMessage -> morpheus.MultiResponseMessage
-DEBUG:morpheus.utils.module_utils:Module 'redis_task_sink' with namespace 'morpheus_pdf_ingest' is successfully loaded.
+DEBUG:morpheus.utils.module_utils:Module 'redis_task_sink' with namespace 'nv_ingest' is successfully loaded.
 INFO:morpheus.pipeline.single_port_stage:Added stage: <redis_task_sink-5; LinearModulesStage(module_config=<morpheus.utils.module_utils.ModuleLoader object at 0x7f9550635cc0>, input_port_name=input, output_port_name=output, input_type=typing.Any, output_type=<class 'morpheus._lib.messages.ControlMessage'>)>
   └─ morpheus.MultiResponseMessage -> morpheus.ControlMessage
 INFO:morpheus.pipeline.pipeline:====Building Segment Complete!====
@@ -315,7 +315,7 @@ work.
 
 ```bash
 git clone https://gitlab-master.nvidia.com/drobison/devin-nemo-retrieval-microservice-private
-git checkout devin_morpheus_pdf_ingest
+git checkout devin_nv_ingest
 ```
 
 ### Create a Nemo Retriever pipeline with the morpheus-ms service

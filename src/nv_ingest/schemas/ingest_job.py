@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Union, Optional, Literal
 
 from pydantic import validator, conint, root_validator
 
-from morpheus_pdf_ingest.schemas.base_model_noext import BaseModelNoExt
+from nv_ingest.schemas.base_model_noext import BaseModelNoExt
 
 
 # Enums

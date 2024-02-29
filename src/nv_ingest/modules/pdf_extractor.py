@@ -32,9 +32,9 @@ from morpheus.messages import MessageMeta
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
 
-from morpheus_pdf_ingest.modules import pdf
-from morpheus_pdf_ingest.schemas.pdf_extractor_schema import PDFExtractorSchema
-from morpheus_pdf_ingest.util.flow_control import filter_by_task
+from nv_ingest.modules import pdf
+from nv_ingest.schemas.pdf_extractor_schema import PDFExtractorSchema
+from nv_ingest.util.flow_control import filter_by_task
 
 logger = logging.getLogger(__name__)
 

@@ -20,16 +20,16 @@ from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
 from pydantic import ValidationError
 
-from morpheus_pdf_ingest.schemas.task_injection_schema import TaskInjectionSchema
+from nv_ingest.schemas.task_injection_schema import TaskInjectionSchema
 
 logger = logging.getLogger(__name__)
 
 TaskExtractionLoaderFactory = ModuleLoaderFactory("task_injection",
-                                                  "morpheus_pdf_ingest",
+                                                  "nv_ingest",
                                                   TaskInjectionSchema)
 
 
-@register_module("task_injection", "morpheus_pdf_ingest")
+@register_module("task_injection", "nv_ingest")
 def _task_injection(builder: mrc.Builder):
     module_config = builder.get_current_module_config()
     try:

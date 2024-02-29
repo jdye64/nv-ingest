@@ -3,7 +3,7 @@ from datetime import datetime
 import pytest
 from pydantic import ValidationError
 
-from morpheus_pdf_ingest.schemas import validate_metadata
+from nv_ingest.schemas import validate_metadata
 
 
 # Helper function to generate valid base metadata for modification in tests

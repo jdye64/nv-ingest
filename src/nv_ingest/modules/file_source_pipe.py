@@ -20,8 +20,8 @@ from morpheus.modules.input.multi_file_source import MultiFileSourceLoaderFactor
 from morpheus.modules.preprocess.deserialize import DeserializeLoaderFactory
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
-from morpheus_pdf_ingest.modules.content_extractor_module import ContentExtractorLoaderFactory
-from morpheus_pdf_ingest.schemas.file_source_pipe_schema import FileSourcePipeSchema
+from nv_ingest.modules.content_extractor_module import ContentExtractorLoaderFactory
+from nv_ingest.schemas.file_source_pipe_schema import FileSourcePipeSchema
 from pydantic import ValidationError
 
 logger = logging.getLogger(__name__)
