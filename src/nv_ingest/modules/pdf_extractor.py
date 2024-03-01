@@ -30,6 +30,7 @@ from morpheus.utils.module_utils import register_module
 from nv_ingest.modules import pdf
 from nv_ingest.schemas.pdf_extractor_schema import PDFExtractorSchema
 from nv_ingest.util.flow_control import filter_by_task
+from nv_ingest.util.exception_handlers.pdf import create_exception_tag
 from nv_ingest.util.tracing import traceable
 
 logger = logging.getLogger(__name__)
@@ -57,12 +58,12 @@ def _process_pdf_bytes(df, task_props):
 
         # Base64 content to extract
         base64_content = base64_row["content"]
-
         # Row data to include in extraction
         bool_index = base64_row.index.isin(("content",))
         row_data = base64_row[~bool_index]
         task_props["params"]["row_data"] = row_data
-
+        # Get source_id
+        source_id = base64_row["source_id"] if "source_id" in base64_row.index else None
         # Decode the base64 content
         pdf_bytes = base64.b64decode(base64_content)
 
@@ -80,10 +81,19 @@ def _process_pdf_bytes(df, task_props):
             extracted_data = func(pdf_stream, **extract_params)
 
             return extracted_data
+
         except Exception as e:
             traceback.print_exc()
-            logger.error(f"Error loading extractor: {e}")
-            raise
+            log_error_message = f"Error loading extractor:{e}"
+            logger.error(log_error_message)
+            logger.error(f"Failed on file:{source_id}")           
+
+        # Propagate error back and tag message as failed.
+        exception_tag = create_exception_tag(
+            error_message=log_error_message,
+            source_id=source_id)
+
+        return exception_tag
 
     try:
         # Apply the helper function to each row in the 'content' column

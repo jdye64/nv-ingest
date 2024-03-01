@@ -1,57 +1,162 @@
 from datetime import datetime
 from enum import Enum
-from typing import List, Union, Dict, Any
+from typing import List, Union, Dict, Any, Optional
+
+from pydantic import validator
 
 from nv_ingest.schemas.base_model_noext import BaseModelNoExt
+from nv_ingest.util.converters import datetools
 
 
 ## Do we want types and similar items to be enums or just strings?
 class SourceTypeEnum(str, Enum):
+    PDF = 'pdf'
     source_type_1 = 'source_type_1'
     source_type_2 = 'source_type_2'
 
 
-class AccessLevelEnum(Enum):
-    level_1 = 1
-    level_2 = 2
-    level_3 = 'level_3'
+class AccessLevelEnum(int, Enum):
+    LEVEL_1 = 1
+    LEVEL_2 = 2
+    LEVEL_3 = 3
 
 
 class ContentTypeEnum(str, Enum):
-    type_1 = 'type_1'
-    type_2 = 'type_2'
+    TEXT = 'text'
+    IMAGE = 'image'
+    STRUCTURED = 'structured'
+
+
+class StdContentDescEnum(str, Enum):
+    PDF_TEXT = "Unstructured text from PDF document."
+    PDF_IMAGE = "Image extracted from PDF document."
+    PDF_TABLE = "Structured table extracted from PDF document."
 
 
 class TextTypeEnum(str, Enum):
-    text_type_1 = 'text_type_1'
-    text_type_2 = 'text_type_2'
+    HEADER = 'header'
+    BODY = 'body'
+    SPAN = "span"    
+    LINE = "line"
+    BLOCK = "block"
+    PAGE = 'page'
+    DOCUMENT = 'document'    
+    OTHER = "other"
 
 
 class LanguageEnum(str, Enum):
-    EN = 'English'
-    FR = 'French'
+    AF = 'af'
+    AR = 'ar'
+    BG = 'bg'
+    BN = 'bn'
+    CA = 'ca'
+    CS = 'cs'
+    CY = 'cy'
+    DA = 'da'
+    DE = 'de'
+    EL = 'el'
+    EN = 'en'
+    ES = 'es'
+    ET = 'et'
+    FA = 'fa'
+    FI = 'fi'
+    FR = 'fr'
+    GU = 'gu'
+    HE = 'he'
+    HI = 'hi'
+    HR = 'hr'
+    HU = 'hu'
+    ID = 'id'
+    IT = 'it'
+    JA = 'ja'
+    KN = 'kn'
+    KO = 'ko'
+    LT = 'lt'
+    LV = 'lv'
+    MK = 'mk'
+    ML = 'ml'
+    MR = 'mr'
+    NE = 'ne'
+    NL = 'nl'
+    NO = 'no'
+    PA = 'pa'
+    PL = 'pl'
+    PT = 'pt'
+    RO = 'ro'
+    RU = 'ru'
+    SK = 'sk'
+    SL = 'sl'
+    SO = 'so'
+    SQ = 'sq'
+    SV = 'sv'
+    SW = 'sw'
+    TA = 'ta'
+    TE = 'te'
+    TH = 'th'
+    TL = 'tl'
+    TR = 'tr'
+    UK = 'uk'
+    UR = 'ur'
+    VI = 'vi'
+    ZH_CN = 'zh-cn'
+    ZH_TW = 'zh-tw'
+    UNKNOWN = 'unknown'
+
+    @classmethod
+    def has_value(cls, value):
+        return value in cls._value2member_map_ 
 
 
 class ImageTypeEnum(str, Enum):
-    image_type_1 = 'image_type_1'
-    image_type_2 = 'image_type_2'
+    JPEG = "jpeg"
+    PNG = "png"
+    image_type_1 = 'image_type_1'  # until classifier developed
+    image_type_2 = 'image_type_2' # until classifier developed
+
+    @classmethod
+    def has_value(cls, value):
+        return value in cls._value2member_map_
+
+
+class TaskTypeEnum(str, Enum):
+    EXTRACT = "extract"
+    SPLIT = "split"
+
+
+class StatusEnum(str, Enum):
+    ERROR: str = "error"
 
 
 # Sub schemas
 class SourceMetadataSchema(BaseModelNoExt):
+    """
+    Schema for the knowledge base file from which content 
+    and metadata is extracted.
+    """
+
     source_name: str
     source_id: str
-    source_location: str
-    source_type: SourceTypeEnum
-    collection_id: str
-    date_created: datetime
-    last_modified: datetime
-    summary: str
-    partition_id: int
-    access_level: Union[AccessLevelEnum, int, str]
+    source_location: str = ""
+    source_type: Union[SourceTypeEnum, str]
+    collection_id: str = ""
+    date_created: str
+    last_modified: str
+    summary: str = ""
+    partition_id: int = -1
+    access_level: Union[AccessLevelEnum, int]
+
+    @validator("date_created", "last_modified")
+    @classmethod
+    def validate_fields(cls, field_value):
+        datetools.validate_iso8601(field_value)
+        return field_value
 
 
 class ContentMetadataSchema(BaseModelNoExt):
+    """
+    Data extracted from a source; generally Text or Image.
+    """
+    
     type: ContentTypeEnum
     description: str
     page_number: int
@@ -60,17 +165,24 @@ class ContentMetadataSchema(BaseModelNoExt):
 
 class TextMetadataSchema(BaseModelNoExt):
     text_type: TextTypeEnum
-    summary: str
+    summary: str = ""
     keywords: Union[str, List[str], Dict]
     language: LanguageEnum
 
 
 class ImageMetadataSchema(BaseModelNoExt):
-    image_type: ImageTypeEnum
+    image_type: Union[ImageTypeEnum, str]
     structured_image_type: ImageTypeEnum
-    caption: str
-    text: str
-    image_location: str
+    caption: str = ""
+    text: str = ""
+    image_location: tuple
+
+
+class ErrorMetadataSchema(BaseModelNoExt):
+    task: TaskTypeEnum
+    status: StatusEnum
+    source_id: str = ""
+    error_msg: str
 
 
 # Main metadata schema
@@ -78,8 +190,9 @@ class MetadataSchema(BaseModelNoExt):
     content: str
     source_metadata: SourceMetadataSchema
     content_metadata: ContentMetadataSchema
-    text_metadata: TextMetadataSchema
-    image_metadata: ImageMetadataSchema
+    text_metadata:  TextMetadataSchema
+    image_metadata:  ImageMetadataSchema
+    error_metadata: Optional[ErrorMetadataSchema]
     
 
 class ExtractedDocumentType(str, Enum):
