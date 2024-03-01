@@ -16,12 +16,7 @@ import base64
 import functools
 import io
 import logging
-import os
-import queue
-import time
 import traceback
-import uuid
-from concurrent.futures import ProcessPoolExecutor, Future
 
 import cudf
 import mrc
@@ -35,6 +30,7 @@ from morpheus.utils.module_utils import register_module
 from nv_ingest.modules import pdf
 from nv_ingest.schemas.pdf_extractor_schema import PDFExtractorSchema
 from nv_ingest.util.flow_control import filter_by_task
+from nv_ingest.util.tracing import traceable
 
 logger = logging.getLogger(__name__)
 
@@ -118,114 +114,24 @@ def _process_pdf_bytes(df, task_props):
 def _pdf_text_extractor(builder: mrc.Builder):
     module_config = builder.get_current_module_config()
 
-    # TODO(Devin): Add schema and make worker pool configurable
-    # Global dictionary to store ControlMessages temporarily
-    control_messages = {}
-
-    # Initialize a ProcessPoolExecutor
-    # Workers don't end up being saturated, over-subscribe to CPU cores
-    executor = ProcessPoolExecutor(max_workers=os.cpu_count() * 2)
-    futures_queue = queue.Queue()
-
-    def forward_func(ctrl_msg: ControlMessage):
-        nonlocal control_messages
-        nonlocal futures_queue
-
-        # Create a unique task_id for the control message
-        task_id = str(uuid.uuid4())
-
-        # Mark the entry time for forwarding
-        ts_entry = time.time_ns()
-        ctrl_msg.set_metadata("trace::entry::forward", ts_entry)
-
-        # Store the ControlMessage in the global dictionary with the created task_id
-        control_messages[task_id] = (ctrl_msg, None)  # No task_props in this case
-
-        # Create a future that is ready to be immediately completed
-        future = Future()
-        future.set_result(None)  # Indicate that no operation was performed
-        future.bypass = True
-        future.task_id = task_id
-        future.retries = 0  # No retries needed for a forward operation
-
-        # Push the ready future to the futures_queue
-        futures_queue.put(future)
-
-    @filter_by_task(["extract"], forward_func=forward_func)
-    def parse_files(ctrl_msg: ControlMessage) -> None:
-        ts_entry = time.time_ns()
-        ctrl_msg.set_metadata(f"trace::entry::{MODULE_NAME}", ts_entry)
+    @filter_by_task(["extract"])
+    @traceable(MODULE_NAME)
+    def process_task(ctrl_msg: ControlMessage) -> None:
         task_props = ctrl_msg.remove_task('extract')
-        submit_task(ctrl_msg, task_props)
 
-    def submit_task(ctrl_msg, task_props, retry_count=0):
-        nonlocal control_messages
-        nonlocal futures_queue
-
-        # Implementing backpressure feedback loop
-        while futures_queue.qsize() >= 100:  # Queue size cap
-            logging.warning("futures_queue is full, waiting for space...")
-            time.sleep(1)  # Backoff for 1 second before trying again
-
-        task_id = str(uuid.uuid4())
         df = ctrl_msg.payload().copy_dataframe().to_pandas()
+        try:
+            result = _process_pdf_bytes(df, task_props)
+            df_result = cudf.DataFrame(result, columns=["document_type", "metadata"])
+            ctrl_msg.payload(MessageMeta(df=df_result))
+        except Exception as e:
+            logger.error(f"Failed to extract text from PDF: {e}")
+            ctrl_msg.set_metadata("cm_failed", True)
 
-        # Store the ControlMessage in the global dictionary
-        # Maybe attach to future instead
-        control_messages[task_id] = (ctrl_msg, task_props)
-
-        # Submit the task to the process pool
-        future = executor.submit(_process_pdf_bytes, df, task_props)
-        future.task_id = task_id
-        future.retries = retry_count
-
-        futures_queue.put(future)
-
-    def process_completed_tasks():
-        """
-        Continuously processes completed tasks. Stops when stop_event is set and the queue is empty.
-
-        Parameters:
-        - stop_event: Threading.Event() used to signal when to stop processing.
-        """
-        nonlocal futures_queue
-
-        while True:
-            try:
-                # Non-blocking get with timeout to remain responsive to stop_event
-                future = futures_queue.get(timeout=0.1)
-            except queue.Empty:
-                continue  # Queue is empty, loop back to check stop_event and try again
-
-            try:
-                result = future.result()  # Wait for the future to complete if not already done
-                ctrl_msg, task_props = control_messages.pop(future.task_id, None)
-                if ctrl_msg:
-                    ts_exit = time.time_ns()
-                    if (not hasattr(future, "bypass")):
-                        df = cudf.DataFrame(result, columns=["document_type", "metadata"])
-                        ctrl_msg.payload(MessageMeta(df=df))
-
-                    ctrl_msg.set_metadata(f"trace::exit::{MODULE_NAME}", ts_exit)
-                    ctrl_msg.set_metadata("latency::ts_send", ts_exit)
-
-                    yield ctrl_msg
-
-            except Exception as e:
-                logging.error(f"Error processing task {future.task_id}: {e}")
-                retry_count = future.retries
-                if (retry_count < 3):  # TODO(Devin) : Make configurable
-                    future.retries += 1
-                    submit_task(ctrl_msg, task_props, retry_count=future.retries)
-                else:
-                    logging.error(f"Failed to process task {future.task_id} after {retry_count} retries")
-                    ctrl_msg.set_metadata("cm_failed", True)  # TODO(Devin): bring in failure handlers
-                    yield ctrl_msg
+        return ctrl_msg
 
     # Create a node for processing incoming messages and submitting tasks
-    input_node = builder.make_node("pdf_content_extractor", ops.map(parse_files), ops.filter(lambda x: x is not None))
+    input_node = builder.make_node("pdf_content_extractor", ops.map(process_task),
+                                   ops.filter(lambda x: x is not None))
     builder.register_module_input("input", input_node)
-
-    # Create a source node for handling completed tasks
-    completed_task_node = builder.make_source("output_source", process_completed_tasks)
-    builder.register_module_output("output", completed_task_node)
+    builder.register_module_output("output", input_node)
