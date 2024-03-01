@@ -65,7 +65,7 @@ services:
       dockerfile: "./Dockerfile"
       target: runtime
     volumes:
-      - ${MORPHEUS_PDF_INGEST_ROOT}/data:/workspace/data
+      - ${DATASET_ROOT}:/workspace/data
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -85,7 +85,7 @@ services:
       dockerfile: "./Dockerfile"
       target: development
     volumes:
-      - ${MORPHEUS_PDF_INGEST_ROOT}/data:/workspace/data
+      - ${DATASET_ROOT}:/workspace/data
       - ${MORPHEUS_PDF_INGEST_ROOT}/src:/workspace/src
     stdin_open: true
     tty: true      

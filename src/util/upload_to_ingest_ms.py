@@ -106,7 +106,8 @@ def build_extraction_tasks(methods, file_type):
     common_properties = {
         "extract_text": True,
         "extract_images": True,
-        "extract_tables": False
+        "extract_tables": False,
+        "text_depth": "document"
     }
 
     # Define default properties for unstructured tasks

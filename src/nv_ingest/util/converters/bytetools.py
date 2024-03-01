@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import base64
+
 
 def bytesfromhex(hex_input):
     """
@@ -47,3 +49,39 @@ def hexfrombytes(bytes_input):
     """
 
     return bytes_input.hex()
+
+
+def bytesfrombase64(base64_input):
+    """
+    Function to convert base64 encoded string to bytes.
+
+    Parameters
+    ----------
+    base64_input : hex
+        Base64 encoded string to store bytes in cuDF.
+
+    Returns
+    -------
+    bytes
+        Base64 encoded string converted to bytes.
+    """
+
+    return base64.b64decode(base64_input)
+
+
+def base64frombytes(bytes_input, encoding='utf-8'):
+    """
+    Function to bytes to base64 string.
+
+    Parameters
+    ----------
+    bytes_input : bytes
+        Raw bytes of object.
+
+    Returns
+    -------
+    base64
+        base64 encoded string to store bytes in cuDF.
+    """
+
+    return base64.b64encode(bytes_input).decode(encoding)   
