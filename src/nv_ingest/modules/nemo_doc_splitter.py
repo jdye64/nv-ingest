@@ -52,7 +52,9 @@ def _build_split_documents(row, text_splits: List[str], sentence_window_size: in
                 max(0, i - window_size): min(i + 1 + window_size, len(text_splits))
                 ]
             )
-            metadata["window"] = window_text
+            metadata[
+                "window"] = window_text  # I think this is a bug in Retriver's code; text embedders use content, nothing uses window
+            metadata["content"] = window_text
             metadata["original_text"] = text
 
         documents.append({
@@ -154,9 +156,7 @@ def _nemo_document_splitter(builder: mrc.Builder):
     def split_and_forward(message: ControlMessage):
         try:
             # Assume that df is going to have a 'content' column
-            task = message.remove_task('split')
-            # logger.info(f"Processing task: {task}")
-            task_props = task.get("task_properties", {})
+            task_props = message.remove_task('split')
 
             # Validate that all 'content' values are not None
             with message.payload().mutable_dataframe() as mdf:
@@ -179,9 +179,9 @@ def _nemo_document_splitter(builder: mrc.Builder):
             max_character_length = task_props.get('max_character_length', validated_config.max_character_length)
             sentence_window_size = task_props.get('sentence_window_size', validated_config.sentence_window_size)
 
-            # logger.info(f"Splitting documents with split_by: {split_by}, split_length: {split_length}, "
-            #            f"split_overlap: {split_overlap}, max_character_length: {max_character_length}, "
-            #            f"sentence_window_size: {sentence_window_size}")
+            logger.info(f"Splitting documents with split_by: {split_by}, split_length: {split_length}, "
+                        f"split_overlap: {split_overlap}, max_character_length: {max_character_length}, "
+                        f"sentence_window_size: {sentence_window_size}")
 
             split_docs = []
             for _, row in df_filtered.iterrows():
