@@ -13,6 +13,7 @@
 # limitations under the License.
 
 
+import copy
 import logging
 import traceback
 from typing import List, Literal, Any
@@ -26,12 +27,11 @@ from morpheus.messages import MessageMeta
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
 from mrc.core import operators as ops
-from pydantic import ValidationError
-
 from nv_ingest.schemas.metadata import ExtractedDocumentType
 from nv_ingest.schemas.nemo_doc_splitter_schema import DocumentSplitterSchema
 from nv_ingest.util.flow_control import filter_by_task
 from nv_ingest.util.tracing import traceable
+from pydantic import ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -46,16 +46,18 @@ def _build_split_documents(row, text_splits: List[str], sentence_window_size: in
             continue
 
         metadata = row.metadata if hasattr(row, 'metadata') and isinstance(row.metadata, dict) else {}
+        metadata = copy.deepcopy(metadata)
         if window_size > 0:
             window_text = "".join(
                 text_splits[
                 max(0, i - window_size): min(i + 1 + window_size, len(text_splits))
                 ]
             )
-            metadata[
-                "window"] = window_text  # I think this is a bug in Retriver's code; text embedders use content, nothing uses window
-            metadata["content"] = window_text
+
+            metadata["window"] = window_text
             metadata["original_text"] = text
+
+        metadata['content'] = text
 
         documents.append({
             "document_type": ExtractedDocumentType.text,
