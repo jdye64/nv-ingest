@@ -1,0 +1,14 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: nemo-retriever-ingest-ms
+  description: Multi-modal document ingestion service for NeMo Retriever.
+  annotations:
+    gitlab.com/project-slug: dl/ai-services/microservices/nv-ingest
+spec:
+  type: service
+  lifecycle: experimental
+  owner: nemo-retriever
+  pic: drobison
+  system: nemo-retriever
+  domain: nemo
