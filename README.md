@@ -51,7 +51,7 @@ git submodule update --init --recursive
 
 Note the path to the Morpheus repository; we will need it in the next step.
 
-Go to the `morpheus-pdf-ingest-ms` directory and open `.env` with your favorite editor, we will add some envrionment
+Go to the `nv-ingest` directory and open `.env` with your favorite editor, we will add some envrionment
 variables.
 
 `.env`
@@ -60,12 +60,13 @@ variables.
 MORPHEUS_PDF_INGEST_ROOT=[PATH TO MORPHEUS PDF INGEST MS ROOT]
 MORPHEUS_ROOT=[PATH TO MORPHEUS ROOT]
 MODEL_NAME=intfloat/e5-small-v2
+DATASET_ROOT=./data
 ```
 
 ### Clone the Morpheus-ms repository
 
 ```bash
-git clone https://gitlab-master.nvidia.com/drobison/morpheus-pdf-ingest-ms
+git clone https://gitlab-master.nvidia.com/dl/ai-services/microservices/nv-ingest
 ```
 
 ### Build Morpheus 24.03 (morpheus-ms-base:24.03) release container
@@ -104,19 +105,19 @@ Make sure the triton server is running and the models are loaded with no errors 
 ```bash
 $ docker ps
 CONTAINER ID   IMAGE                                   COMMAND                  CREATED              STATUS              PORTS                                                           NAMES
-4e051d750bdc   nvcr.io/nvidia/tritonserver:23.12-py3   "/opt/nvidia/nvidia_…"   About a minute ago   Up About a minute   0.0.0.0:8000-8002->8000-8002/tcp, :::8000-8002->8000-8002/tcp   morpheus-pdf-ingest-ms-triton-1
-de13d0d34d57   redis/redis-stack                       "/entrypoint.sh"         About a minute ago   Up About a minute   0.0.0.0:6379->6379/tcp, :::6379->6379/tcp, 8001/tcp             morpheus-pdf-ingest-ms-redis-1
+4e051d750bdc   nvcr.io/nvidia/tritonserver:23.12-py3   "/opt/nvidia/nvidia_…"   About a minute ago   Up About a minute   0.0.0.0:8000-8002->8000-8002/tcp, :::8000-8002->8000-8002/tcp   nv-ingest-ms-triton-1
+de13d0d34d57   redis/redis-stack                       "/entrypoint.sh"         About a minute ago   Up About a minute   0.0.0.0:6379->6379/tcp, :::6379->6379/tcp, 8001/tcp             nv-ingest-ms-redis-1
 ```
 
 ```bash
-$ docker logs morpheus-pdf-ingest-ms-triton-1
+$ docker logs nv-ingest-ms-triton-1
 ```
 
-### Build the Morpheus-ms container (morpheus-ms:24.03) from the source
+### Build the nv-ingest-ms-runtime container (morpheus-ms:24.03) from the source
 
 ```bash
-docker compose build morpheus-ms
-$ docker compose run -d morpheus-ms
+docker compose build nv-ingest-ms-runtime
+$ docker compose run -d nv-ingest-ms-runtime
 ```
 
 Verify `pipeline.py` is working as expected.
@@ -315,7 +316,7 @@ work.
 
 ```bash
 git clone https://gitlab-master.nvidia.com/drobison/devin-nemo-retrieval-microservice-private
-git checkout devin_nv_ingest
+git checkout devin_nv_ingest_integration 
 ```
 
 ### Create a Nemo Retriever pipeline with the morpheus-ms service
@@ -344,7 +345,6 @@ devin-nemo-retrieval-microservice-private-retrieval-ms-1     devin-nemo-retrieva
 devin-nemo-retrieval-microservice-private-tika-1             apache/tika:latest                                                               "/bin/sh -c 'exec ja…"   tika             4 days ago     Up 16 hours               0.0.0.0:9998->9998/tcp, :::9998->9998/tcp
 devin-nemo-retrieval-microservice-private-triton-1           nvcr.io/nvidia/tritonserver:23.12-py3                                            "/opt/nvidia/nvidia_…"   triton           18 hours ago   Up 16 hours               0.0.0.0:8000-8002->8000-8002/tcp, :::8000-8002->8000-8002/tcp
 devin-nemo-retrieval-microservice-private-zipkin-1           openzipkin/zipkin                                                                "start-zipkin"           zipkin           4 days ago     Up 38 hours (healthy)     9410/tcp, 0.0.0.0:9411->9411/tcp, :::9411->9411/tcp
-
 ```
 
 ### Create collections for performance comparison, and export the collection ID's
