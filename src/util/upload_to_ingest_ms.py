@@ -203,7 +203,7 @@ def extract_file_content(path):
             logger.debug(f"Read plain text content with detected encoding ({encoding}): {content[:100]}... (truncated)")
 
     logger.debug(f"Content length: {len(content)}")
-    return content, document_type
+    return content, DocumentTypeEnum[document_type]
 
 
 def process_file(file_path):

@@ -9,7 +9,7 @@ from nv_ingest.schemas.base_model_noext import BaseModelNoExt
 # Enums
 class DocumentTypeEnum(str, Enum):
     pdf = 'pdf'
-    txt = 'txt'
+    txt = 'text'
     docx = 'docx'
     pptx = 'pptx'
     jpeg = 'jpeg'
