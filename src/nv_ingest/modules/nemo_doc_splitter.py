@@ -188,10 +188,12 @@ def _nemo_document_splitter(builder: mrc.Builder):
             split_docs = []
             for _, row in df_filtered.iterrows():
 
-                if 'metadata' not in row :
+                if 'metadata' not in row:
                     row['metadata'] = {
                         'content': row['content'],
                     }
+                elif 'content' not in row['metadata']:
+                    row['metadata']['content'] = row['content']
                 
                 content = row['metadata']["content"]
 

@@ -405,7 +405,7 @@ def generate_matching_files(file_sources):
         yield file_path
 
 
-def process_source(source, id, redis_host, redis_port, task_queue, extract, extract_method, split):
+def process_source(source, id, redis_host, redis_port, task_queue, extract, extract_method, split, split_params):
     """
     Processes a single source file according to the specified parameters, submitting the processing tasks to Redis.
 
@@ -439,10 +439,10 @@ def process_source(source, id, redis_host, redis_port, task_queue, extract, extr
     relying on lower-level processing functions. It should be implemented to fit the specific needs of the application.
     """
     redis_client = RedisClient(host=redis_host, port=redis_port)
-    return _process_source(source, id, redis_client, task_queue, extract, extract_method, split)
+    return _process_source(source, id, redis_client, task_queue, extract, extract_method, split, split_params)
 
 
-def _process_source(source, redis_client, task_queue, extract, extract_method, split):
+def _process_source(source, redis_client, task_queue, extract, extract_method, split, split_params):
     """
     Processes a single source file by applying specified tasks such as splitting and extracting content,
     and submits these tasks along with the job data to a specified Redis task queue.
@@ -465,7 +465,8 @@ def _process_source(source, redis_client, task_queue, extract, extract_method, s
     Returns
     -------
     tuple
-        A tuple containing the response from the task submission and the size of the data processed from the source file in bytes.
+        A tuple containing the response from the task submission and the size of the data processed from the source file
+        in bytes.
 
     Raises
     ------
@@ -477,13 +478,7 @@ def _process_source(source, redis_client, task_queue, extract, extract_method, s
     if split:
         tasks.append({
             "type": "split",
-            "task_properties": {
-                "split_by": "word",
-                "split_length": 250,
-                "split_overlap": 30,
-                "max_character_length": 1900,
-                "sentence_window_size": 0,
-            }
+            "task_properties": split_params
         })
 
     if extract:
@@ -579,6 +574,9 @@ def process_tasks(future_to_file, progress_bar):
 
             total_data_processed += data_processed
             process_response(response, stage_elapsed_times)
+
+            # with open("response.json", "w") as f:
+            #    f.write(json.dumps(json.loads(response['data']), indent=2))
 
         except Exception as e:
             traceback.print_exc()
@@ -710,7 +708,7 @@ def report_statistics(start_time_ns, stage_elapsed_times, total_data_processed, 
 
 
 def determine_processing_function(redis_host, redis_port, task_queue, extract, extract_method, split,
-                                  concurrency_options):
+                                  concurrency_options, split_params):
     """
     Determines the appropriate processing function and its arguments based on the given parameters.
 
@@ -747,17 +745,18 @@ def determine_processing_function(redis_host, redis_port, task_queue, extract, e
     use_dask = concurrency_options["use_dask"]
     if use_dask or concurrency_options.get("concurrency_mode") == "process":
         processing_function = process_source
-        args = (redis_host, redis_port, task_queue, extract, extract_method, split)
+        args = (redis_host, redis_port, task_queue, extract, extract_method, split, split_params)
     else:
         # Initialize the RedisClient only if not using Dask or when using thread-based concurrency
         redis_client = RedisClient(host=redis_host, port=redis_port)
         processing_function = _process_source
-        args = (redis_client, task_queue, extract, extract_method, split)
+        args = (redis_client, task_queue, extract, extract_method, split, split_params)
 
     return processing_function, args
 
 
-def main(file_source, redis_host, redis_port, extract, extract_method, split, dry_run, concurrency_options):
+def main(file_source, redis_host, redis_port, extract, extract_method, split, dry_run, concurrency_options,
+         split_params):
     """
     Processes files from specified sources using given extraction and splitting methods,
     and performs actions based on the specified options.
@@ -801,7 +800,7 @@ def main(file_source, redis_host, redis_port, extract, extract_method, split, dr
 
     with setup_global_executor(**concurrency_options) as executor:
         processing_function, processing_args = determine_processing_function(
-            redis_host, redis_port, task_queue, extract, extract_method, split, concurrency_options
+            redis_host, redis_port, task_queue, extract, extract_method, split, concurrency_options, split_params
         )
         future_to_file = submit_tasks(executor, matching_files, processing_function, processing_args)
         stage_elapsed_times, total_data_processed = process_tasks(future_to_file, progress_bar)
@@ -823,6 +822,14 @@ def main(file_source, redis_host, redis_port, extract, extract_method, split, dr
                   ['pymupdf', 'haystack', 'tika', 'unstructured_io', 'unstructured_service', 'llama_parse'],
                   case_sensitive=False), multiple=True,
               help='Specifies the type(s) of extraction to use.')
+@click.option('--split_by', default='word', type=click.Choice(['word', 'sentence', 'passage'], case_sensitive=False),
+              help="Specifies the unit for splitting text: word, sentence, or passage.")
+@click.option('--split_length', default=250, type=int, help="Specifies the length of each split segment.")
+@click.option('--split_overlap', default=30, type=int, help="Specifies the overlap between consecutive split segments.")
+@click.option('--split_max_character_length', default=1900, type=int,
+              help="Specifies the maximum character length of a split segment.")
+@click.option('--split_sentence_window_size', default=0, type=int,
+              help="Specifies the sentence window size for splitting, if applicable.")
 @click.option('--use_dask', is_flag=True, help="Use dask for concurrency")
 @click.option('--n_workers', default=5, help="Number of workers for the ThreadPoolExecutor or dask.", type=int)
 @click.option('--log_level', default='INFO',
@@ -830,8 +837,9 @@ def main(file_source, redis_host, redis_port, extract, extract_method, split, dr
 @click.option('--concurrency_mode', default='thread', type=click.Choice(['thread', 'process'], case_sensitive=False),
               help="Choose 'thread' for ThreadPoolExecutor or 'process' for ProcessPoolExecutor.")
 @click.option('--dry-run', is_flag=True, help="Prints the steps to be executed without performing them.")
-def cli(file_source, dataset_json, redis_host, redis_port, extract, extract_method, split, n_workers, log_level,
-        concurrency_mode, use_dask, dry_run):
+def cli(file_source, dataset_json, redis_host, redis_port, extract, extract_method, split, split_by, split_length,
+        split_overlap, split_max_character_length, split_sentence_window_size, n_workers, log_level, concurrency_mode,
+        use_dask, dry_run):
     """
     CLI entry point for processing files. Configures and executes the main processing function based on user inputs.
 
@@ -841,6 +849,14 @@ def cli(file_source, dataset_json, redis_host, redis_port, extract, extract_meth
     if extract_method and not extract:
         raise click.UsageError("The --extract option must be specified when using --extract_method.")
     configure_logging(log_level.upper())
+
+    split_params = {
+        "split_by": split_by,
+        "split_length": split_length,
+        "split_overlap": split_overlap,
+        "max_character_length": split_max_character_length,
+        "sentence_window_size": split_sentence_window_size,
+    }
 
     extract_method = list(extract_method)
     # if a dataset is specified, use it to override the file_source
@@ -867,6 +883,7 @@ def cli(file_source, dataset_json, redis_host, redis_port, extract, extract_meth
             split,
             dry_run,
             concurrency_options,
+            split_params
         )
     except Exception as e:
         logger.error(f"An error occurred: {e}")

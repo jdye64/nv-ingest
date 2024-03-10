@@ -14,10 +14,13 @@
 
 import logging
 import os
+import sys
 import time
 import typing
 
+import click
 from morpheus.config import Config
+from morpheus.config import CppConfig
 from morpheus.config import PipelineModes
 from morpheus.messages import ControlMessage
 from morpheus.pipeline.pipeline import Pipeline
@@ -33,6 +36,24 @@ from nv_ingest.modules.redis_task_source import RedisTaskSourceLoaderFactory
 # from morpheus.stages.preprocess.preprocess_nlp_stage import PreprocessNLPStage
 
 logger = logging.getLogger(__name__)
+
+
+def configure_logging(level_name):
+    """
+    Configures the global logging level based on a string name.
+
+    Parameters:
+    - level_name (str): The name of the logging level (e.g., "DEBUG", "INFO").
+    """
+    global logger
+
+    numeric_level = getattr(logging, level_name, None)
+    if not isinstance(numeric_level, int):
+        raise ValueError(f"Invalid log level: {level_name}")
+
+    console_handler = logging.StreamHandler(sys.stdout)
+    logging.basicConfig(level=numeric_level, format='%(asctime)s - %(levelname)s - %(message)s')
+    logger.setLevel(numeric_level)
 
 
 def validate_source_config(source_info: typing.Dict[str, any]) -> None:
@@ -65,8 +86,8 @@ def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
     source_module_loader = RedisTaskSourceLoaderFactory.get_instance(module_name="redis_listener",
                                                                      module_config={
                                                                          "redis_client": {
-                                                                            "host": redis_host,
-                                                                            "port": redis_port,
+                                                                             "host": redis_host,
+                                                                             "port": redis_port,
                                                                          }
                                                                      })
 
@@ -122,8 +143,8 @@ def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
     sink_module_loader = RedisTaskSinkLoaderFactory.get_instance(module_name="redis_task_sink",
                                                                  module_config={
                                                                      "redis_client": {
-                                                                        "host": redis_host,
-                                                                        "port": redis_port,
+                                                                         "host": redis_host,
+                                                                         "port": redis_port,
                                                                      }
                                                                  })
     sink_stage = pipe.add_stage(
@@ -167,19 +188,35 @@ def pipeline(pipeline_config: Config) -> float:
     return total_elapsed
 
 
-if (__name__ == "__main__"):
-    logging.basicConfig(level=logging.INFO)
-
-    from morpheus.config import CppConfig
-
-    CppConfig.set_should_use_cpp(False)
+@click.command()
+@click.option('--use_cpp', is_flag=True, help="Use C++ backend.")
+@click.option('--pipeline_batch_size', default=256, type=int, help="Batch size for the pipeline.")
+@click.option('--enable_monitor', is_flag=True, help="Enable monitoring.")
+@click.option('--feature_length', default=512, type=int, help="Feature length.")
+@click.option('--num_threads', default=os.cpu_count(), type=int, help="Number of threads.")
+@click.option('--model_max_batch_size', default=256, type=int, help="Model max batch size.")
+@click.option('--mode', type=click.Choice([mode.value for mode in PipelineModes], case_sensitive=False),
+              default=PipelineModes.NLP.value, help="Pipeline mode.")
+@click.option('--log_level', type=click.Choice(['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'], case_sensitive=True),
+              default='INFO', help="Sets the logging level.")
+def cli(use_cpp, pipeline_batch_size, enable_monitor, feature_length, num_threads, model_max_batch_size, mode,
+        log_level):
+    """
+    Command line interface for configuring and running the pipeline with specified options.
+    """
+    configure_logging(log_level.upper())
+    CppConfig.set_should_use_cpp(use_cpp)
 
     config = Config()
-    config.pipeline_batch_size = 256
-    config.enable_monitor = True
-    config.feature_length = 512
-    config.num_threads = os.cpu_count()
-    config.model_max_batch_size = 256
-    config.mode = PipelineModes.NLP
+    config.pipeline_batch_size = pipeline_batch_size
+    config.enable_monitor = enable_monitor
+    config.feature_length = feature_length
+    config.num_threads = num_threads
+    config.model_max_batch_size = model_max_batch_size
+    config.mode = PipelineModes[mode.upper()]
 
     pipeline(config)
+
+
+if __name__ == "__main__":
+    cli()

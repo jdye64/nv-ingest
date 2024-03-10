@@ -9,9 +9,9 @@ from redis.exceptions import RedisError
 logger = logging.getLogger(__name__)
 
 
-# TODO: convert to use connection pools for better performance
 class RedisClient:
-    def __init__(self, host, port, db=0, max_retries=0, max_backoff=32, connection_timeout=300, use_ssl=False):
+    def __init__(self, host, port, db=0, max_retries=0, max_backoff=32, connection_timeout=300, max_pool_size=128,
+                 use_ssl=False):
         self.host = host
         self.port = port
         self.db = db
@@ -19,7 +19,10 @@ class RedisClient:
         self.max_backoff = max_backoff
         self.connection_timeout = connection_timeout
         self.use_ssl = use_ssl
-        self.client = None
+        self.pool = redis.ConnectionPool(host=self.host, port=self.port, db=self.db,
+                                         socket_connect_timeout=self.connection_timeout,
+                                         max_connections=max_pool_size)
+        self.client = redis.Redis(connection_pool=self.pool)
         self.retries = 0
 
     def get_client(self):
@@ -28,23 +31,9 @@ class RedisClient:
         return self.client
 
     def connect(self):
-        while self.client is None:
-            backoff_delay = min(2 ** self.retries, self.max_backoff)
-            try:
-                self.client = redis.Redis(host=self.host, port=self.port, db=self.db,
-                                          socket_connect_timeout=self.connection_timeout, ssl=self.use_ssl)
-                self.client.ping()
-                logger.debug("Successfully connected to Redis")
-                self.retries = 0
-            except RedisError as e:
-                self.retries += 1
-                if self.max_retries == 0 or self.retries < self.max_retries:
-                    logger.error(f"Failed to connect to Redis: {e}, retrying in {backoff_delay}s...")
-                    time.sleep(backoff_delay)
-                else:
-                    logger.error(
-                        f"Failed to connect to Redis after {self.max_retries if self.max_retries >= 0 else 'infinite'} attempts: {e}")
-                    raise
+        if not self.ping():
+            logger.debug("Reconnecting to Redis")
+            self.client = redis.Redis(connection_pool=self.pool)
 
     def ping(self):
         try:
@@ -138,3 +127,72 @@ class RedisClient:
         except Exception as err:
             traceback.print_exc()
             raise
+
+
+class RedisStreamsClient:
+    def __init__(self, host, port, db=0, max_retries=0, max_backoff=32, connection_timeout=300, max_pool_size=128,
+                 use_ssl=False):
+        self.host = host
+        self.port = port
+        self.db = db
+        self.max_retries = max_retries
+        self.max_backoff = max_backoff
+        self.connection_timeout = connection_timeout
+        self.use_ssl = use_ssl
+        self.pool = redis.ConnectionPool(host=self.host, port=self.port, db=self.db,
+                                         socket_connect_timeout=self.connection_timeout, ssl=self.use_ssl,
+                                         max_connections=max_pool_size)
+        self.client = redis.Redis(connection_pool=self.pool)
+
+    def get_client(self):
+        if not self.ping():
+            self.client = redis.Redis(connection_pool=self.pool)
+        return self.client
+
+    def ping(self):
+        try:
+            self.client.ping()
+            return True
+        except (RedisError, AttributeError):
+            return False
+
+    def fetch_message(self, stream_name, consumer_group, consumer, block=0):
+        try:
+            # Ensure the consumer group exists
+            try:
+                self.get_client().xgroup_create(stream_name, consumer_group, id='0', ignore_existing=True)
+            except RedisError as e:
+                logger.error(f"Failed to create or confirm consumer group: {e}")
+
+            messages = self.get_client().xreadgroup(consumer_group, consumer, {stream_name: ">"}, count=1, block=block)
+            if messages:
+                message_id, message_payload = messages[0][1][0]
+                return message_id, message_payload
+            return None
+        except RedisError as err:
+            logger.error(f"Redis error during fetch: {err}")
+            raise
+
+    def ack_message(self, stream_name, consumer_group, message_id):
+        try:
+            self.get_client().xack(stream_name, consumer_group, message_id)
+        except RedisError as err:
+            logger.error(f"Redis error during ack: {err}")
+            raise
+
+    def submit_message(self, stream_name, message):
+        try:
+            message_id = self.get_client().xadd(stream_name, message)
+            logger.debug(f"Message {message_id} submitted to {stream_name}")
+            return message_id
+        except RedisError as err:
+            logger.error(f"Redis error during message submission: {err}")
+            raise
+
+    def create_consumer_group(self, stream_name, consumer_group):
+        try:
+            self.get_client().xgroup_create(stream_name, consumer_group, id='$', mkstream=True)
+        except RedisError as e:
+            if not str(e).startswith("BUSYGROUP"):
+                logger.error(f"Failed to create consumer group: {e}")
+                raise
