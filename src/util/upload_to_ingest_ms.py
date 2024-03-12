@@ -874,8 +874,6 @@ def cli(file_source, dataset_json, redis_host, redis_port, extract, extract_meth
         os.makedirs(output_directory, exist_ok=True)
 
     # Check if --extract_method is defined but --extract is not specified
-    if extract_method and not extract:
-        raise click.UsageError("The --extract option must be specified when using --extract_method.")
     configure_logging(log_level.upper())
 
     split_params = {

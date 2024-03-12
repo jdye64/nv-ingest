@@ -31,7 +31,7 @@ def pymupdf_exception_handler(descriptor):
                 return func(*args, **kwargs)
             except Exception as e:
                 log_error_message = f"{descriptor}:{func.__name__} error:{e}"
-                logger.warn(log_error_message)
+                logger.warning(log_error_message)
                 return []
 
         return inner_function

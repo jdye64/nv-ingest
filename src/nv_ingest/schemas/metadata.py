@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import Enum
 from typing import List, Union, Dict, Any, Optional
 
-from pydantic import validator
+from pydantic import validator, root_validator
 
 from nv_ingest.schemas.base_model_noext import BaseModelNoExt
 from nv_ingest.util.converters import datetools
@@ -36,11 +36,11 @@ class StdContentDescEnum(str, Enum):
 class TextTypeEnum(str, Enum):
     HEADER = 'header'
     BODY = 'body'
-    SPAN = "span"    
+    SPAN = "span"
     LINE = "line"
     BLOCK = "block"
     PAGE = 'page'
-    DOCUMENT = 'document'    
+    DOCUMENT = 'document'
     OTHER = "other"
 
 
@@ -104,14 +104,14 @@ class LanguageEnum(str, Enum):
 
     @classmethod
     def has_value(cls, value):
-        return value in cls._value2member_map_ 
+        return value in cls._value2member_map_
 
 
 class ImageTypeEnum(str, Enum):
     JPEG = "jpeg"
     PNG = "png"
     image_type_1 = 'image_type_1'  # until classifier developed
-    image_type_2 = 'image_type_2' # until classifier developed
+    image_type_2 = 'image_type_2'  # until classifier developed
 
     @classmethod
     def has_value(cls, value):
@@ -139,11 +139,11 @@ class SourceMetadataSchema(BaseModelNoExt):
     source_location: str = ""
     source_type: Union[SourceTypeEnum, str]
     collection_id: str = ""
-    date_created: str
-    last_modified: str
+    date_created: str = datetime.now().isoformat()
+    last_modified: str = datetime.now().isoformat()
     summary: str = ""
     partition_id: int = -1
-    access_level: Union[AccessLevelEnum, int]
+    access_level: Union[AccessLevelEnum, int] = -1
 
     @validator("date_created", "last_modified")
     @classmethod
@@ -156,26 +156,26 @@ class ContentMetadataSchema(BaseModelNoExt):
     """
     Data extracted from a source; generally Text or Image.
     """
-    
+
     type: ContentTypeEnum
-    description: str
-    page_number: int
-    hierarchy: Union[str, Dict]
+    description: str = ""
+    page_number: int = -1
+    hierarchy: Union[str, Dict] = ""
 
 
 class TextMetadataSchema(BaseModelNoExt):
     text_type: TextTypeEnum
     summary: str = ""
-    keywords: Union[str, List[str], Dict]
-    language: LanguageEnum
+    keywords: Union[str, List[str], Dict] = ""
+    language: LanguageEnum = "en"  # default to Unknown? Maybe do some kind of heuristic check
 
 
 class ImageMetadataSchema(BaseModelNoExt):
     image_type: Union[ImageTypeEnum, str]
-    structured_image_type: ImageTypeEnum
+    structured_image_type: ImageTypeEnum = ImageTypeEnum.image_type_1
     caption: str = ""
     text: str = ""
-    image_location: tuple
+    image_location: tuple = (0, 0)
 
 
 class ErrorMetadataSchema(BaseModelNoExt):
@@ -190,16 +190,25 @@ class MetadataSchema(BaseModelNoExt):
     content: str
     source_metadata: SourceMetadataSchema
     content_metadata: ContentMetadataSchema
-    text_metadata:  TextMetadataSchema
-    image_metadata:  ImageMetadataSchema
-    error_metadata: Optional[ErrorMetadataSchema]
-    
+    text_metadata: Optional[TextMetadataSchema] = None
+    image_metadata: Optional[ImageMetadataSchema] = None
+    error_metadata: Optional[ErrorMetadataSchema] = None
+
+    @root_validator(pre=True)
+    def check_metadata_type(cls, values):
+        content_type = values.get('content_metadata', {}).get('type', None)
+        if content_type != ContentTypeEnum.TEXT:
+            values['text_metadata'] = None
+        if content_type != ContentTypeEnum.IMAGE:
+            values['image_metadata'] = None
+        return values
+
 
 class ExtractedDocumentType(str, Enum):
     text = 'text'
     markdown = 'markdown'
     unstructured_image = 'unstructured_image'
-    structured_image = 'structured_image'    
+    structured_image = 'structured_image'
 
 
 def validate_metadata(metadata: Dict[str, Any]) -> MetadataSchema:

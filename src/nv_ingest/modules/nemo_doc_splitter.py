@@ -14,6 +14,7 @@
 
 
 import copy
+import datetime
 import logging
 import traceback
 from typing import List, Literal, Any
@@ -27,11 +28,12 @@ from morpheus.messages import MessageMeta
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
 from mrc.core import operators as ops
-from nv_ingest.schemas.metadata import ExtractedDocumentType
+from pydantic import ValidationError
+
+from nv_ingest.schemas.metadata import validate_metadata, ExtractedDocumentType
 from nv_ingest.schemas.nemo_doc_splitter_schema import DocumentSplitterSchema
 from nv_ingest.util.flow_control import filter_by_task
 from nv_ingest.util.tracing import traceable
-from pydantic import ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -133,12 +135,13 @@ def _process_content(row, validated_config):
 
 
 MODULE_NAME = "nemo_document_splitter"
+MODULE_NAMESPACE = "nv_ingest"
 
-NemoDocSplitterLoaderFactory = ModuleLoaderFactory("nemo_document_splitter", "nv_ingest",
+NemoDocSplitterLoaderFactory = ModuleLoaderFactory(MODULE_NAME, MODULE_NAMESPACE,
                                                    DocumentSplitterSchema)
 
 
-@register_module(MODULE_NAME, "nv_ingest")
+@register_module(MODULE_NAME, MODULE_NAMESPACE)
 def _nemo_document_splitter(builder: mrc.Builder):
     """
     A pipeline module that splits documents into smaller parts based on the specified criteria.
@@ -187,14 +190,26 @@ def _nemo_document_splitter(builder: mrc.Builder):
 
             split_docs = []
             for _, row in df_filtered.iterrows():
-
-                if 'metadata' not in row:
+                # TODO(Devin): Remove once we have a fix for StructDtype issue in metadata_injector.
+                if 'metadata' not in row or 'content' not in row['metadata']:
                     row['metadata'] = {
                         'content': row['content'],
+                        "content_metadata": {
+                            "type": "text",
+                        },
+                        "error_metadata": None,
+                        "image_metadata": None,
+                        "source_metadata": {
+                            "source_id": row["source_id"],
+                            "source_name": row["source_name"],
+                            "source_type": row["document_type"],
+                        },
+                        "text_metadata": {
+                            "text_type": "document"
+                        },
                     }
-                elif 'content' not in row['metadata']:
-                    row['metadata']['content'] = row['content']
-                
+
+                #validate_metadata(row['metadata'])
                 content = row['metadata']["content"]
 
                 if content is None:
