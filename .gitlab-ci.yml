@@ -1,0 +1,204 @@
+default:
+  # default to tag to get scheduled on 'bignlp' runners
+  tags:
+    - gitlab-runner-bignlp-api
+  # sane default, every job can be cancelled by some other event (override in jobs that can't be interrupted; i.e. deployment)
+  interruptible: true
+
+workflow:
+  rules:
+    # no branch pipeline while MR is open against same branch
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    # tag pipelines allowed
+    - if: $CI_COMMIT_TAG
+    # protected branch and tag pipelines allowed
+    - if: $CI_COMMIT_REF_PROTECTED
+    # schedule pipelines allowed
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+
+stages:
+  - lint
+  - test
+  - build
+  - publish
+  - security
+
+include:
+  - project: dl/ai-services/gitlab-templates
+    ref: main
+    file:
+      - /templates/docker-utils.gitlab-ci.yml
+      #- /templates/ephemeral-utils.gitlab-ci.yml
+      - /templates/security-utils.gitlab-ci.yml
+      #- /templates/helm-utils.gitlab-ci.yml
+
+# common variables for the pipeline
+variables:
+  GIT_SUBMODULE_STRATEGY: recursive
+  GIT_SUBMODULE_FORCE_HTTPS: "true"
+  GIT_SUBMODULE_DEPTH: 1
+  PYTHON_SLIM_IMAGE: python:3.10.13-slim
+  POETRY_VERSION: 1.7.1
+  POETRY_CACHE_DIR: "$CI_PROJECT_DIR/.cache/poetry"
+  SERVICE_NAME: nv-ingest
+  NSPECT_ID: NSPECT-4DWD-VFPM
+  NGC_REGISTRY: nvcr.io
+  HELM_REPO: https://helm.ngc.nvidia.com/nvidian/nemo-llm
+  HELM_REPO_NAME: ngc
+  HELM_API_TOKEN: $NGC_REGISTRY_PASSWORD
+
+# init vault secrets
+vault-init:
+  image: gitlab-master.nvidia.com:5005/dl/ai-services/nemollm-cicd-images/cicd-llm:stable
+  stage: .pre
+  script:
+    - vault version
+    - vault agent -config=.gitlab/vault/vault-agent.config -exit-after-auth
+  artifacts:
+    reports:
+      dotenv: ci_secrets.env
+
+##################
+###   PYTHON   ###
+##################
+.python-basics:
+  image: $PYTHON_SLIM_IMAGE
+  # DAG approach, does not wait for previous state to finish
+  needs: []
+  # cache for python packages, unique for each branch (not shared across branches)
+  cache:
+    key: $CI_COMMIT_REF_SLUG
+    paths:
+      - .cache/poetry
+      - .venv/
+  before_script:
+    - apt-get update
+    - apt-get install --no-install-recommends --yes git-core gcc
+    # TODO this should just be in the image already instead of downloading every time, same with git-core
+    - pip install .
+
+# lint:
+#   extends: .python-basics
+#   stage: lint
+#   variables:
+#     PRE_COMMIT_HOME: ${CI_PROJECT_DIR}/.cache/pre-commit
+#   cache:
+#     key: pre-commit-$CI_COMMIT_REF_SLUG
+#     paths:
+#       - ${PRE_COMMIT_HOME}
+#   script:
+#     - ./script/lint.sh
+
+test:
+  extends: .python-basics
+  stage: test
+  script:
+    - pip install -r test-requirements.txt
+    - pytest -rs --cov src --cov-report term --cov-report xml:coverage.xml test/nv_ingest
+  coverage: '/(?i)total.*? (100(?:\.0+)?\%|[1-9]?\d(?:\.\d+)?\%)$/'
+  artifacts:
+    when: always
+    paths:
+      - coverage.xml
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+
+##################
+###   DOCKER   ###
+##################
+
+# build:docker:
+#   stage: build
+#   extends: .docker-kaniko-build
+#   needs: []
+#   variables:
+#     BUILD_ARGS: '--build-arg TARGETARCH=amd64 --build-arg POETRY_VERSION=${POETRY_VERSION}'
+#   rules:
+#     - when: on_success
+
+##################
+### HELM CHART ###
+##################
+
+# TODO have some chart content
+
+# lint the chart for basic errors
+#lint:helm:
+#  stage: test
+#  extends: .helm-lint
+#
+# version check helm charts if there are changes only
+#check:helm:
+#  stage: test
+#  extends: .helm-publish-check
+#  needs:
+#    - job: lint:helm
+#      optional: true
+#    - job: vault-init
+#      optional: false
+#
+# publish helm charts only if there are changes
+#publish:helm:
+#  stage: publish
+#  extends: .helm-publish
+#  needs:
+#    - job: check:helm
+#      optional: true
+#    - job: vault-init
+#      optional: true
+
+##################
+###   PUBLISH  ###
+##################
+
+# Take snapshot SHA and publish to NGC
+#nvcr-sha:
+#  stage: publish
+#  extends: .sha-release
+#  needs: [vault-init, build:docker]
+#  rules:
+#    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+#      when: on_success
+#    - when: manual
+#      allow_failure: true
+#  variables:
+#    REMOTE_IMAGE_URI: ${NGC_REGISTRY}/nvidian/nemo-llm/${SERVICE_NAME}
+#
+## publish image tag to NGC
+#nvcr-tag:
+#  stage: publish
+#  extends: .tag-release
+#  needs: [vault-init, build:docker]
+
+
+##################
+###  SECURITY  ###
+##################
+
+#container-scan:
+#  needs:
+#    - job: security-config
+#    - job: build:docker
+#      optional: true
+#  extends: .container-scan
+#  # use this to prevent random shared runners from picking up this job
+#  tags:
+#    - gitlab-runner-bignlp-api
+#  variables:
+#    CONTAINER_ARCHIVE: ${SERVICE_NAME}.tar
+
+iac-scan:
+  extends: .iac-scan
+  parallel:
+    matrix:
+      # TODO add chart when available
+      - TARGET_CONFIG_PATH: [Dockerfile]
+
+sast-scan:
+  extends: .sast-scan
+
+cred-scan:
+  extends: .cred-scan

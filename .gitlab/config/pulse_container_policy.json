@@ -1,0 +1,254 @@
+{
+  "denylisted_images": [],
+  "description": "NV Ingest Container Scan Policy",
+  "id": "nv-ingest-policy-bundle",
+  "mappings": [
+    {
+      "image": {
+        "type": "tag",
+        "value": "*"
+      },
+      "rule_set_ids": ["nv-ingest-policy"],
+      "registry": "*",
+      "repository": "*",
+      "allowlist_ids": [
+          "37fd763e-1765-11e8-add4-3b16c029ac5c",
+          "2cedec50-2dd9-4b0a-85ec-52dbfa62201b",
+          "e26d0001-3186-4c01-a74e-a12afe86fb28"
+      ]
+    }
+  ],
+  "name": "NV Ingest Policy Bundle",
+  "rule_sets": [
+    {
+      "description": "NV Ingest policy for a basic severity check in vulns.",
+      "id": "nv-ingest-policy",
+      "name": "Base Policy",
+      "rules": [
+        {
+          "action": "WARN",
+          "gate": "vulnerabilities",
+          "id": "6063fdde-b1c5-46af-973a-915739451ac4",
+          "params": [
+            {
+              "name": "package_type",
+              "value": "all"
+            },
+            {
+              "name": "severity_comparison",
+              "value": "="
+            },
+            {
+              "name": "severity",
+              "value": "medium"
+            }
+          ],
+          "trigger": "package"
+        },
+        {
+          "action": "STOP",
+          "gate": "vulnerabilities",
+          "id": "b30e8abc-444f-45b1-8a37-55be1b8c8bb5",
+          "params": [
+            {
+              "name": "package_type",
+              "value": "all"
+            },
+            {
+              "name": "severity_comparison",
+              "value": ">"
+            },
+            {
+              "name": "severity",
+              "value": "medium"
+            }
+          ],
+          "trigger": "package"
+        },
+        {
+          "action": "STOP",
+          "gate": "dockerfile",
+          "id": "cf56a918-a2be-4a2a-a707-d99c46af9424",
+          "params": [
+            {
+              "name": "ports",
+              "value": "20,23,25,80,115"
+            },
+            {
+              "name": "type",
+              "value": "denylist"
+            }
+          ],
+          "trigger": "exposed_ports"
+        },
+        {
+          "action": "WARN",
+          "gate": "dockerfile",
+          "id": "312d9e41-1c05-4e2f-ad89-b7d34b0855bb",
+          "params": [
+            {
+              "name": "instruction",
+              "value": "HEALTHCHECK"
+            },
+            {
+              "name": "check",
+              "value": "not_exists"
+            }
+          ],
+          "trigger": "instruction"
+        },
+        {
+          "action": "WARN",
+          "gate": "licenses",
+          "id": "76948be6-31cf-4660-9f23-d6181380d511",
+          "params": [
+            {
+              "name": "licenses",
+              "value": "EPL-1.0,GPL-3.0,GPL-2.0,MPL-2.0,CDDL-1.0,AGPL,LGPL"
+            }
+          ],
+          "trigger": "denylist_exact_match"
+        }
+      ],
+      "version": "V2"
+    }
+  ],
+  "version": "V2",
+  "allowlisted_images": [],
+  "allowlists": [
+    {
+      "description": "Anchore example of allowlisting known derived packages that contain only development headers but may trigger as vulnerable as they are associated with the packages that contain the software itself",
+      "id": "2cedec50-2dd9-4b0a-85ec-52dbfa62201b",
+      "items": [
+        {
+          "gate": "vulnerabilities",
+          "id": "1409ebfd-7aec-44e8-bb27-73a3b97ba16b",
+          "trigger_id": "*+linux-headers-*"
+        },
+        {
+          "gate": "vulnerabilities",
+          "id": "40d95b5e-f7e9-46ee-8d51-59996529ce29",
+          "trigger_id": "*kernel-debug*"
+        },
+        {
+          "gate": "vulnerabilities",
+          "id": "8DC93FE4-871A-4904-9BB5-2CE37CDD44B7",
+          "trigger_id": "*kernel-headers*"
+        },
+        {
+          "gate": "vulnerabilities",
+          "id": "45925fb3-c7ac-4ceb-9e9f-a6402f798f1f",
+          "trigger_id": "*+*-dev"
+        },
+        {
+          "gate": "vulnerabilities",
+          "id": "7f8a9d30-192c-4d04-80d4-f7597c7e86d0",
+          "trigger_id": "*dbus*"
+        }
+      ],
+      "name": "Development OS Packages",
+      "version": "V2"
+    },
+    {
+      "description": "NV crypto material leak check allowlist",
+      "id": "37fd763e-1765-11e8-add4-3b16c029ac5c",
+      "items": [
+        {
+          "gate": "secret_scans",
+          "id": "267ecc37-16c9-46e7-a3cd-e1e8d6000be1",
+          "trigger_id": "77d9bd0aec7fb9c472fd666ae03940c8"
+        },
+        {
+          "gate": "secret_scans",
+          "id": "267ecc37-16c9-46e7-a3cd-e1e8d6000be1",
+          "trigger_id": "b0bf800bc47efb41a6618ae90d616434"
+        },
+        {
+          "gate": "secret_scans",
+          "id": "267ecc37-16c9-46e7-a3cd-e1e8d6000be1",
+          "trigger_id": "07971e3d4abbb6ac5e1cbce14a0abd9a"
+        },
+        {
+          "gate": "secret_scans",
+          "id": "cf56a918-a2be-4a2a-a707-d99c46af9424",
+          "trigger_id": "8673f532175a1203d1533405b198ef89"
+        },
+        {
+          "gate": "secret_scans",
+          "id": "8b638520-31f2-40a3-a512-4a1bc7ae3409",
+          "trigger_id": "ac2d06e8f00e97fdafd0fde9ecbcd749"
+        }
+      ],
+      "name": "NV_Crypto_Leak_allowlist",
+      "version": "V2"
+    },
+    {
+      "description": "False positives which are conflated package names, incorrect severity etc",
+      "id": "e26d0001-3186-4c01-a74e-a12afe86fb28",
+      "items": [
+        {
+          "gate": "vulnerabilities",
+          "id": "024c8b2a-d9a5-4ee7-8ff7-25e1075a0a75",
+          "trigger_id": "CVE-2021-27478+*"
+        },
+        {
+          "gate": "vulnerabilities",
+          "id": "df06dafb-5894-49b9-9b7f-74946ca6ba87",
+          "trigger_id": "CVE-2021-27482+*"
+        },
+        {
+          "gate": "vulnerabilities",
+          "id": "f0fe9511-2431-427f-bcb7-c3f6d54cbd28",
+          "trigger_id": "CVE-2021-27498+*"
+        },
+        {
+          "gate": "vulnerabilities",
+          "id": "f96b7186-4d1f-4197-8a41-b58a4070d811",
+          "trigger_id": "CVE-2021-27500+*"
+        },
+        {
+          "gate": "vulnerabilities",
+          "id": "4e0353a0-610b-49d0-b3a9-7f4917a5d390",
+          "trigger_id": "CVE-2020-15123+*"
+        },
+        {
+          "gate": "vulnerabilities",
+          "id": "a632065a-7a26-4304-ad8c-daecd330d69a",
+          "trigger_id": "CVE-2021-3177+*"
+        },
+        {
+          "gate": "vulnerabilities",
+          "id": "cf573876-ca69-41b0-8dae-3a18c546d4a6",
+          "trigger_id": "CVE-2020-27619+*"
+        },
+        {
+          "gate": "vulnerabilities",
+          "id": "211004d1-68af-46a4-928a-6fc06ab11885",
+          "trigger_id": "CVE-2021-22570+*"
+        },
+        {
+          "gate": "vulnerabilities",
+          "id": "8cc8bb46-56a0-433c-91a5-fa65eb83b6bf",
+          "trigger_id": "CVE-2015-5237+*"
+        },
+        {
+          "gate": "vulnerabilities",
+          "id": "c38e84eb-b74e-4b0d-9ccf-284117ad1773",
+          "trigger_id": "CVE-2022-29500+*"
+        },
+        {
+          "gate": "vulnerabilities",
+          "id": "07e13b42-7483-4292-9b0f-b93cc957e4f7",
+          "trigger_id": "CVE-2020-7597+*"
+        },
+        {
+          "gate": "vulnerabilities",
+          "id": "4d9ac1c6-a342-4b54-97c8-2ad72dfca13f",
+          "trigger_id": "CVE-2021-28861+*"
+        }
+      ],
+      "name": "False_Positives_allowlist",
+      "version": "V2"
+    }
+  ]
+}
