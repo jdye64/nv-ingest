@@ -19,7 +19,7 @@ services:
         MORPHEUS_SUPPORT_DOCA: OFF
         PYTHON_VER: "3.10"
     volumes:
-      - ${MORPHEUS_PDF_INGEST_ROOT}/models:/models
+      - ${NV_INGEST_ROOT}/models:/models
     command: >
       bash -c "python -m pip install sentence_transformers onnx && python /workspace/examples/llm/main.py vdb_upload export-triton-model --model_name ${MODEL_NAME} --triton_repo /models/triton-model-repo"
     deploy:
@@ -49,7 +49,7 @@ services:
       - "8001:8001"
       - "8002:8002"
     volumes:
-      - ${MORPHEUS_PDF_INGEST_ROOT}/models:/models
+      - ${NV_INGEST_ROOT}/models:/models
     deploy:
       resources:
         reservations:
@@ -61,7 +61,7 @@ services:
   nv-ingest-ms-runtime:
     image: "nv-ingest-ms-runtime:24.03"
     build:
-      context: ${MORPHEUS_PDF_INGEST_ROOT}
+      context: ${NV_INGEST_ROOT}
       dockerfile: "./Dockerfile"
       target: runtime
     volumes:
@@ -81,12 +81,12 @@ services:
   nv-ingest-ms-dev:
     image: "nv-ingest-ms-dev:24.03"
     build:
-      context: ${MORPHEUS_PDF_INGEST_ROOT}
+      context: ${NV_INGEST_ROOT}
       dockerfile: "./Dockerfile"
       target: development
     volumes:
       - ${DATASET_ROOT}:/workspace/data
-      - ${MORPHEUS_PDF_INGEST_ROOT}/src:/workspace/src
+      - ${NV_INGEST_ROOT}/src:/workspace/src
     stdin_open: true
     tty: true      
     environment:
