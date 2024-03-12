@@ -543,7 +543,7 @@ def submit_tasks(executor, matching_files, processing_function, processing_args)
     return {executor.submit(processing_function, source, *processing_args): source for source in matching_files}
 
 
-def process_tasks(future_to_file, progress_bar):
+def process_tasks(future_to_file, output_directory, progress_bar):
     """
     Processes submitted tasks, updates the progress bar, and accumulates processed data and stage times.
 
@@ -571,6 +571,28 @@ def process_tasks(future_to_file, progress_bar):
             if response is None:
                 logger.error(f"Error processing file {source}: No response received.")
                 continue
+
+            doc_map = {}
+            if (output_directory):
+                response_data = json.loads(response['data'])
+                doc_meta = response_data[0]['metadata']
+                source_meta = doc_meta['source_metadata']
+                doc_name = source_meta['source_id']
+                output_name = f"{doc_name}.metadata.json"
+
+                for document in response_data:
+                    doc_type = document['document_type']
+
+                    if (doc_type not in doc_map):
+                        doc_map[doc_type] = []
+                    doc_map[doc_type].append(document)
+
+                for doc_type, output_names in doc_map.items():
+                    if (not os.path.exists(os.path.join(output_directory, doc_type))):
+                        os.makedirs(os.path.join(output_directory, doc_type))
+
+                    with open(os.path.join(output_directory, doc_type, output_name), 'w') as f:
+                        f.write(json.dumps(doc_map[doc_type], indent=2))
 
             total_data_processed += data_processed
             process_response(response, stage_elapsed_times)
@@ -756,7 +778,7 @@ def determine_processing_function(redis_host, redis_port, task_queue, extract, e
 
 
 def main(file_source, redis_host, redis_port, extract, extract_method, split, dry_run, concurrency_options,
-         split_params):
+         split_params, output_directory):
     """
     Processes files from specified sources using given extraction and splitting methods,
     and performs actions based on the specified options.
@@ -803,7 +825,7 @@ def main(file_source, redis_host, redis_port, extract, extract_method, split, dr
             redis_host, redis_port, task_queue, extract, extract_method, split, concurrency_options, split_params
         )
         future_to_file = submit_tasks(executor, matching_files, processing_function, processing_args)
-        stage_elapsed_times, total_data_processed = process_tasks(future_to_file, progress_bar)
+        stage_elapsed_times, total_data_processed = process_tasks(future_to_file, output_directory, progress_bar)
 
     progress_bar.close()
     report_statistics(start_time_ns, stage_elapsed_times, total_data_processed, len(matching_files))
@@ -813,8 +835,8 @@ def main(file_source, redis_host, redis_port, extract, extract_method, split, dr
 @click.option('--file_source', multiple=True, default=[], type=str,
               help='List of file sources/paths to be processed.')
 @click.option("--dataset_json", type=str, help="Path to a JSON file containing a list of file sources.")
-@click.option('--redis-host', default='localhost', help="DNS name for Redis.")
-@click.option('--redis-port', default='6379', help="Port for Redis.", type=int)
+@click.option('--redis_host', default='localhost', help="DNS name for Redis.")
+@click.option('--redis_port', default='6379', help="Port for Redis.", type=int)
 @click.option('--extract', is_flag=True, help="Enable PDF text extraction task.")
 @click.option('--split', is_flag=True, help="Enable text splitting task.")
 @click.option('--extract_method', default=['pymupdf'],
@@ -837,14 +859,20 @@ def main(file_source, redis_host, redis_port, extract, extract_method, split, dr
 @click.option('--concurrency_mode', default='thread', type=click.Choice(['thread', 'process'], case_sensitive=False),
               help="Choose 'thread' for ThreadPoolExecutor or 'process' for ProcessPoolExecutor.")
 @click.option('--dry-run', is_flag=True, help="Prints the steps to be executed without performing them.")
+@click.option('--output_directory', default=None,
+              type=click.Path(file_okay=False, dir_okay=True, writable=True, resolve_path=True, allow_dash=True),
+              help="Directory where output files will be saved. If provided, must exist and be writable.")
 def cli(file_source, dataset_json, redis_host, redis_port, extract, extract_method, split, split_by, split_length,
         split_overlap, split_max_character_length, split_sentence_window_size, n_workers, log_level, concurrency_mode,
-        use_dask, dry_run):
+        use_dask, dry_run, output_directory):
     """
     CLI entry point for processing files. Configures and executes the main processing function based on user inputs.
 
     The function initializes a global ThreadPoolExecutor and then calls the main processing function with the provided options.
     """
+    if output_directory and not os.path.isdir(output_directory):
+        os.makedirs(output_directory, exist_ok=True)
+
     # Check if --extract_method is defined but --extract is not specified
     if extract_method and not extract:
         raise click.UsageError("The --extract option must be specified when using --extract_method.")
@@ -883,7 +911,8 @@ def cli(file_source, dataset_json, redis_host, redis_port, extract, extract_meth
             split,
             dry_run,
             concurrency_options,
-            split_params
+            split_params,
+            output_directory,
         )
     except Exception as e:
         logger.error(f"An error occurred: {e}")

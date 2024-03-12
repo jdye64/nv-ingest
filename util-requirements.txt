@@ -1,0 +1,5 @@
+# Requirements for NV-ingest utils.
+chardet~=5.2
+click~=8.1
+redis~=5.0.1
+
