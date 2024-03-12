@@ -27,6 +27,7 @@ from morpheus.pipeline.pipeline import Pipeline
 from morpheus.stages.general.linear_modules_source import LinearModuleSourceStage
 from morpheus.stages.general.linear_modules_stage import LinearModulesStage
 
+from nv_ingest.modules.metadata_injector import MetadataInjectorLoaderFactory
 from nv_ingest.modules.nemo_doc_splitter import NemoDocSplitterLoaderFactory
 from nv_ingest.modules.pdf_extractor import PDFExtractorLoaderFactory
 from nv_ingest.modules.redis_task_sink import RedisTaskSinkLoaderFactory
@@ -94,6 +95,16 @@ def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
     source_stage = pipe.add_stage(
         LinearModuleSourceStage(config, source_module_loader, output_type=ControlMessage, output_port_name="output"))
 
+    metadata_injector_loader = MetadataInjectorLoaderFactory.get_instance(module_name="metadata_injection",
+                                                                          module_config={})
+
+    metadata_injector_stage = pipe.add_stage(
+        LinearModulesStage(config, metadata_injector_loader,
+                           input_type=ControlMessage,
+                           output_type=ControlMessage,
+                           input_port_name="input",
+                           output_port_name="output"))
+
     pdf_text_extract_loader = PDFExtractorLoaderFactory.get_instance(module_name="pdf_extractor",
                                                                      module_config={})
 
@@ -154,7 +165,8 @@ def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
                            input_port_name="input",
                            output_port_name="output"))
 
-    pipe.add_edge(source_stage, extractor_stage)
+    pipe.add_edge(source_stage, metadata_injector_stage)
+    pipe.add_edge(metadata_injector_stage, extractor_stage)
     pipe.add_edge(extractor_stage, nemo_splitter_stage)
     # pipe.add_edge(nemo_splitter_stage, nlp_stage)
     # pipe.add_edge(nlp_stage, embedding_stage)

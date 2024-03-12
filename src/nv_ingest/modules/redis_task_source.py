@@ -109,7 +109,7 @@ def _redis_task_source(builder: mrc.Builder):
         control_message.set_metadata('job_id', job_id)
 
         for task in job_tasks:
-            logger.debug("Tasks: %s", json.dumps(task, indent=2))
+            #logger.debug("Tasks: %s", json.dumps(task, indent=2))
             control_message.add_task(task['type'], task['task_properties'])
 
         # Debug Tracing
