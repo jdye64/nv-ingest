@@ -1,0 +1,1 @@
+NGC_REGISTRY_PASSWORD={{ with secret "secrets/tokens/prod-ngc" }}{{ .Data.data.token }}{{ end }}
