@@ -90,9 +90,9 @@ def sample_files(file_list, samples, total_size_bytes, with_replacement=True):
     metadata = {
         "total_sampled_size_bytes": 0,
         "file_type_proportions": {},
-        "sampling_method": "with_replacement"
-        if with_replacement
-        else "without_replacement",
+        "sampling_method": (
+            "with_replacement" if with_replacement else "without_replacement"
+        ),
     }
     selected_files = set()
 
