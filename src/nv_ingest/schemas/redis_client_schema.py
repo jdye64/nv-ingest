@@ -1,11 +1,10 @@
 from typing import Optional
 
-from pydantic import BaseModel
-from pydantic import conint
+from pydantic import BaseModel, conint
 
 
 class RedisClientSchema(BaseModel):
-    host: str = 'redis'
+    host: str = "redis"
     port: conint(gt=0, lt=65536) = 6379  # Ports must be in the range 1-65535
     use_ssl: Optional[bool] = False
 

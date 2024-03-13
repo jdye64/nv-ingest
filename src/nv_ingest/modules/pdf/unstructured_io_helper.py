@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import logging
 import io
+import logging
 
 from unstructured_client import UnstructuredClient
 from unstructured_client.models import shared
@@ -22,8 +22,13 @@ from unstructured_client.models.errors import SDKError
 logger = logging.getLogger(__name__)
 
 
-def unstructured_io(pdf_stream: io.BytesIO, extract_text: bool, extract_images: bool, extract_tables: bool, **kwargs):
-
+def unstructured_io(
+    pdf_stream: io.BytesIO,
+    extract_text: bool,
+    extract_images: bool,
+    extract_tables: bool,
+    **kwargs,
+):
     """
     Helper function to use unstructured-io REST API to extract text from a bytestream PDF.
 
@@ -34,11 +39,11 @@ def unstructured_io(pdf_stream: io.BytesIO, extract_text: bool, extract_images: 
     extract_text : bool
         Specifies whether or not to extract text.
     extract_images : bool
-        Specifies whether or not to extract images.        
+        Specifies whether or not to extract images.
     extract_tables : bool
-        Specifies whether or not to extract tables.    
+        Specifies whether or not to extract tables.
     **kwargs
-        The keyword arguments are used for additional extraction parameters.                 
+        The keyword arguments are used for additional extraction parameters.
 
     Returns
     -------
@@ -49,10 +54,10 @@ def unstructured_io(pdf_stream: io.BytesIO, extract_text: bool, extract_images: 
     ------
     SDKError
         If there is an error with the extraction.
-        
+
     """
 
-    logger.info(f"Extracting PDF with unstructured-io backend.") 
+    logger.info("Extracting PDF with unstructured-io backend.")
 
     api_key = kwargs.get("api_key", None)
     unstructured_url = kwargs.get("unstructured_url", None)
@@ -62,19 +67,19 @@ def unstructured_io(pdf_stream: io.BytesIO, extract_text: bool, extract_images: 
     s = UnstructuredClient(
         server_url=unstructured_url,
         api_key_auth=api_key,
-    )        
+    )
 
-    files=shared.Files(
+    files = shared.Files(
         content=pdf_stream,
         file_name=file_name,
-    )        
+    )
 
     req = shared.PartitionParameters(
         files=files,
         # Other partition params
-        strategy='auto',
+        strategy="auto",
         languages=["eng"],
-    )     
+    )
 
     try:
         resp = s.general.partition(req)

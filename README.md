@@ -14,17 +14,17 @@
 - [Submitting documents to an existing ingest-service](#submitting-documents-to-an-existing-ingest-service)
 - [Building the nv-ingest-ms-runtime container](#building-the-nv-ingest-ms-runtime-container)
 - [Utilities](#utilities)
-    - [upload_to_ingest_ms.py](#upload_to_ingest_mspy)
-    - [gen_dataset.py](#gen_datasetpy)
-    - [image_viewer.py](#image_viewerpy)
+  - [upload_to_ingest_ms.py](#upload_to_ingest_mspy)
+  - [gen_dataset.py](#gen_datasetpy)
+  - [image_viewer.py](#image_viewerpy)
 
 ## Big Picture Concepts
 
 - The nv-ingest service consists two primary components:
-    - The nv-ingest-ms-runtime container, which contains the processing logic for the nv-ingest service
-        - The nv-ingest-ms-runtime container is built on top of the Morpheus:24.03 container (Currently, this a
-          manual build but will be a direct pull from NGC once 24.03 is released).
-    - A Redis service container, which serves as the message broker for the nv-ingest-ms-runtime container
+  - The nv-ingest-ms-runtime container, which contains the processing logic for the nv-ingest service
+    - The nv-ingest-ms-runtime container is built on top of the Morpheus:24.03 container (Currently, this a
+      manual build but will be a direct pull from NGC once 24.03 is released).
+  - A Redis service container, which serves as the message broker for the nv-ingest-ms-runtime container
 - We interact with the ingest service by publishing jobs to the Redis service, and subscribing to an ephemeral
   response channel.
 -
@@ -55,7 +55,7 @@ python ./src/util/upload_to_ingest_ms.py \
   --extract_method=pymupdf \
   --redis_host=localhost \
   --redis_port=6379
-  
+
 ls ./processed_docs/*
 processed_docs/image:
 test.pdf.metadata.json
@@ -66,6 +66,7 @@ test.pdf.metadata.json
 ```
 
 View images; see: [image_viewer.py](#image_viewerpy)
+
 ```shell
 python src/util/image_viewer.py --file_path ./processed_docs/image/test.pdf.metadata.json
 ```
@@ -239,7 +240,7 @@ Verify `ingest service` is working as expected.
 
 ```bash
 docker logs devin-nv-ingest-nv-ingest-ms-runtime-1
- ✔ Container devin-nv-ingest-nv-ingest-ms-runtime-1  Created                                                                                                                                                    0.0s 
+ ✔ Container devin-nv-ingest-nv-ingest-ms-runtime-1  Created                                                                                                                                                    0.0s
 Attaching to nv-ingest-ms-runtime-1
 nv-ingest-ms-runtime-1  | DEBUG:morpheus.utils.module_utils:Module 'nemo_document_splitter' was successfully registered with 'nv_ingest' namespace.
 nv-ingest-ms-runtime-1  | DEBUG:morpheus.utils.module_utils:Module 'pdf_content_extractor' was successfully registered with 'nv-ingest' namespace.
@@ -286,70 +287,82 @@ nv-ingest-ms-runtime-1  | INFO:morpheus.pipeline.pipeline:====Building Segment C
 #### upload_to_ingest_ms.py
 
 - `--file_source`: List of file sources/paths to be processed.
-    - **Type**: String (Multiple allowed)
-    - **Default**: []
-    - **Example Usage**: `--file_source path/to/file1.pdf --file_source path/to/file2.pdf`
+
+  - **Type**: String (Multiple allowed)
+  - **Default**: []
+  - **Example Usage**: `--file_source path/to/file1.pdf --file_source path/to/file2.pdf`
 
 - `--dataset_json`: Path to a JSON file containing a list of file sources.
-    - **Type**: String
-    - **Default**: None
-    - **Example Usage**: `--dataset_json path/to/dataset.json`
+
+  - **Type**: String
+  - **Default**: None
+  - **Example Usage**: `--dataset_json path/to/dataset.json`
 
 - `--redis-host`: DNS name for Redis.
-    - **Type**: String
-    - **Default**: "localhost"
-    - **Example Usage**: `--redis-host redis-server.domain.com`
+
+  - **Type**: String
+  - **Default**: "localhost"
+  - **Example Usage**: `--redis-host redis-server.domain.com`
 
 - `--redis-port`: Port for Redis.
-    - **Type**: Integer
-    - **Default**: 6379
-    - **Example Usage**: `--redis-port 6379`
+
+  - **Type**: Integer
+  - **Default**: 6379
+  - **Example Usage**: `--redis-port 6379`
 
 - `--extract`: Enable PDF text extraction task.
-    - **Type**: Flag (Boolean)
-    - **Default**: False (not set)
-    - **Example Usage**: `--extract`
+
+  - **Type**: Flag (Boolean)
+  - **Default**: False (not set)
+  - **Example Usage**: `--extract`
 
 - `--split`: Enable text splitting task.
-    - **Type**: Flag (Boolean)
-    - **Default**: False (not set)
-    - **Example Usage**: `--split`
+
+  - **Type**: Flag (Boolean)
+  - **Default**: False (not set)
+  - **Example Usage**: `--split`
 
 - `--extract_method`: Specifies the type(s) of extraction to use.
-    - **Type**: Choice [pymupdf, haystack, tika, unstructured_io, unstructured_service, llama_parse]
-    - **Default**: ["pymupdf"]
-    - **Multiple**: Yes
-    - **Example Usage**: `--extract_method pymupdf --extract_method tika`
+
+  - **Type**: Choice [pymupdf, haystack, tika, unstructured_io, unstructured_service, llama_parse]
+  - **Default**: ["pymupdf"]
+  - **Multiple**: Yes
+  - **Example Usage**: `--extract_method pymupdf --extract_method tika`
 
 - `--use_dask`: Use dask for concurrency.
-    - **Type**: Flag (Boolean)
-    - **Default**: False (not set)
-    - **Example Usage**: `--use_dask`
+
+  - **Type**: Flag (Boolean)
+  - **Default**: False (not set)
+  - **Example Usage**: `--use_dask`
 
 - `--n_workers`: Number of workers for the ThreadPoolExecutor or dask.
-    - **Type**: Integer
-    - **Default**: 5
-    - **Example Usage**: `--n_workers 10`
+
+  - **Type**: Integer
+  - **Default**: 5
+  - **Example Usage**: `--n_workers 10`
 
 - `--log_level`: Sets the logging level.
-    - **Type**: Choice [DEBUG, INFO, WARNING, ERROR, CRITICAL]
-    - **Default**: "INFO"
-    - **Example Usage**: `--log_level ERROR`
+
+  - **Type**: Choice [DEBUG, INFO, WARNING, ERROR, CRITICAL]
+  - **Default**: "INFO"
+  - **Example Usage**: `--log_level ERROR`
 
 - `--concurrency_mode`: Choose 'thread' for ThreadPoolExecutor or 'process' for ProcessPoolExecutor.
-    - **Type**: Choice [thread, process]
-    - **Default**: "thread"
-    - **Example Usage**: `--concurrency_mode process`
+
+  - **Type**: Choice [thread, process]
+  - **Default**: "thread"
+  - **Example Usage**: `--concurrency_mode process`
 
 - `--dry-run`: Prints the steps to be executed without performing them.
-    - **Type**: Flag (Boolean)
-    - **Default**: False (not set)
-    - **Example Usage**: `--dry-run`
+
+  - **Type**: Flag (Boolean)
+  - **Default**: False (not set)
+  - **Example Usage**: `--dry-run`
 
 - `--output_directory`: Directory where output files will be saved. If provided, must exist and be writable.
-    - **Type**: Path
-    - **Default**: None
-    - **Example Usage**: `--output_directory /path/to/output`
+  - **Type**: Path
+  - **Default**: None
+  - **Example Usage**: `--output_directory /path/to/output`
 
 ### Example document submission to the nv-ingest-ms-runtime service
 
@@ -446,46 +459,53 @@ offers options for caching the file list, outputting a sampled file list, and va
 ### Options
 
 - `--source_directory`: Specifies the path to the source directory where files will be scanned for sampling.
-    - **Type**: String
-    - **Required**: Yes
-    - **Example**: `--source_directory ./data`
+
+  - **Type**: String
+  - **Required**: Yes
+  - **Example**: `--source_directory ./data`
 
 - `--size`: Defines the total size of files to sample. You can use suffixes (KB, MB, GB).
-    - **Type**: String
-    - **Required**: Yes
-    - **Example**: `--size 500MB`
+
+  - **Type**: String
+  - **Required**: Yes
+  - **Example**: `--size 500MB`
 
 - `--sample`: Specifies file types and their proportions of the total size. Can be used multiple times for different
   file types.
-    - **Type**: String
-    - **Required**: No
-    - **Multiple**: Yes
-    - **Example**: `--sample pdf=40 --sample txt=60`
+
+  - **Type**: String
+  - **Required**: No
+  - **Multiple**: Yes
+  - **Example**: `--sample pdf=40 --sample txt=60`
 
 - `--cache_file`: If provided, caches the scanned file list as JSON at this path.
-    - **Type**: String
-    - **Required**: No
-    - **Example**: `--cache_file ./file_list_cache.json`
+
+  - **Type**: String
+  - **Required**: No
+  - **Example**: `--cache_file ./file_list_cache.json`
 
 - `--output_file`: If provided, outputs the list of sampled files as JSON at this path.
-    - **Type**: String
-    - **Required**: No
-    - **Example**: `--output_file ./sampled_files.json`
+
+  - **Type**: String
+  - **Required**: No
+  - **Example**: `--output_file ./sampled_files.json`
 
 - `--validate-output`: If set, the script re-validates the `output_file` JSON and logs total bytes for each file type.
-    - **Type**: Flag
-    - **Required**: No
+
+  - **Type**: Flag
+  - **Required**: No
 
 - `--log-level`: Sets the logging level ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'). Default is 'INFO'.
-    - **Type**: Choice
-    - **Required**: No
-    - **Example**: `--log-level DEBUG`
+
+  - **Type**: Choice
+  - **Required**: No
+  - **Example**: `--log-level DEBUG`
 
 - `--with-replacement`: Sample with replacement. Files can be selected multiple times.
-    - **Type**: Flag
-    - **Default**: True (if omitted, sampling will be with replacement)
-    - **Usage Example**: `--with-replacement` to enable sampling with replacement or omit for default behavior.
-      Use `--no-with-replacement` to disable it and sample without replacement.
+  - **Type**: Flag
+  - **Default**: True (if omitted, sampling will be with replacement)
+  - **Usage Example**: `--with-replacement` to enable sampling with replacement or omit for default behavior.
+    Use `--no-with-replacement` to disable it and sample without replacement.
 
 The script performs a sampling process that respects the specified size and type proportions, generates a detailed file
 list, and provides options for caching and validation to facilitate efficient data handling and integrity checking.
@@ -502,9 +522,9 @@ buttons.
   - **Type**: String
   - **Required**: Yes
   - **Example Usage**:
-      ```
-      --file_path "/path/to/your/images.json"
-      ```
+    ```
+    --file_path "/path/to/your/images.json"
+    ```
 
 ## Launch the Nemo Retriever pipeline with the nv-ingest-ms-runtime service
 
@@ -518,7 +538,7 @@ Retrieval pipeline branch.
 
 ```bash
 git clone https://gitlab-master.nvidia.com/drobison/devin-nemo-retrieval-microservice-private
-git checkout devin_nv_ingest_integration 
+git checkout devin_nv_ingest_integration
 ```
 
 ### Create a Nemo Retriever pipeline with the nv-ingest-ms-runtime service
@@ -620,5 +640,3 @@ curl "http://localhost:1984/v1/collections/${MM_COLLECTION_ID}/search?pretty=tru
   ]
 }
 ```
-
-

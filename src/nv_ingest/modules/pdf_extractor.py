@@ -22,24 +22,22 @@ import cudf
 import mrc
 import mrc.core.operators as ops
 import pandas as pd
-from morpheus.messages import ControlMessage
-from morpheus.messages import MessageMeta
-from morpheus.utils.module_utils import ModuleLoaderFactory
-from morpheus.utils.module_utils import register_module
+from morpheus.messages import ControlMessage, MessageMeta
+from morpheus.utils.module_utils import ModuleLoaderFactory, register_module
 
 from nv_ingest.modules import pdf
 from nv_ingest.schemas.pdf_extractor_schema import PDFExtractorSchema
-from nv_ingest.util.flow_control import filter_by_task
 from nv_ingest.util.exception_handlers.pdf import create_exception_tag
+from nv_ingest.util.flow_control import filter_by_task
 from nv_ingest.util.tracing import traceable
 
 logger = logging.getLogger(__name__)
 
 MODULE_NAME = "pdf_content_extractor"
 MODULE_NAMESPACE = "nv-ingest"
-PDFExtractorLoaderFactory = ModuleLoaderFactory(MODULE_NAME,
-                                                MODULE_NAMESPACE,
-                                                PDFExtractorSchema)
+PDFExtractorLoaderFactory = ModuleLoaderFactory(
+    MODULE_NAME, MODULE_NAMESPACE, PDFExtractorSchema
+)
 
 
 def _process_pdf_bytes(df, task_props):
@@ -55,7 +53,6 @@ def _process_pdf_bytes(df, task_props):
     """
 
     def decode_and_extract(base64_row, task_props, default="pymupdf"):
-
         # Base64 content to extract
         base64_content = base64_row["content"]
         # Row data to include in extraction
@@ -86,28 +83,28 @@ def _process_pdf_bytes(df, task_props):
             traceback.print_exc()
             log_error_message = f"Error loading extractor:{e}"
             logger.error(log_error_message)
-            logger.error(f"Failed on file:{source_id}")           
+            logger.error(f"Failed on file:{source_id}")
 
         # Propagate error back and tag message as failed.
         exception_tag = create_exception_tag(
-            error_message=log_error_message,
-            source_id=source_id)
+            error_message=log_error_message, source_id=source_id
+        )
 
         return exception_tag
 
     try:
         # Apply the helper function to each row in the 'content' column
-        _decode_and_extract = functools.partial(decode_and_extract, task_props=task_props)
+        _decode_and_extract = functools.partial(
+            decode_and_extract, task_props=task_props
+        )
         logger.debug(f"processing ({task_props.get('method', None)})")
         sr_extraction = df.apply(_decode_and_extract, axis=1)
         sr_extraction = sr_extraction.explode().dropna()
 
         if not sr_extraction.empty:
             extracted_df = pd.DataFrame(
-                sr_extraction.to_list(),
-                columns=[
-                    'document_type',
-                    'metadata'])
+                sr_extraction.to_list(), columns=["document_type", "metadata"]
+            )
         else:
             return pd.DataFrame(columns=["document_type", "metadata"])
 
@@ -122,12 +119,12 @@ def _process_pdf_bytes(df, task_props):
 
 @register_module(MODULE_NAME, MODULE_NAMESPACE)
 def _pdf_text_extractor(builder: mrc.Builder):
-    module_config = builder.get_current_module_config()
+    builder.get_current_module_config()
 
     @filter_by_task(["extract"])
     @traceable(MODULE_NAME)
     def process_task(ctrl_msg: ControlMessage) -> None:
-        task_props = ctrl_msg.remove_task('extract')
+        task_props = ctrl_msg.remove_task("extract")
 
         df = ctrl_msg.payload().copy_dataframe().to_pandas()
         try:
@@ -141,7 +138,10 @@ def _pdf_text_extractor(builder: mrc.Builder):
         return ctrl_msg
 
     # Create a node for processing incoming messages and submitting tasks
-    input_node = builder.make_node("pdf_content_extractor", ops.map(process_task),
-                                   ops.filter(lambda x: x is not None))
+    input_node = builder.make_node(
+        "pdf_content_extractor",
+        ops.map(process_task),
+        ops.filter(lambda x: x is not None),
+    )
     builder.register_module_input("input", input_node)
     builder.register_module_output("output", input_node)

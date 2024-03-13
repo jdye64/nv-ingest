@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from nv_ingest.schemas import validate_ingest_job
-from nv_ingest.schemas.ingest_job import (DocumentTypeEnum, TaskTypeEnum)
+from nv_ingest.schemas.ingest_job import DocumentTypeEnum, TaskTypeEnum
 
 
 # Helper Functions
@@ -12,7 +12,7 @@ def valid_job_payload():
         "content": ["sample content", b"binary content"],
         "source_name": ["source1", "source2"],
         "source_id": ["id1", 2],
-        "document_type": ["pdf", "text"]
+        "document_type": ["pdf", "text"],
     }
 
 
@@ -24,23 +24,17 @@ def valid_task_properties(task_type):
             "split_length": 10,
             "split_overlap": 0,
             "max_character_length": 100,
-            "sentence_window_size": None  # This is valid when not required
+            "sentence_window_size": None,  # This is valid when not required
         }
     elif task_type == TaskTypeEnum.extract:
-        return {
-            "document_type": "pdf",
-            "method": "OCR",
-            "params": {
-                "language": "en"
-            }
-        }
+        return {"document_type": "pdf", "method": "OCR", "params": {"language": "en"}}
     elif task_type == TaskTypeEnum.embed:
         return {
             "model": "e5-small-v2",
             "params": {
                 "embedding_type": "contextual",
                 "dimensions": 768,
-            }
+            },
         }
 
     return {}
@@ -55,8 +49,8 @@ def test_document_type_enum_case_insensitivity(doc_type):
         "task_properties": {
             "document_type": doc_type.upper(),  # Force upper case
             "method": "OCR",
-            "params": {"language": "en"}
-        }
+            "params": {"language": "en"},
+        },
     }
     job_data = {
         "job_payload": valid_job_payload(),
@@ -73,7 +67,7 @@ def test_task_type_enum_case_insensitivity(task_type):
     """Tests case insensitivity for task types."""
     task = {
         "type": task_type.upper(),  # Force upper case
-        "task_properties": valid_task_properties(task_type.lower())
+        "task_properties": valid_task_properties(task_type.lower()),
     }
     job_data = {
         "job_payload": valid_job_payload(),
@@ -85,7 +79,7 @@ def test_task_type_enum_case_insensitivity(task_type):
     assert validated_data.tasks[0].type == task_type.lower()
 
 
-def test_missing_required_fields():
+def test_missing_required_fields_empty():
     """Tests validation errors for missing required fields in the job data."""
     job_data = {}  # Empty dict to simulate missing data
     with pytest.raises(ValidationError):
@@ -111,8 +105,8 @@ def test_custom_validator_logic_for_sentence_window_size():
             "split_by": "word",  # Incorrect usage of sentence_window_size
             "split_length": 10,
             "split_overlap": 5,
-            "sentence_window_size": 5  # Should not be set when split_by is not 'sentence'
-        }
+            "sentence_window_size": 5,  # Should not be set when split_by is not 'sentence'
+        },
     }
     job_data = {
         "job_payload": valid_job_payload(),
@@ -121,7 +115,9 @@ def test_custom_validator_logic_for_sentence_window_size():
     }
     with pytest.raises(ValidationError) as exc_info:
         validate_ingest_job(job_data)
-    assert "sentence_window_size" in str(exc_info.value) and "must be 'sentence'" in str(exc_info.value)
+    assert "sentence_window_size" in str(
+        exc_info.value
+    ) and "must be 'sentence'" in str(exc_info.value)
 
 
 def test_multiple_task_types():
@@ -130,7 +126,7 @@ def test_multiple_task_types():
             "content": ["sample content"],
             "source_name": ["source1"],
             "source_id": ["id1"],
-            "document_type": ["pdf"]
+            "document_type": ["pdf"],
         },
         "job_id": "12345",
         "tasks": [
@@ -139,25 +135,19 @@ def test_multiple_task_types():
                 "task_properties": {
                     "split_by": "word",
                     "split_length": 100,
-                    "split_overlap": 0
-                }
+                    "split_overlap": 0,
+                },
             },
             {
                 "type": "extract",
                 "task_properties": {
                     "document_type": "pdf",
                     "method": "OCR",
-                    "params": {}
-                }
+                    "params": {},
+                },
             },
-            {
-                "type": "embed",
-                "task_properties": {
-                    "model": "bert",
-                    "params": {}
-                }
-            }
-        ]
+            {"type": "embed", "task_properties": {"model": "bert", "params": {}}},
+        ],
     }
 
     validated_data = validate_ingest_job(job_data)
@@ -174,10 +164,10 @@ def test_case_insensitivity():
                 "task_properties": {
                     "document_type": "PDF",
                     "method": "method1",
-                    "params": {}
-                }
+                    "params": {},
+                },
             }
-        ]
+        ],
     }
     validated_data = validate_ingest_job(job_data)
     assert validated_data.tasks[0].type == TaskTypeEnum.extract
@@ -193,11 +183,13 @@ def test_incorrect_property_types():
                 "type": "split",
                 "task_properties": {
                     "split_by": "word",
-                    "split_length": {'not an int': 123},  # Incorrect type (should be int)
-                    "split_overlap": 0
-                }
+                    "split_length": {
+                        "not an int": 123
+                    },  # Incorrect type (should be int)
+                    "split_overlap": 0,
+                },
             }
-        ]
+        ],
     }
     with pytest.raises(ValidationError):
         validate_ingest_job(job_data)
@@ -213,10 +205,10 @@ def test_missing_required_fields():
                 "task_properties": {
                     "split_by": "sentence",
                     # Missing split_length
-                    "split_overlap": 0
-                }
+                    "split_overlap": 0,
+                },
             }
-        ]
+        ],
     }
     with pytest.raises(ValidationError):
         validate_ingest_job(job_data)

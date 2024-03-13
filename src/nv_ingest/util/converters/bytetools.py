@@ -69,7 +69,7 @@ def bytesfrombase64(base64_input):
     return base64.b64decode(base64_input)
 
 
-def base64frombytes(bytes_input, encoding='utf-8'):
+def base64frombytes(bytes_input, encoding="utf-8"):
     """
     Function to bytes to base64 string.
 
@@ -84,4 +84,4 @@ def base64frombytes(bytes_input, encoding='utf-8'):
         base64 encoded string to store bytes in cuDF.
     """
 
-    return base64.b64encode(bytes_input).decode(encoding)   
+    return base64.b64encode(bytes_input).decode(encoding)

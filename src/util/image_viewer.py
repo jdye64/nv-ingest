@@ -9,7 +9,12 @@ from PIL import Image, ImageTk
 
 
 @click.command()
-@click.option('--file_path', type=str, help='Path to the JSON file containing the images.', required=True)
+@click.option(
+    "--file_path",
+    type=str,
+    help="Path to the JSON file containing the images.",
+    required=True,
+)
 def main(file_path):
     images = load_images_from_json(file_path)
     app = ImageViewerApp(images, window_size=(1024, 768), image_size=(256, 256))
@@ -22,7 +27,7 @@ def resize_image(image, size=(256, 256)):
 
 
 def load_images_from_json(json_file_path):
-    with open(json_file_path, 'r') as file:
+    with open(json_file_path, "r") as file:
         data = json.load(file)
 
     images = []
@@ -46,14 +51,20 @@ class ImageViewerApp:
         self.page = 0
         self.frames = []
 
-        self.canvas = tk.Canvas(self.root, scrollregion=(0, 0, window_size[0], window_size[1]))
-        self.scrollbar = ttk.Scrollbar(self.root, orient="vertical", command=self.canvas.yview)
+        self.canvas = tk.Canvas(
+            self.root, scrollregion=(0, 0, window_size[0], window_size[1])
+        )
+        self.scrollbar = ttk.Scrollbar(
+            self.root, orient="vertical", command=self.canvas.yview
+        )
         self.canvas.configure(yscrollcommand=self.scrollbar.set)
 
         self.scrollable_frame = ttk.Frame(self.canvas)
         self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
 
-        self.prev_button = ttk.Button(self.root, text="Previous", command=self.prev_page)
+        self.prev_button = ttk.Button(
+            self.root, text="Previous", command=self.prev_page
+        )
         self.prev_button.pack(side=tk.LEFT, padx=10, pady=10)
 
         self.next_button = ttk.Button(self.root, text="Next", command=self.next_page)

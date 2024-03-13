@@ -10,8 +10,17 @@ logger = logging.getLogger(__name__)
 
 
 class RedisClient:
-    def __init__(self, host, port, db=0, max_retries=0, max_backoff=32, connection_timeout=300, max_pool_size=128,
-                 use_ssl=False):
+    def __init__(
+        self,
+        host,
+        port,
+        db=0,
+        max_retries=0,
+        max_backoff=32,
+        connection_timeout=300,
+        max_pool_size=128,
+        use_ssl=False,
+    ):
         self.host = host
         self.port = port
         self.db = db
@@ -19,9 +28,13 @@ class RedisClient:
         self.max_backoff = max_backoff
         self.connection_timeout = connection_timeout
         self.use_ssl = use_ssl
-        self.pool = redis.ConnectionPool(host=self.host, port=self.port, db=self.db,
-                                         socket_connect_timeout=self.connection_timeout,
-                                         max_connections=max_pool_size)
+        self.pool = redis.ConnectionPool(
+            host=self.host,
+            port=self.port,
+            db=self.db,
+            socket_connect_timeout=self.connection_timeout,
+            max_connections=max_pool_size,
+        )
         self.client = redis.Redis(connection_pool=self.pool)
         self.retries = 0
 
@@ -52,13 +65,17 @@ class RedisClient:
                 logger.error(f"Redis error during fetch: {err}")
                 self.client = None  # Invalidate client to force reconnection
                 retries += 1
-                backoff_delay = min(2 ** retries, self.max_backoff)
+                backoff_delay = min(2**retries, self.max_backoff)
 
                 if self.max_retries == 0 or retries < self.max_retries:
-                    logger.error(f"Fetch attempt failed, retrying in {backoff_delay}s...")
+                    logger.error(
+                        f"Fetch attempt failed, retrying in {backoff_delay}s..."
+                    )
                     time.sleep(backoff_delay)
                 else:
-                    logger.error(f"Failed to fetch message from {task_queue} after {retries} attempts.")
+                    logger.error(
+                        f"Failed to fetch message from {task_queue} after {retries} attempts."
+                    )
                     raise
 
     def submit_message(self, queue_name, message):
@@ -78,18 +95,30 @@ class RedisClient:
                 logger.error(f"Failed to submit message, retrying... Error: {e}")
                 self.client = None  # Invalidate client to force reconnection
                 retries += 1
-                backoff_delay = min(2 ** retries, self.max_backoff)
+                backoff_delay = min(2**retries, self.max_backoff)
 
                 if self.max_retries == 0 or retries < self.max_retries:
-                    logger.error(f"Submit attempt failed, retrying in {backoff_delay}s...")
+                    logger.error(
+                        f"Submit attempt failed, retrying in {backoff_delay}s..."
+                    )
                     time.sleep(backoff_delay)
                 else:
-                    logger.error(f"Failed to submit message to {queue_name} after {retries} attempts.")
+                    logger.error(
+                        f"Failed to submit message to {queue_name} after {retries} attempts."
+                    )
                     raise
 
-    def submit_job(self, task_queue, job_payload, response_channel, response_channel_expiration, timeout=90):
+    def submit_job(
+        self,
+        task_queue,
+        job_payload,
+        response_channel,
+        response_channel_expiration,
+        timeout=90,
+    ):
         """
-        Submits a job to a specified task queue and waits for a response on a specified response channel.
+        Submits a job to a specified task queue and waits for a response on a specified response
+        channel.
 
         :param task_queue: The Redis queue to submit the job to.
         :param job_payload: The job payload, expected to be a dictionary.
@@ -100,10 +129,16 @@ class RedisClient:
         :raises RuntimeError: If no response is received within the timeout period.
         """
 
-        logger.debug(f"Submitting job to queue '{task_queue}' with response channel '{response_channel}'")
+        logger.debug(
+            f"Submitting job to queue '{task_queue}' with response channel '{response_channel}'"
+        )
         try:
             # Serialize the job payload to a JSON string if it's not already a string
-            serialized_job_payload = json.dumps(job_payload) if not isinstance(job_payload, str) else job_payload
+            serialized_job_payload = (
+                json.dumps(job_payload)
+                if not isinstance(job_payload, str)
+                else job_payload
+            )
 
             # Submit the job payload to the specified queue
             self.submit_message(task_queue, serialized_job_payload)
@@ -111,7 +146,10 @@ class RedisClient:
             # Set an expiration for the response channel to ensure cleanup
             self.get_client().expire(response_channel, response_channel_expiration)
 
-            logger.debug(f"Waiting for response on channel '{response_channel}' for up to {timeout} seconds...")
+            logger.debug(
+                f"Waiting for response on channel '{response_channel}' for up to {timeout} "
+                "seconds..."
+            )
             response = self.get_client().blpop(response_channel, timeout=timeout)
 
             if response:
@@ -124,14 +162,23 @@ class RedisClient:
                 self.get_client().delete(response_channel)
                 logger.error("No response received within timeout period")
                 raise RuntimeError("No response received within timeout period")
-        except Exception as err:
+        except Exception:
             traceback.print_exc()
             raise
 
 
 class RedisStreamsClient:
-    def __init__(self, host, port, db=0, max_retries=0, max_backoff=32, connection_timeout=300, max_pool_size=128,
-                 use_ssl=False):
+    def __init__(
+        self,
+        host,
+        port,
+        db=0,
+        max_retries=0,
+        max_backoff=32,
+        connection_timeout=300,
+        max_pool_size=128,
+        use_ssl=False,
+    ):
         self.host = host
         self.port = port
         self.db = db
@@ -139,9 +186,14 @@ class RedisStreamsClient:
         self.max_backoff = max_backoff
         self.connection_timeout = connection_timeout
         self.use_ssl = use_ssl
-        self.pool = redis.ConnectionPool(host=self.host, port=self.port, db=self.db,
-                                         socket_connect_timeout=self.connection_timeout, ssl=self.use_ssl,
-                                         max_connections=max_pool_size)
+        self.pool = redis.ConnectionPool(
+            host=self.host,
+            port=self.port,
+            db=self.db,
+            socket_connect_timeout=self.connection_timeout,
+            ssl=self.use_ssl,
+            max_connections=max_pool_size,
+        )
         self.client = redis.Redis(connection_pool=self.pool)
 
     def get_client(self):
@@ -160,11 +212,15 @@ class RedisStreamsClient:
         try:
             # Ensure the consumer group exists
             try:
-                self.get_client().xgroup_create(stream_name, consumer_group, id='0', ignore_existing=True)
+                self.get_client().xgroup_create(
+                    stream_name, consumer_group, id="0", ignore_existing=True
+                )
             except RedisError as e:
                 logger.error(f"Failed to create or confirm consumer group: {e}")
 
-            messages = self.get_client().xreadgroup(consumer_group, consumer, {stream_name: ">"}, count=1, block=block)
+            messages = self.get_client().xreadgroup(
+                consumer_group, consumer, {stream_name: ">"}, count=1, block=block
+            )
             if messages:
                 message_id, message_payload = messages[0][1][0]
                 return message_id, message_payload
@@ -191,7 +247,9 @@ class RedisStreamsClient:
 
     def create_consumer_group(self, stream_name, consumer_group):
         try:
-            self.get_client().xgroup_create(stream_name, consumer_group, id='$', mkstream=True)
+            self.get_client().xgroup_create(
+                stream_name, consumer_group, id="$", mkstream=True
+            )
         except RedisError as e:
             if not str(e).startswith("BUSYGROUP"):
                 logger.error(f"Failed to create consumer group: {e}")

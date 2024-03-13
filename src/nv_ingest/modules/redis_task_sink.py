@@ -16,8 +16,7 @@ import logging
 
 import mrc
 from morpheus.messages import ControlMessage
-from morpheus.utils.module_utils import ModuleLoaderFactory
-from morpheus.utils.module_utils import register_module
+from morpheus.utils.module_utils import ModuleLoaderFactory, register_module
 from mrc.core import operators as ops
 from pydantic import ValidationError
 from redis import RedisError
@@ -38,7 +37,9 @@ def _redis_task_sink(builder: mrc.Builder):
     try:
         validated_config = RedisTaskSinkSchema(**module_config)
     except ValidationError as e:
-        error_messages = '; '.join([f"{error['loc'][0]}: {error['msg']}" for error in e.errors()])
+        error_messages = "; ".join(
+            [f"{error['loc'][0]}: {error['msg']}" for error in e.errors()]
+        )
         log_error_message = f"Invalid Redis Task Sink configuration: {error_messages}"
         logger.error(log_error_message)
         raise ValueError(log_error_message)
@@ -51,20 +52,20 @@ def _redis_task_sink(builder: mrc.Builder):
         max_retries=validated_config.redis_client.max_retries,
         max_backoff=validated_config.redis_client.max_backoff,
         connection_timeout=validated_config.redis_client.connection_timeout,
-        use_ssl=validated_config.redis_client.use_ssl
+        use_ssl=validated_config.redis_client.use_ssl,
     )
 
     @traceable(MODULE_NAME)
     def process_and_forward(message: ControlMessage):
         with message.payload().mutable_dataframe() as mdf:
             logger.info(f"Received DataFrame with {len(mdf)} rows.")
-            df_json = mdf.to_json(orient='records')
+            df_json = mdf.to_json(orient="records")
 
         ret_val_json = {
             "data": df_json,
         }
 
-        do_trace_tagging = message.get_metadata('add_trace_tagging', True)
+        do_trace_tagging = message.get_metadata("add_trace_tagging", True)
         if do_trace_tagging:
             traces = {}
             meta_list = message.list_metadata()
@@ -73,7 +74,7 @@ def _redis_task_sink(builder: mrc.Builder):
                     traces[key] = message.get_metadata(key)
             ret_val_json["trace"] = traces
 
-        response_channel = message.get_metadata('response_channel')
+        response_channel = message.get_metadata("response_channel")
         try:
             redis_client.get_client().rpush(response_channel, json.dumps(ret_val_json))
             logger.info(f"Forwarded message to Redis channel '{response_channel}'.")
@@ -82,7 +83,9 @@ def _redis_task_sink(builder: mrc.Builder):
 
         return message
 
-    process_node = builder.make_node("process_and_forward", ops.map(process_and_forward))
+    process_node = builder.make_node(
+        "process_and_forward", ops.map(process_and_forward)
+    )
 
     # Register the final output of the module
     builder.register_module_input("input", process_node)

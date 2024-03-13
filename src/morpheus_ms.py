@@ -7,9 +7,9 @@ from pipeline import pipeline
 
 
 @click.command()
-@click.option('--batch-size', default=1, help='Pipeline batch size.')
-@click.option('--num-threads', default=1, help='Number of threads to use.')
-@click.option('--enable-monitor', is_flag=True, help='Enable monitoring.')
+@click.option("--batch-size", default=1, help="Pipeline batch size.")
+@click.option("--num-threads", default=1, help="Number of threads to use.")
+@click.option("--enable-monitor", is_flag=True, help="Enable monitoring.")
 def run_pipeline(batch_size, num_threads, enable_monitor):
     """Runs the pipeline with the provided configuration."""
     logging.basicConfig(level=logging.INFO)
@@ -23,5 +23,5 @@ def run_pipeline(batch_size, num_threads, enable_monitor):
     click.echo(f"Total time elapsed: {total_elapsed:.2f} seconds")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     run_pipeline()

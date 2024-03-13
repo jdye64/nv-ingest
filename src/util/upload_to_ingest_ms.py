@@ -9,24 +9,22 @@ import time
 import traceback
 import uuid
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
-from concurrent.futures import as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from statistics import mean, median
 
 import chardet
 import click
-import redis
 from tqdm import tqdm
 
-from nv_ingest.schemas.ingest_job import validate_ingest_job, DocumentTypeEnum
+from nv_ingest.schemas.ingest_job import DocumentTypeEnum, validate_ingest_job
 from nv_ingest.util.redis import RedisClient
 
 logger = logging.getLogger(__name__)
 
-UNSTRUCTURED_API_KEY = os.environ.get('UNSTRUCTURED_API_KEY', None)
-UNSTRUCTURED_URL = os.environ.get('UNSTRUCTURED_URL', "http://localhost:8003")
+UNSTRUCTURED_API_KEY = os.environ.get("UNSTRUCTURED_API_KEY", None)
+UNSTRUCTURED_URL = os.environ.get("UNSTRUCTURED_URL", "http://localhost:8003")
 LLAMA_CLOUD_API_KEY = os.environ.get("LLAMA_CLOUD_API_KEY", None)
-EXTRACTABLE_FILE_TYPES = ['pdf']
+EXTRACTABLE_FILE_TYPES = ["pdf"]
 
 
 def configure_logging(level_name):
@@ -42,12 +40,14 @@ def configure_logging(level_name):
     if not isinstance(numeric_level, int):
         raise ValueError(f"Invalid log level: {level_name}")
 
-    console_handler = logging.StreamHandler(sys.stdout)
-    logging.basicConfig(level=numeric_level, format='%(asctime)s - %(levelname)s - %(message)s')
+    logging.StreamHandler(sys.stdout)
+    logging.basicConfig(
+        level=numeric_level, format="%(asctime)s - %(levelname)s - %(message)s"
+    )
     logger.setLevel(numeric_level)
 
 
-def setup_global_executor(n_workers, concurrency_mode='thread', use_dask=False):
+def setup_global_executor(n_workers, concurrency_mode="thread", use_dask=False):
     """
     Initializes the global ThreadPoolExecutor with the specified number of worker threads.
 
@@ -60,15 +60,21 @@ def setup_global_executor(n_workers, concurrency_mode='thread', use_dask=False):
 
         if n_workers == 0:
             n_workers = None  # Use default
-        if concurrency_mode == 'thread':
-            executor = Client(n_workers=n_workers, threads_per_worker=1, processes=False)
+        if concurrency_mode == "thread":
+            executor = Client(
+                n_workers=n_workers, threads_per_worker=1, processes=False
+            )
         else:
             executor = Client(n_workers=n_workers, threads_per_worker=1)
         logger.info(f"Global dask client initialized with {n_workers} workers.")
     else:
-        executor_class = ThreadPoolExecutor if concurrency_mode == 'thread' else ProcessPoolExecutor
+        executor_class = (
+            ThreadPoolExecutor if concurrency_mode == "thread" else ProcessPoolExecutor
+        )
         executor = executor_class(max_workers=n_workers)
-        logger.info(f"Global {str(executor_class)} initialized with {n_workers} workers.")
+        logger.info(
+            f"Global {str(executor_class)} initialized with {n_workers} workers."
+        )
 
     return executor
 
@@ -98,20 +104,24 @@ def build_extraction_tasks(methods, file_type):
 
     Notes
     -----
-    - The function adapts to different extraction methods by applying common and method-specific properties.
-    - It returns an empty list if no valid methods are specified or if the file type does not require extraction.
+    - The function adapts to different extraction methods by applying common and
+      method-specific properties.
+    - It returns an empty list if no valid methods are specified or if the file type
+      does not require extraction.
     """
 
     tasks = []
     if (not methods) or (file_type not in EXTRACTABLE_FILE_TYPES):
-        logger.debug("No extraction tasks specified or file type does not require extraction.")
+        logger.debug(
+            "No extraction tasks specified or file type does not require extraction."
+        )
         return tasks
 
     common_properties = {
         "extract_text": True,
         "extract_images": True,
         "extract_tables": False,
-        "text_depth": "document"
+        "text_depth": "document",
     }
 
     # Define default properties for unstructured tasks
@@ -129,18 +139,18 @@ def build_extraction_tasks(methods, file_type):
     for method in methods:
         task_props = common_properties.copy()
         task = {
-            'type': 'extract',
+            "type": "extract",
             "task_properties": {
-                'method': method,
-                'document_type': file_type,
-                'params': task_props
-            }
+                "method": method,
+                "document_type": file_type,
+                "params": task_props,
+            },
         }
 
-        if method in ['unstructured-local', 'unstructured-service']:
-            task['task_properties']['params'].update(unstructured_properties)
+        if method in ["unstructured-local", "unstructured-service"]:
+            task["task_properties"]["params"].update(unstructured_properties)
         elif method in ["llama_parse"]:
-            task['task_properties']['params'].update(llama_parse_properties)
+            task["task_properties"]["params"].update(llama_parse_properties)
         else:
             pass  # Others
 
@@ -166,41 +176,50 @@ def extract_file_content(path):
     Returns
     -------
     str
-        The extracted content of the file. For PDFs, the content is base64 encoded; for text files,
-        it is returned in plain text, using the detected encoding.
+        The extracted content of the file. For PDFs, the content is base64 encoded;
+        for text files, it is returned in plain text, using the detected encoding.
 
     Raises
     ------
     ValueError
-        If the file type is unsupported, indicating that the function cannot process this type of file.
+        If the file type is unsupported, indicating that the function cannot process
+        this type of file.
 
     Notes
     -----
-    - This function is designed to handle PDF and text files but can be extended to support additional file types.
+    - This function is designed to handle PDF and text files but can be extended to support
+      additional file types.
     - It uses a simple heuristic for encoding detection in text files to maximize compatibility.
     """
 
-    document_type = os.path.basename(path).split('.')[-1].lower()
-    if document_type not in DocumentTypeEnum.__members__:  # Check if file type is supported
+    document_type = os.path.basename(path).split(".")[-1].lower()
+    if (
+        document_type not in DocumentTypeEnum.__members__
+    ):  # Check if file type is supported
         raise ValueError(f"Unsupported file type: {document_type}")
 
-    if (document_type != DocumentTypeEnum.txt.name.lower()):
+    if document_type != DocumentTypeEnum.txt.name.lower():
         # For PDF files, read as binary and encode in base64
-        with open(path, 'rb') as file:
-            encoding = 'utf-8'
+        with open(path, "rb") as file:
+            encoding = "utf-8"
             content = base64.b64encode(file.read()).decode(encoding)
-            logger.debug(f"Encoded {document_type} content: {content[:100]}... (truncated)")
+            logger.debug(
+                f"Encoded {document_type} content: {content[:100]}... (truncated)"
+            )
     else:
         # Detect encoding for non-PDF files
-        with open(path, 'rb') as file:
+        with open(path, "rb") as file:
             raw_data = file.read(50000)
             result = chardet.detect(raw_data)
-            encoding = result['encoding']
+            encoding = result["encoding"]
 
         # Re-open the file with the detected encoding
-        with open(path, 'r', encoding=encoding) as file:
+        with open(path, "r", encoding=encoding) as file:
             content = file.read()
-            logger.debug(f"Read plain text content with detected encoding ({encoding}): {content[:100]}... (truncated)")
+            logger.debug(
+                f"Read plain text content with detected encoding ({encoding}): "
+                f"{content[:100]}... (truncated)"
+            )
 
     logger.debug(f"Content length: {len(content)}")
     return content, DocumentTypeEnum[document_type]
@@ -210,9 +229,10 @@ def process_file(file_path):
     """
     Synchronously processes a single file, extracting its content and collecting file details.
 
-    This function serves as a high-level interface for file processing, invoking content extraction
-    and aggregating the results along with file metadata. It is designed to work within a larger
-    processing pipeline, providing necessary data for subsequent tasks or storage.
+    This function serves as a high-level interface for file processing, invoking content
+    extraction and aggregating the results along with file metadata. It is designed to work
+    within a larger processing pipeline, providing necessary data for subsequent tasks or
+    storage.
 
     Parameters
     ----------
@@ -222,26 +242,35 @@ def process_file(file_path):
     Returns
     -------
     dict
-        A dictionary containing details about the processed file, including its name, a unique identifier,
-        the extracted content, and the document type.
+        A dictionary containing details about the processed file, including its name, a unique
+        identifier, the extracted content, and the document type.
 
     Raises
     ------
     Exception
-        Propagates any exceptions encountered during the file processing, signaling issues with content extraction
-        or file handling.
+        Propagates any exceptions encountered during the file processing, signaling issues with
+        content extraction or file handling.
 
     Notes
     -----
-    - The function directly utilizes `extract_file_content` for content extraction and performs basic error handling.
-    - It constructs a simple metadata object that can be utilized for further processing or logging.
+    - The function directly utilizes `extract_file_content` for content extraction and performs
+      basic error handling.
+    - It constructs a simple metadata object that can be utilized for further processing or
+      logging.
     """
 
     try:
         file_name = os.path.basename(file_path)
-        content, document_type = extract_file_content(file_path)  # Call the synchronous function directly
+        content, document_type = extract_file_content(
+            file_path
+        )  # Call the synchronous function directly
 
-        return {"source_name": file_name, "source_id": file_name, "content": content, "document_type": document_type}
+        return {
+            "source_name": file_name,
+            "source_id": file_name,
+            "content": content,
+            "document_type": document_type,
+        }
     except Exception as e:
         traceback.print_exc()
         logger.error(f"Error processing file {file_path}: {e}")
@@ -276,7 +305,6 @@ def load_data_from_path(path):
     packaging the loaded data along with metadata such as file name and document type.
     """
 
-    tasks = []
     result = {"source_name": [], "source_id": [], "content": [], "document_type": []}
 
     if not os.path.exists(path):
@@ -311,11 +339,15 @@ def debug_print_job_payload(job_payload):
     import copy
 
     payload = copy.deepcopy(job_payload)
-    payload['job_payload']['content'][0] = payload['job_payload']['content'][0][:20] + '...'
+    payload["job_payload"]["content"][0] = (
+        payload["job_payload"]["content"][0][:20] + "..."
+    )
     logger.info(json.dumps(payload, indent=2))
 
 
-def submit_job_and_wait_for_response(redis_client, job_data, tasks, task_queue, timeout=90):
+def submit_job_and_wait_for_response(
+    redis_client, job_data, tasks, task_queue, timeout=90
+):
     """
     Submits a job consisting of multiple tasks to the Redis task queue and waits for a response.
 
@@ -340,12 +372,14 @@ def submit_job_and_wait_for_response(redis_client, job_data, tasks, task_queue, 
     Raises
     ------
     RuntimeError
-        If no response is received within the specified timeout period, indicating a potential issue with job processing or response delivery.
+        If no response is received within the specified timeout period, indicating a potential
+        issue with job processing or response delivery.
 
     Notes
     -----
     This function constructs a job descriptor, submits it to the specified Redis task queue,
-    and waits for a response within a configurable timeout. It raises an exception if no response is received.
+    and waits for a response within a configurable timeout. It raises an exception if no response
+    is received.
     """
 
     job_id = str(uuid.uuid4())
@@ -353,23 +387,27 @@ def submit_job_and_wait_for_response(redis_client, job_data, tasks, task_queue, 
         "job_payload": job_data,
         "job_id": job_id,
         "tasks": tasks,
-        "tracing_options": {
-            "trace": True,
-            "ts_send": time.time_ns()
-        }
+        "tracing_options": {"trace": True, "ts_send": time.time_ns()},
     }
 
     # debug_print_job_payload(job_desc)
     validate_ingest_job(job_desc)
 
     response_channel = f"response_{job_id}"
-    response_channel_expiration = int(timeout * 1.05)  # Set expiration to timeout+grace period
+    response_channel_expiration = int(
+        timeout * 1.05
+    )  # Set expiration to timeout+grace period
 
     # Use submit_job method of RedisClient
     try:
-        response = redis_client.submit_job(task_queue, job_desc, response_channel, response_channel_expiration,
-                                           timeout=timeout)
-    except:
+        response = redis_client.submit_job(
+            task_queue,
+            job_desc,
+            response_channel,
+            response_channel_expiration,
+            timeout=timeout,
+        )
+    except Exception:
         traceback.print_exc()
         raise
 
@@ -396,18 +434,34 @@ def generate_matching_files(file_sources):
     Notes
     -----
     This function utilizes glob pattern matching to find files that match the specified patterns.
-    It yields each matching file path, allowing for efficient processing of potentially large sets of files.
+    It yields each matching file path, allowing for efficient processing of potentially large
+    sets of files.
     """
 
-    files = [file_path for pattern in file_sources for file_path in glob.glob(pattern, recursive=True) if
-             os.path.isfile(file_path)]
+    files = [
+        file_path
+        for pattern in file_sources
+        for file_path in glob.glob(pattern, recursive=True)
+        if os.path.isfile(file_path)
+    ]
     for file_path in files:
         yield file_path
 
 
-def process_source(source, id, redis_host, redis_port, task_queue, extract, extract_method, split, split_params):
+def process_source(
+    source,
+    id,
+    redis_host,
+    redis_port,
+    task_queue,
+    extract,
+    extract_method,
+    split,
+    split_params,
+):
     """
-    Processes a single source file according to the specified parameters, submitting the processing tasks to Redis.
+    Processes a single source file according to the specified parameters, submitting the
+    processing tasks to Redis.
 
     Parameters
     ----------
@@ -436,16 +490,28 @@ def process_source(source, id, redis_host, redis_port, task_queue, extract, extr
     Notes
     -----
     This function is intended as a higher-level abstraction for processing source files,
-    relying on lower-level processing functions. It should be implemented to fit the specific needs of the application.
+    relying on lower-level processing functions. It should be implemented to fit the specific
+    needs of the application.
     """
     redis_client = RedisClient(host=redis_host, port=redis_port)
-    return _process_source(source, id, redis_client, task_queue, extract, extract_method, split, split_params)
+    return _process_source(
+        source,
+        id,
+        redis_client,
+        task_queue,
+        extract,
+        extract_method,
+        split,
+        split_params,
+    )
 
 
-def _process_source(source, redis_client, task_queue, extract, extract_method, split, split_params):
+def _process_source(
+    source, redis_client, task_queue, extract, extract_method, split, split_params
+):
     """
-    Processes a single source file by applying specified tasks such as splitting and extracting content,
-    and submits these tasks along with the job data to a specified Redis task queue.
+    Processes a single source file by applying specified tasks such as splitting and extracting
+    content, and submits these tasks along with the job data to a specified Redis task queue.
 
     Parameters
     ----------
@@ -465,8 +531,8 @@ def _process_source(source, redis_client, task_queue, extract, extract_method, s
     Returns
     -------
     tuple
-        A tuple containing the response from the task submission and the size of the data processed from the source file
-        in bytes.
+        A tuple containing the response from the task submission and the size of the data
+        processed from the source file in bytes.
 
     Raises
     ------
@@ -476,13 +542,10 @@ def _process_source(source, redis_client, task_queue, extract, extract_method, s
 
     tasks = []
     if split:
-        tasks.append({
-            "type": "split",
-            "task_properties": split_params
-        })
+        tasks.append({"type": "split", "task_properties": split_params})
 
     if extract:
-        file_type = os.path.basename(source).split('.')[-1].lower()
+        file_type = os.path.basename(source).split(".")[-1].lower()
         extract_tasks = build_extraction_tasks(extract_method, file_type)
         tasks.extend(extract_tasks)
 
@@ -490,10 +553,12 @@ def _process_source(source, redis_client, task_queue, extract, extract_method, s
 
     try:
         job_data = load_data_from_path(source)
-        response = submit_job_and_wait_for_response(redis_client, job_data, tasks, task_queue, timeout=300)
+        response = submit_job_and_wait_for_response(
+            redis_client, job_data, tasks, task_queue, timeout=300
+        )
 
         return response, data_size
-    except Exception as e:
+    except Exception:
         return None, 0
 
 
@@ -540,12 +605,16 @@ def submit_tasks(executor, matching_files, processing_function, processing_args)
         A dictionary mapping futures to source file paths.
     """
 
-    return {executor.submit(processing_function, source, *processing_args): source for source in matching_files}
+    return {
+        executor.submit(processing_function, source, *processing_args): source
+        for source in matching_files
+    }
 
 
 def process_tasks(future_to_file, output_directory, progress_bar):
     """
-    Processes submitted tasks, updates the progress bar, and accumulates processed data and stage times.
+    Processes submitted tasks, updates the progress bar, and accumulates processed data and stage
+    times.
 
     Parameters
     ----------
@@ -557,7 +626,8 @@ def process_tasks(future_to_file, output_directory, progress_bar):
     Returns
     -------
     tuple
-        A tuple containing a dictionary of stage elapsed times and the total data processed in bytes.
+        A tuple containing a dictionary of stage elapsed times and the total data processed in
+        bytes.
     """
 
     stage_elapsed_times = defaultdict(list)
@@ -573,25 +643,27 @@ def process_tasks(future_to_file, output_directory, progress_bar):
                 continue
 
             doc_map = {}
-            if (output_directory):
-                response_data = json.loads(response['data'])
-                doc_meta = response_data[0]['metadata']
-                source_meta = doc_meta['source_metadata']
-                doc_name = source_meta['source_id']
+            if output_directory:
+                response_data = json.loads(response["data"])
+                doc_meta = response_data[0]["metadata"]
+                source_meta = doc_meta["source_metadata"]
+                doc_name = source_meta["source_id"]
                 output_name = f"{doc_name}.metadata.json"
 
                 for document in response_data:
-                    doc_type = document['document_type']
+                    doc_type = document["document_type"]
 
-                    if (doc_type not in doc_map):
+                    if doc_type not in doc_map:
                         doc_map[doc_type] = []
                     doc_map[doc_type].append(document)
 
                 for doc_type, output_names in doc_map.items():
-                    if (not os.path.exists(os.path.join(output_directory, doc_type))):
+                    if not os.path.exists(os.path.join(output_directory, doc_type)):
                         os.makedirs(os.path.join(output_directory, doc_type))
 
-                    with open(os.path.join(output_directory, doc_type, output_name), 'w') as f:
+                    with open(
+                        os.path.join(output_directory, doc_type, output_name), "w"
+                    ) as f:
                         f.write(json.dumps(doc_map[doc_type], indent=2))
 
             total_data_processed += data_processed
@@ -620,24 +692,26 @@ def process_response(response, stage_elapsed_times):
 
     Notes
     -----
-    The function iterates over trace data in the response, identifying entry and exit times for each stage,
-    and calculates the elapsed time which is then appended to the respective stage in `stage_elapsed_times`.
+    The function iterates over trace data in the response, identifying entry and exit times for
+    each stage, and calculates the elapsed time which is then appended to the respective stage in
+    `stage_elapsed_times`.
     """
 
-    trace_data = response.get('trace', {})
+    trace_data = response.get("trace", {})
     for key, entry_time in trace_data.items():
-        if 'entry' in key:
-            exit_key = key.replace('entry', 'exit')
+        if "entry" in key:
+            exit_key = key.replace("entry", "exit")
             exit_time = trace_data.get(exit_key)
             if exit_time:
-                stage_name = key.split('::')[2]
+                stage_name = key.split("::")[2]
                 elapsed_time = exit_time - entry_time
                 stage_elapsed_times[stage_name].append(elapsed_time)
 
 
 def report_stage_statistics(stage_elapsed_times, total_trace_elapsed, abs_elapsed):
     """
-    Reports the statistics for each processing stage, including average, median, and total time spent.
+    Reports the statistics for each processing stage, including average, median, and total time
+    spent.
 
     Parameters
     ----------
@@ -658,17 +732,28 @@ def report_stage_statistics(stage_elapsed_times, total_trace_elapsed, abs_elapse
         avg_time = mean(times)
         med_time = median(times)
         total_stage_time = sum(times)
-        percent_of_total = (total_stage_time / total_trace_elapsed) * 100 if total_trace_elapsed > 0 else 0
+        percent_of_total = (
+            (total_stage_time / total_trace_elapsed) * 100
+            if total_trace_elapsed > 0
+            else 0
+        )
         logger.info(
-            f"{stage}: Avg: {avg_time / 1e6:.2f} ms, Median: {med_time / 1e6:.2f} ms, Total Time: {total_stage_time / 1e6:.2f} ms, Total % of Trace Computation: {percent_of_total:.2f}%")
+            f"{stage}: Avg: {avg_time / 1e6:.2f} ms, Median: {med_time / 1e6:.2f} ms, "
+            f"Total Time: {total_stage_time / 1e6:.2f} ms, "
+            f"Total % of Trace Computation: {percent_of_total:.2f}%"
+        )
 
     unresolved_time = abs_elapsed - total_trace_elapsed
     if unresolved_time > 0:
         percent_unresolved = (unresolved_time / abs_elapsed) * 100
         logger.info(
-            f"Unresolved time: {unresolved_time / 1e6:.2f} ms, Percent of Total Elapsed: {percent_unresolved:.2f}%")
+            f"Unresolved time: {unresolved_time / 1e6:.2f} ms, "
+            f"Percent of Total Elapsed: {percent_unresolved:.2f}%"
+        )
     elif unresolved_time <= 0:
-        logger.info("No unresolved time detected. Trace times account for the entire elapsed duration.")
+        logger.info(
+            "No unresolved time detected. Trace times account for the entire elapsed duration."
+        )
 
 
 def report_overall_speed(total_data_processed, start_time_ns, total_files):
@@ -687,13 +772,17 @@ def report_overall_speed(total_data_processed, start_time_ns, total_files):
     Notes
     -----
     This function calculates the total elapsed time, the total data size in megabytes,
-    and the overall processing speed in MB/sec. It logs the total files processed, total data processed,
-    and the overall processing speed.
+    and the overall processing speed in MB/sec. It logs the total files processed, total data
+    processed, and the overall processing speed.
     """
 
     total_elapsed_time_ns = time.time_ns() - start_time_ns
-    total_elapsed_time_s = total_elapsed_time_ns / 1_000_000_000  # Convert nanoseconds to seconds
-    total_data_size_mb = total_data_processed / (1024 * 1024)  # Convert bytes to megabytes
+    total_elapsed_time_s = (
+        total_elapsed_time_ns / 1_000_000_000
+    )  # Convert nanoseconds to seconds
+    total_data_size_mb = total_data_processed / (
+        1024 * 1024
+    )  # Convert bytes to megabytes
     overall_speed = total_data_size_mb / total_elapsed_time_s  # MB/sec
 
     logger.info(f"Processed {total_files} files in {total_elapsed_time_s:.2f} seconds.")
@@ -701,7 +790,9 @@ def report_overall_speed(total_data_processed, start_time_ns, total_files):
     logger.info(f"Overall processing speed: {overall_speed:.2f} MB/sec")
 
 
-def report_statistics(start_time_ns, stage_elapsed_times, total_data_processed, total_files):
+def report_statistics(
+    start_time_ns, stage_elapsed_times, total_data_processed, total_files
+):
     """
     Aggregates and reports statistics for the entire processing session.
 
@@ -719,8 +810,8 @@ def report_statistics(start_time_ns, stage_elapsed_times, total_data_processed, 
     Notes
     -----
     This function first calculates the absolute elapsed time and total trace elapsed time.
-    It then delegates to `report_stage_statistics` and `report_overall_speed` to log detailed statistics
-    about processing stages and overall processing metrics, respectively.
+    It then delegates to `report_stage_statistics` and `report_overall_speed` to log detailed
+    statistics about processing stages and overall processing metrics, respectively.
     """
 
     abs_elapsed = time.time_ns() - start_time_ns
@@ -729,15 +820,24 @@ def report_statistics(start_time_ns, stage_elapsed_times, total_data_processed, 
     report_overall_speed(total_data_processed, start_time_ns, total_files)
 
 
-def determine_processing_function(redis_host, redis_port, task_queue, extract, extract_method, split,
-                                  concurrency_options, split_params):
+def determine_processing_function(
+    redis_host,
+    redis_port,
+    task_queue,
+    extract,
+    extract_method,
+    split,
+    concurrency_options,
+    split_params,
+):
     """
-    Determines the appropriate processing function and its arguments based on the given parameters.
+    Determines the appropriate processing function and its arguments based on the given
+    parameters.
 
-    This function decides between using a direct processing approach or utilizing a distributed processing
-    framework based on the provided concurrency options. It configures the processing function and its
-    arguments accordingly, ensuring that each source file is processed using the specified extraction
-    methods and splitting strategy.
+    This function decides between using a direct processing approach or utilizing a distributed
+    processing framework based on the provided concurrency options. It configures the processing
+    function and its arguments accordingly, ensuring that each source file is processed using the
+    specified extraction methods and splitting strategy.
 
     Parameters
     ----------
@@ -748,28 +848,41 @@ def determine_processing_function(redis_host, redis_port, task_queue, extract, e
     task_queue : str
         The name of the Redis task queue where processing tasks should be submitted.
     extract : bool
-        A boolean flag indicating whether content extraction tasks should be performed on the source files.
+        A boolean flag indicating whether content extraction tasks should be performed on the
+        source files.
     extract_method : list of str
         A list specifying the methods to use for content extraction.
     split : bool
-        A boolean flag indicating whether the content of source files should be split according to certain criteria.
+        A boolean flag indicating whether the content of source files should be split according
+        to certain criteria.
     concurrency_options : dict
-        A dictionary containing options that dictate the concurrency behavior. It includes keys such as
-        'use_dask' to specify whether to use Dask for distributed processing and 'concurrency_mode' to
-        specify the mode of concurrency (e.g., process-based or thread-based).
+        A dictionary containing options that dictate the concurrency behavior. It includes keys
+        such as 'use_dask' to specify whether to use Dask for distributed processing and
+        'concurrency_mode' to specify the mode of concurrency (e.g., process-based or
+        thread-based).
 
     Returns
     -------
     tuple
-        A tuple where the first element is the selected processing function (callable) and the second element
-        is a tuple containing the arguments to be passed to the processing function.
+        A tuple where the first element is the selected processing function (callable) and the
+        second element is a tuple containing the arguments to be passed to the processing
+        function.
     """
     use_dask = concurrency_options["use_dask"]
     if use_dask or concurrency_options.get("concurrency_mode") == "process":
         processing_function = process_source
-        args = (redis_host, redis_port, task_queue, extract, extract_method, split, split_params)
+        args = (
+            redis_host,
+            redis_port,
+            task_queue,
+            extract,
+            extract_method,
+            split,
+            split_params,
+        )
     else:
-        # Initialize the RedisClient only if not using Dask or when using thread-based concurrency
+        # Initialize the RedisClient only if not using Dask or when using thread-based
+        # concurrency
         redis_client = RedisClient(host=redis_host, port=redis_port)
         processing_function = _process_source
         args = (redis_client, task_queue, extract, extract_method, split, split_params)
@@ -777,8 +890,18 @@ def determine_processing_function(redis_host, redis_port, task_queue, extract, e
     return processing_function, args
 
 
-def main(file_source, redis_host, redis_port, extract, extract_method, split, dry_run, concurrency_options,
-         split_params, output_directory):
+def main(
+    file_source,
+    redis_host,
+    redis_port,
+    extract,
+    extract_method,
+    split,
+    dry_run,
+    concurrency_options,
+    split_params,
+    output_directory,
+):
     """
     Processes files from specified sources using given extraction and splitting methods,
     and performs actions based on the specified options.
@@ -799,76 +922,181 @@ def main(file_source, redis_host, redis_port, extract, extract_method, split, dr
         Flag indicating whether to perform splitting tasks.
     dry_run : bool
         # Not currently implemented
-        Flag indicating whether to perform a dry-run, which prints the steps without executing them.
+        Flag indicating whether to perform a dry-run, which prints the steps without executing
+        them.
 
     Side Effects
     ------------
-    - Files specified in `file_source` are processed according to the `extract` and `split` parameters.
+    - Files specified in `file_source` are processed according to the `extract` and `split`
+      parameters.
     - Progress of file processing is displayed in a tqdm progress bar.
-    - Logs the total number of files processed, total data processed, and overall processing speed upon completion.
+    - Logs the total number of files processed, total data processed, and overall processing
+      speed upon completion.
 
     Notes
     -----
     - This function initializes a Redis client and a ThreadPoolExecutor for concurrent processing.
-    - The function calculates and logs the total data processed and the overall processing speed in megabytes per second.
+    - The function calculates and logs the total data processed and the overall processing speed
+      in megabytes per second.
     """
 
     task_queue = os.environ.get("TASK_QUEUE_NAME", "morpheus_task_queue")
     start_time_ns = time.time_ns()
     matching_files = match_and_validate_files(file_source)
-    if matching_files is None: return
+    if matching_files is None:
+        return
 
     progress_bar = tqdm(total=len(matching_files), desc="Processing files", unit="file")
 
     with setup_global_executor(**concurrency_options) as executor:
         processing_function, processing_args = determine_processing_function(
-            redis_host, redis_port, task_queue, extract, extract_method, split, concurrency_options, split_params
+            redis_host,
+            redis_port,
+            task_queue,
+            extract,
+            extract_method,
+            split,
+            concurrency_options,
+            split_params,
         )
-        future_to_file = submit_tasks(executor, matching_files, processing_function, processing_args)
-        stage_elapsed_times, total_data_processed = process_tasks(future_to_file, output_directory, progress_bar)
+        future_to_file = submit_tasks(
+            executor, matching_files, processing_function, processing_args
+        )
+        stage_elapsed_times, total_data_processed = process_tasks(
+            future_to_file, output_directory, progress_bar
+        )
 
     progress_bar.close()
-    report_statistics(start_time_ns, stage_elapsed_times, total_data_processed, len(matching_files))
+    report_statistics(
+        start_time_ns, stage_elapsed_times, total_data_processed, len(matching_files)
+    )
 
 
 @click.command()
-@click.option('--file_source', multiple=True, default=[], type=str,
-              help='List of file sources/paths to be processed.')
-@click.option("--dataset_json", type=str, help="Path to a JSON file containing a list of file sources.")
-@click.option('--redis_host', default='localhost', help="DNS name for Redis.")
-@click.option('--redis_port', default='6379', help="Port for Redis.", type=int)
-@click.option('--extract', is_flag=True, help="Enable PDF text extraction task.")
-@click.option('--split', is_flag=True, help="Enable text splitting task.")
-@click.option('--extract_method', default=['pymupdf'],
-              type=click.Choice(
-                  ['pymupdf', 'haystack', 'tika', 'unstructured_io', 'unstructured_service', 'llama_parse'],
-                  case_sensitive=False), multiple=True,
-              help='Specifies the type(s) of extraction to use.')
-@click.option('--split_by', default='word', type=click.Choice(['word', 'sentence', 'passage'], case_sensitive=False),
-              help="Specifies the unit for splitting text: word, sentence, or passage.")
-@click.option('--split_length', default=250, type=int, help="Specifies the length of each split segment.")
-@click.option('--split_overlap', default=30, type=int, help="Specifies the overlap between consecutive split segments.")
-@click.option('--split_max_character_length', default=1900, type=int,
-              help="Specifies the maximum character length of a split segment.")
-@click.option('--split_sentence_window_size', default=0, type=int,
-              help="Specifies the sentence window size for splitting, if applicable.")
-@click.option('--use_dask', is_flag=True, help="Use dask for concurrency")
-@click.option('--n_workers', default=5, help="Number of workers for the ThreadPoolExecutor or dask.", type=int)
-@click.option('--log_level', default='INFO',
-              help="Sets the logging level (e.g., DEBUG, INFO, WARNING, ERROR, CRITICAL).")
-@click.option('--concurrency_mode', default='thread', type=click.Choice(['thread', 'process'], case_sensitive=False),
-              help="Choose 'thread' for ThreadPoolExecutor or 'process' for ProcessPoolExecutor.")
-@click.option('--dry-run', is_flag=True, help="Prints the steps to be executed without performing them.")
-@click.option('--output_directory', default=None,
-              type=click.Path(file_okay=False, dir_okay=True, writable=True, resolve_path=True, allow_dash=True),
-              help="Directory where output files will be saved. If provided, must exist and be writable.")
-def cli(file_source, dataset_json, redis_host, redis_port, extract, extract_method, split, split_by, split_length,
-        split_overlap, split_max_character_length, split_sentence_window_size, n_workers, log_level, concurrency_mode,
-        use_dask, dry_run, output_directory):
+@click.option(
+    "--file_source",
+    multiple=True,
+    default=[],
+    type=str,
+    help="List of file sources/paths to be processed.",
+)
+@click.option(
+    "--dataset_json",
+    type=str,
+    help="Path to a JSON file containing a list of file sources.",
+)
+@click.option("--redis_host", default="localhost", help="DNS name for Redis.")
+@click.option("--redis_port", default="6379", help="Port for Redis.", type=int)
+@click.option("--extract", is_flag=True, help="Enable PDF text extraction task.")
+@click.option("--split", is_flag=True, help="Enable text splitting task.")
+@click.option(
+    "--extract_method",
+    default=["pymupdf"],
+    type=click.Choice(
+        [
+            "pymupdf",
+            "haystack",
+            "tika",
+            "unstructured_io",
+            "unstructured_service",
+            "llama_parse",
+        ],
+        case_sensitive=False,
+    ),
+    multiple=True,
+    help="Specifies the type(s) of extraction to use.",
+)
+@click.option(
+    "--split_by",
+    default="word",
+    type=click.Choice(["word", "sentence", "passage"], case_sensitive=False),
+    help="Specifies the unit for splitting text: word, sentence, or passage.",
+)
+@click.option(
+    "--split_length",
+    default=250,
+    type=int,
+    help="Specifies the length of each split segment.",
+)
+@click.option(
+    "--split_overlap",
+    default=30,
+    type=int,
+    help="Specifies the overlap between consecutive split segments.",
+)
+@click.option(
+    "--split_max_character_length",
+    default=1900,
+    type=int,
+    help="Specifies the maximum character length of a split segment.",
+)
+@click.option(
+    "--split_sentence_window_size",
+    default=0,
+    type=int,
+    help="Specifies the sentence window size for splitting, if applicable.",
+)
+@click.option("--use_dask", is_flag=True, help="Use dask for concurrency")
+@click.option(
+    "--n_workers",
+    default=5,
+    help="Number of workers for the ThreadPoolExecutor or dask.",
+    type=int,
+)
+@click.option(
+    "--log_level",
+    default="INFO",
+    help="Sets the logging level (e.g., DEBUG, INFO, WARNING, ERROR, CRITICAL).",
+)
+@click.option(
+    "--concurrency_mode",
+    default="thread",
+    type=click.Choice(["thread", "process"], case_sensitive=False),
+    help="Choose 'thread' for ThreadPoolExecutor or 'process' for ProcessPoolExecutor.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Prints the steps to be executed without performing them.",
+)
+@click.option(
+    "--output_directory",
+    default=None,
+    type=click.Path(
+        file_okay=False,
+        dir_okay=True,
+        writable=True,
+        resolve_path=True,
+        allow_dash=True,
+    ),
+    help="Directory where output files will be saved. If provided, must exist and be writable.",
+)
+def cli(
+    file_source,
+    dataset_json,
+    redis_host,
+    redis_port,
+    extract,
+    extract_method,
+    split,
+    split_by,
+    split_length,
+    split_overlap,
+    split_max_character_length,
+    split_sentence_window_size,
+    n_workers,
+    log_level,
+    concurrency_mode,
+    use_dask,
+    dry_run,
+    output_directory,
+):
     """
-    CLI entry point for processing files. Configures and executes the main processing function based on user inputs.
+    CLI entry point for processing files. Configures and executes the main processing function
+    based on user inputs.
 
-    The function initializes a global ThreadPoolExecutor and then calls the main processing function with the provided options.
+    The function initializes a global ThreadPoolExecutor and then calls the main processing
+    function with the provided options.
     """
     if output_directory and not os.path.isdir(output_directory):
         os.makedirs(output_directory, exist_ok=True)
@@ -887,11 +1115,12 @@ def cli(file_source, dataset_json, redis_host, redis_port, extract, extract_meth
     extract_method = list(extract_method)
     # if a dataset is specified, use it to override the file_source
     if dataset_json:
-        with open(dataset_json, 'r') as f:
+        with open(dataset_json, "r") as f:
             file_source = json.load(f)
 
-        # Avoid processing files in the same order every time, we don't want to process all pdfs, then txt, etc...
-        file_source = file_source['sampled_files']
+        # Avoid processing files in the same order every time, we don't want to process all pdfs,
+        # then txt, etc...
+        file_source = file_source["sampled_files"]
         random.shuffle(file_source)
 
     try:
@@ -917,5 +1146,5 @@ def cli(file_source, dataset_json, redis_host, redis_port, extract, extract_meth
         raise
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     cli()

@@ -31,11 +31,11 @@ logger = logging.getLogger(__name__)
 
 
 def llama_parse(
-        pdf_stream: io.BytesIO,
-        extract_text: bool,
-        extract_images: bool,
-        extract_tables: bool,
-        **kwargs,
+    pdf_stream: io.BytesIO,
+    extract_text: bool,
+    extract_images: bool,
+    extract_tables: bool,
+    **kwargs,
 ) -> List[Dict[ExtractedDocumentType, Dict[str, Any]]]:
     """
     Helper function to use LlamaParse API to extract text from a bytestream
@@ -123,12 +123,12 @@ def llama_parse(
 
 
 async def async_llama_parse(
-        pdf_stream: io.BytesIO,
-        api_key: str,
-        file_name: str = DEFAULT_FILE_NAME,
-        result_type: str = DEFAULT_RESULT_TYPE,
-        check_interval_seconds: int = DEFAULT_CHECK_INTERVAL_SECONDS,
-        max_timeout_seconds: int = DEFAULT_MAX_TIMEOUT_SECONDS,
+    pdf_stream: io.BytesIO,
+    api_key: str,
+    file_name: str = DEFAULT_FILE_NAME,
+    result_type: str = DEFAULT_RESULT_TYPE,
+    check_interval_seconds: int = DEFAULT_CHECK_INTERVAL_SECONDS,
+    max_timeout_seconds: int = DEFAULT_MAX_TIMEOUT_SECONDS,
 ) -> str:
     """Uses the LlamaParse API to extract text from bytestream PDF.
 
@@ -169,9 +169,9 @@ async def async_llama_parse(
 
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                    upload_url,
-                    data=data,
-                    headers=headers,
+                upload_url,
+                data=data,
+                headers=headers,
             ) as response:
                 response_json = await response.json()
                 job_id = response_json["id"]
