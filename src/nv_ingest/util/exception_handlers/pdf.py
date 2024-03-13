@@ -14,12 +14,9 @@
 
 import logging
 
-from nv_ingest.schemas.metadata import  StatusEnum
-from nv_ingest.schemas.metadata import TaskTypeEnum
-from nv_ingest.schemas.pdf_extractor_schema import PDFExtractorSchema 
+from nv_ingest.schemas.metadata import StatusEnum, TaskTypeEnum
+from nv_ingest.schemas.pdf_extractor_schema import PDFExtractorSchema
 from nv_ingest.util.schema.schema_validator import validate_schema
-
-import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -35,24 +32,22 @@ def pymupdf_exception_handler(descriptor):
                 return []
 
         return inner_function
-    
+
     return outer_function
 
 
 def create_exception_tag(error_message, source_id=None):
-
     unified_metadata = {}
 
     error_metadata = {
         "task": TaskTypeEnum.EXTRACT,
         "status": StatusEnum.ERROR,
         "source_id": source_id,
-        "error_msg": error_message
-        }
+        "error_msg": error_message,
+    }
 
     unified_metadata["error_metadata"] = error_metadata
-    
-    validated_unified_metadata = validate_schema(
-        unified_metadata, PDFExtractorSchema)
-    
+
+    validated_unified_metadata = validate_schema(unified_metadata, PDFExtractorSchema)
+
     return [[None, validated_unified_metadata.dict()]]

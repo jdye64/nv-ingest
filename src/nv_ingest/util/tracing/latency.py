@@ -8,11 +8,11 @@ logging.basicConfig(level=logging.DEBUG)
 
 # Define ANSI color codes
 class ColorCodes:
-    RED = '\033[91m'
-    GREEN = '\033[92m'
-    YELLOW = '\033[93m'
-    BLUE = '\033[94m'  # Added Blue
-    RESET = '\033[0m'
+    RED = "\033[91m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    BLUE = "\033[94m"  # Added Blue
+    RESET = "\033[0m"
 
 
 # Function to apply color to a message
@@ -35,28 +35,39 @@ def latency_logger(name=None):
         @wraps(func)
         def wrapper(*args, **kwargs):
             # Ensure there's at least one argument and it has metadata handling capabilities
-            if args and hasattr(args[0], 'has_metadata') and hasattr(args[0], 'set_metadata'):
+            if (
+                args
+                and hasattr(args[0], "has_metadata")
+                and hasattr(args[0], "set_metadata")
+            ):
                 message = args[0]
                 start_time_ns = time.time_ns()
 
                 result = func(*args, **kwargs)
 
                 end_time_ns = time.time_ns()
-                elapsed_time_ms = (end_time_ns - start_time_ns) / 1e6  # Convert ns to ms
+                elapsed_time_ms = (
+                    end_time_ns - start_time_ns
+                ) / 1e6  # Convert ns to ms
 
                 func_name = name if name else func.__name__
 
                 # Log latency from ts_send if available
-                if message.has_metadata('latency::ts_send'):
-                    ts_send_ns = int(message.get_metadata('latency::ts_send'))
+                if message.has_metadata("latency::ts_send"):
+                    ts_send_ns = int(message.get_metadata("latency::ts_send"))
                     latency_ms = (start_time_ns - ts_send_ns) / 1e6  # Convert ns to ms
                     logging.debug(f"{func_name} since ts_send: {latency_ms} msec.")
 
-                message.set_metadata('latency::ts_send', str(time.time_ns()))
-                message.set_metadata(f'latency::{func_name}::elapsed_time', str(elapsed_time_ms))
+                message.set_metadata("latency::ts_send", str(time.time_ns()))
+                message.set_metadata(
+                    f"latency::{func_name}::elapsed_time", str(elapsed_time_ms)
+                )
                 return result
             else:
-                raise ValueError("The first argument must be a ControlMessage object with metadata capabilities.")
+                raise ValueError(
+                    "The first argument must be a ControlMessage object with metadata "
+                    "capabilities."
+                )
 
         return wrapper
 

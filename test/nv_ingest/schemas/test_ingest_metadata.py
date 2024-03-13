@@ -20,19 +20,19 @@ def get_valid_metadata():
             "last_modified": datetime.now().isoformat(),
             "summary": "Summary",
             "partition_id": 1,
-            "access_level": 1
+            "access_level": 1,
         },
         "content_metadata": {
             "type": "text",
             "description": "Description",
             "page_number": 1,
-            "hierarchy": "Hierarchy"
+            "hierarchy": "Hierarchy",
         },
         "text_metadata": {
             "text_type": "body",
             "summary": "Summary",
             "keywords": ["keyword1", "keyword2"],
-            "language": "en"
+            "language": "en",
         },
         "image_metadata": {
             "image_type": "image_type_1",
@@ -40,7 +40,7 @@ def get_valid_metadata():
             "caption": "Caption",
             "text": "Text",
             "image_location": (0, 1, 10, 20),
-        }
+        },
     }
 
 
@@ -51,13 +51,16 @@ def test_validate_metadata_success():
 
 
 # Test for missing required fields in main and sub-schemas
-@pytest.mark.parametrize("key", [
-    ("content"),
-    ("source_metadata"),
-    ("content_metadata"),
-#    ("text_metadata"),
-#    ("image_metadata")
-])
+@pytest.mark.parametrize(
+    "key",
+    [
+        ("content"),
+        ("source_metadata"),
+        ("content_metadata"),
+        #    ("text_metadata"),
+        #    ("image_metadata")
+    ],
+)
 def test_missing_required_fields_main_schema(key):
     metadata = get_valid_metadata()
     metadata.pop(key)
@@ -65,13 +68,16 @@ def test_missing_required_fields_main_schema(key):
         validate_metadata(metadata)
 
 
-@pytest.mark.parametrize("sub_schema_key,missing_key", [
-    ("source_metadata", "source_name"),
-    ("source_metadata", "source_type"),
-    ("content_metadata", "type"),
-    ("text_metadata", "text_type"),
-#    ("image_metadata", "image_type")
-])
+@pytest.mark.parametrize(
+    "sub_schema_key,missing_key",
+    [
+        ("source_metadata", "source_name"),
+        ("source_metadata", "source_type"),
+        ("content_metadata", "type"),
+        ("text_metadata", "text_type"),
+        #    ("image_metadata", "image_type")
+    ],
+)
 def test_missing_required_fields_sub_schemas(sub_schema_key, missing_key):
     metadata = get_valid_metadata()
     metadata[sub_schema_key].pop(missing_key)
@@ -80,14 +86,17 @@ def test_missing_required_fields_sub_schemas(sub_schema_key, missing_key):
 
 
 # Test for invalid enum values
-@pytest.mark.parametrize("sub_schema_key,enum_key,invalid_value", [
-#    ("source_metadata", "source_type", "invalid"),
-    ("content_metadata", "type", "invalid"),
-    ("text_metadata", "text_type", "invalid"),
-    ("text_metadata", "language", "invalid"),
-#    ("image_metadata", "image_type", "invalid"),
-#    ("image_metadata", "structured_image_type", "invalid")
-])
+@pytest.mark.parametrize(
+    "sub_schema_key,enum_key,invalid_value",
+    [
+        #    ("source_metadata", "source_type", "invalid"),
+        ("content_metadata", "type", "invalid"),
+        ("text_metadata", "text_type", "invalid"),
+        ("text_metadata", "language", "invalid"),
+        #    ("image_metadata", "image_type", "invalid"),
+        #    ("image_metadata", "structured_image_type", "invalid")
+    ],
+)
 def test_invalid_enum_values(sub_schema_key, enum_key, invalid_value):
     metadata = get_valid_metadata()
     metadata[sub_schema_key][enum_key] = invalid_value
@@ -97,10 +106,16 @@ def test_invalid_enum_values(sub_schema_key, enum_key, invalid_value):
 
 # Test for incorrect data types
 # This is an example; you should extend these tests for each field where type mismatches can occur.
-@pytest.mark.parametrize("key,value", [
-    ("source_metadata", "not a dict"),  # Should be a dict
-    ("source_metadata.date_created", "not a datetime"),  # Incorrect type inside a dict
-])
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("source_metadata", "not a dict"),  # Should be a dict
+        (
+            "source_metadata.date_created",
+            "not a datetime",
+        ),  # Incorrect type inside a dict
+    ],
+)
 def test_incorrect_data_types(key, value):
     metadata = get_valid_metadata()
     if "." in key:

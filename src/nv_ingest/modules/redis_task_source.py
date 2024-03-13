@@ -20,15 +20,14 @@ import traceback
 
 import cudf
 import mrc
-from morpheus.messages import ControlMessage
-from morpheus.messages import MessageMeta
-from morpheus.utils.module_utils import ModuleLoaderFactory
-from morpheus.utils.module_utils import register_module
+from morpheus.messages import ControlMessage, MessageMeta
+from morpheus.utils.module_utils import ModuleLoaderFactory, register_module
+from pydantic import ValidationError
+from redis.exceptions import RedisError
+
 from nv_ingest.schemas import validate_ingest_job
 from nv_ingest.schemas.redis_task_source_schema import RedisTaskSourceSchema
 from nv_ingest.util.redis import RedisClient
-from pydantic import ValidationError
-from redis.exceptions import RedisError
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +51,9 @@ def _redis_task_source(builder: mrc.Builder):
     try:
         validated_config = RedisTaskSourceSchema(**module_config)
     except ValidationError as e:
-        error_messages = '; '.join([f"{error['loc'][0]}: {error['msg']}" for error in e.errors()])
+        error_messages = "; ".join(
+            [f"{error['loc'][0]}: {error['msg']}" for error in e.errors()]
+        )
         log_error_message = f"Invalid Redis Task Source configuration: {error_messages}"
         logger.error(log_error_message)
         raise
@@ -64,7 +65,7 @@ def _redis_task_source(builder: mrc.Builder):
         max_retries=validated_config.redis_client.max_retries,
         max_backoff=validated_config.redis_client.max_backoff,
         connection_timeout=validated_config.redis_client.connection_timeout,
-        use_ssl=validated_config.redis_client.use_ssl
+        use_ssl=validated_config.redis_client.use_ssl,
     )
 
     def fetch_and_process_messages():
@@ -73,7 +74,9 @@ def _redis_task_source(builder: mrc.Builder):
             try:
                 job_payload = redis_client.fetch_message(validated_config.task_queue)
                 ts_fetched = time.time_ns()
-                yield process_message(job_payload, ts_fetched)  # process_message remains unchanged
+                yield process_message(
+                    job_payload, ts_fetched
+                )  # process_message remains unchanged
             except RedisError:
                 continue  # Reconnection will be attempted on the next fetch
             except Exception as err:
@@ -90,13 +93,13 @@ def _redis_task_source(builder: mrc.Builder):
 
         job = json.loads(job_payload)
         validate_ingest_job(job)
-        job_id = job.pop('job_id')
-        job_payload = job.pop('job_payload', {})
-        job_tasks = job.pop('tasks', [])
+        job_id = job.pop("job_id")
+        job_payload = job.pop("job_payload", {})
+        job_tasks = job.pop("tasks", [])
 
-        tracing_options = job.pop('tracing_options', {})
-        do_trace_tagging = tracing_options.get('trace', False)
-        ts_send = tracing_options.get('ts_send', None)
+        tracing_options = job.pop("tracing_options", {})
+        do_trace_tagging = tracing_options.get("trace", False)
+        ts_send = tracing_options.get("ts_send", None)
 
         response_channel = f"response_{job_id}"
 
@@ -105,12 +108,12 @@ def _redis_task_source(builder: mrc.Builder):
 
         control_message = ControlMessage()
         control_message.payload(message_meta)
-        control_message.set_metadata('response_channel', response_channel)
-        control_message.set_metadata('job_id', job_id)
+        control_message.set_metadata("response_channel", response_channel)
+        control_message.set_metadata("job_id", job_id)
 
         for task in job_tasks:
-            #logger.debug("Tasks: %s", json.dumps(task, indent=2))
-            control_message.add_task(task['type'], task['task_properties'])
+            # logger.debug("Tasks: %s", json.dumps(task, indent=2))
+            control_message.add_task(task["type"], task["task_properties"])
 
         # Debug Tracing
         if do_trace_tagging:
@@ -119,9 +122,13 @@ def _redis_task_source(builder: mrc.Builder):
             control_message.set_metadata(f"trace::entry::{MODULE_NAME}", ts_entry)
             control_message.set_metadata(f"trace::exit::{MODULE_NAME}", ts_exit)
 
-            if (ts_send is not None):
-                control_message.set_metadata("trace::entry::redis_source_network_in", ts_send)
-                control_message.set_metadata("trace::exit::redis_source_network_in", ts_fetched)
+            if ts_send is not None:
+                control_message.set_metadata(
+                    "trace::entry::redis_source_network_in", ts_send
+                )
+                control_message.set_metadata(
+                    "trace::exit::redis_source_network_in", ts_fetched
+                )
 
             control_message.set_metadata("latency::ts_send", time.time_ns())
 

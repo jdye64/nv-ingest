@@ -14,9 +14,9 @@
 
 import logging
 
-from nv_ingest.schemas.metadata import LanguageEnum
-
 from langdetect.lang_detect_exception import LangDetectException
+
+from nv_ingest.schemas.metadata import LanguageEnum
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,6 @@ def langdetect_exception_handler(func, **kwargs):
         except LangDetectException as e:
             log_error_message = f"LangDetectException:{e}"
             logger.warn(log_error_message)
-            return LanguageEnum.UNKNOWN     
+            return LanguageEnum.UNKNOWN
 
     return inner_function

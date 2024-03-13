@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import logging
-
 from datetime import datetime
 
 from nv_ingest.util.converters import datetools

@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import langdetect
+
 from nv_ingest.schemas.metadata import LanguageEnum
 from nv_ingest.util.exception_handlers.detectors import langdetect_exception_handler
-
-import langdetect
 
 
 @langdetect_exception_handler
@@ -27,7 +27,7 @@ def detect_language(text):
     ----------
     text : str
         A string of text.
-    
+
     Returns
     -------
     LanguageEnum
@@ -39,6 +39,6 @@ def detect_language(text):
     if LanguageEnum.has_value(language):
         language = LanguageEnum[language.upper().replace("-", "_")]
     else:
-        language = LanguageEnum.UNKNOWN     
+        language = LanguageEnum.UNKNOWN
 
     return language

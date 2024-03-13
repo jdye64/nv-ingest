@@ -1,6 +1,6 @@
-from typing import Optional, Literal
+from typing import Literal, Optional
 
-from pydantic import BaseModel, validator, conint
+from pydantic import BaseModel, conint, validator
 
 
 class DocumentSplitterSchema(BaseModel):
@@ -10,8 +10,10 @@ class DocumentSplitterSchema(BaseModel):
     max_character_length: Optional[conint(gt=0)] = 450
     sentence_window_size: Optional[conint(ge=0)] = 0
 
-    @validator('sentence_window_size')
+    @validator("sentence_window_size")
     def check_sentence_window_size(cls, v, values, **kwargs):
-        if v is not None and v > 0 and values['split_by'] != 'sentence':
-            raise ValueError("When using sentence_window_size, split_by must be 'sentence'.")
+        if v is not None and v > 0 and values["split_by"] != "sentence":
+            raise ValueError(
+                "When using sentence_window_size, split_by must be 'sentence'."
+            )
         return v

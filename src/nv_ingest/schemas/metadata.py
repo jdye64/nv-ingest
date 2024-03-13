@@ -1,18 +1,18 @@
 from datetime import datetime
 from enum import Enum
-from typing import List, Union, Dict, Any, Optional
+from typing import Any, Dict, List, Optional, Union
 
-from pydantic import validator, root_validator
+from pydantic import root_validator, validator
 
 from nv_ingest.schemas.base_model_noext import BaseModelNoExt
 from nv_ingest.util.converters import datetools
 
 
-## Do we want types and similar items to be enums or just strings?
+# Do we want types and similar items to be enums or just strings?
 class SourceTypeEnum(str, Enum):
-    PDF = 'pdf'
-    source_type_1 = 'source_type_1'
-    source_type_2 = 'source_type_2'
+    PDF = "pdf"
+    source_type_1 = "source_type_1"
+    source_type_2 = "source_type_2"
 
 
 class AccessLevelEnum(int, Enum):
@@ -22,9 +22,9 @@ class AccessLevelEnum(int, Enum):
 
 
 class ContentTypeEnum(str, Enum):
-    TEXT = 'text'
-    IMAGE = 'image'
-    STRUCTURED = 'structured'
+    TEXT = "text"
+    IMAGE = "image"
+    STRUCTURED = "structured"
 
 
 class StdContentDescEnum(str, Enum):
@@ -34,73 +34,73 @@ class StdContentDescEnum(str, Enum):
 
 
 class TextTypeEnum(str, Enum):
-    HEADER = 'header'
-    BODY = 'body'
+    HEADER = "header"
+    BODY = "body"
     SPAN = "span"
     LINE = "line"
     BLOCK = "block"
-    PAGE = 'page'
-    DOCUMENT = 'document'
+    PAGE = "page"
+    DOCUMENT = "document"
     OTHER = "other"
 
 
 class LanguageEnum(str, Enum):
-    AF = 'af'
-    AR = 'ar'
-    BG = 'bg'
-    BN = 'bn'
-    CA = 'ca'
-    CS = 'cs'
-    CY = 'cy'
-    DA = 'da'
-    DE = 'de'
-    EL = 'el'
-    EN = 'en'
-    ES = 'es'
-    ET = 'et'
-    FA = 'fa'
-    FI = 'fi'
-    FR = 'fr'
-    GU = 'gu'
-    HE = 'he'
-    HI = 'hi'
-    HR = 'hr'
-    HU = 'hu'
-    ID = 'id'
-    IT = 'it'
-    JA = 'ja'
-    KN = 'kn'
-    KO = 'ko'
-    LT = 'lt'
-    LV = 'lv'
-    MK = 'mk'
-    ML = 'ml'
-    MR = 'mr'
-    NE = 'ne'
-    NL = 'nl'
-    NO = 'no'
-    PA = 'pa'
-    PL = 'pl'
-    PT = 'pt'
-    RO = 'ro'
-    RU = 'ru'
-    SK = 'sk'
-    SL = 'sl'
-    SO = 'so'
-    SQ = 'sq'
-    SV = 'sv'
-    SW = 'sw'
-    TA = 'ta'
-    TE = 'te'
-    TH = 'th'
-    TL = 'tl'
-    TR = 'tr'
-    UK = 'uk'
-    UR = 'ur'
-    VI = 'vi'
-    ZH_CN = 'zh-cn'
-    ZH_TW = 'zh-tw'
-    UNKNOWN = 'unknown'
+    AF = "af"
+    AR = "ar"
+    BG = "bg"
+    BN = "bn"
+    CA = "ca"
+    CS = "cs"
+    CY = "cy"
+    DA = "da"
+    DE = "de"
+    EL = "el"
+    EN = "en"
+    ES = "es"
+    ET = "et"
+    FA = "fa"
+    FI = "fi"
+    FR = "fr"
+    GU = "gu"
+    HE = "he"
+    HI = "hi"
+    HR = "hr"
+    HU = "hu"
+    ID = "id"
+    IT = "it"
+    JA = "ja"
+    KN = "kn"
+    KO = "ko"
+    LT = "lt"
+    LV = "lv"
+    MK = "mk"
+    ML = "ml"
+    MR = "mr"
+    NE = "ne"
+    NL = "nl"
+    NO = "no"
+    PA = "pa"
+    PL = "pl"
+    PT = "pt"
+    RO = "ro"
+    RU = "ru"
+    SK = "sk"
+    SL = "sl"
+    SO = "so"
+    SQ = "sq"
+    SV = "sv"
+    SW = "sw"
+    TA = "ta"
+    TE = "te"
+    TH = "th"
+    TL = "tl"
+    TR = "tr"
+    UK = "uk"
+    UR = "ur"
+    VI = "vi"
+    ZH_CN = "zh-cn"
+    ZH_TW = "zh-tw"
+    UNKNOWN = "unknown"
 
     @classmethod
     def has_value(cls, value):
@@ -110,8 +110,8 @@ class LanguageEnum(str, Enum):
 class ImageTypeEnum(str, Enum):
     JPEG = "jpeg"
     PNG = "png"
-    image_type_1 = 'image_type_1'  # until classifier developed
-    image_type_2 = 'image_type_2'  # until classifier developed
+    image_type_1 = "image_type_1"  # until classifier developed
+    image_type_2 = "image_type_2"  # until classifier developed
 
     @classmethod
     def has_value(cls, value):
@@ -130,7 +130,7 @@ class StatusEnum(str, Enum):
 # Sub schemas
 class SourceMetadataSchema(BaseModelNoExt):
     """
-    Schema for the knowledge base file from which content 
+    Schema for the knowledge base file from which content
     and metadata is extracted.
     """
 
@@ -167,7 +167,9 @@ class TextMetadataSchema(BaseModelNoExt):
     text_type: TextTypeEnum
     summary: str = ""
     keywords: Union[str, List[str], Dict] = ""
-    language: LanguageEnum = "en"  # default to Unknown? Maybe do some kind of heuristic check
+    language: LanguageEnum = (
+        "en"  # default to Unknown? Maybe do some kind of heuristic check
+    )
 
 
 class ImageMetadataSchema(BaseModelNoExt):
@@ -196,19 +198,19 @@ class MetadataSchema(BaseModelNoExt):
 
     @root_validator(pre=True)
     def check_metadata_type(cls, values):
-        content_type = values.get('content_metadata', {}).get('type', None)
+        content_type = values.get("content_metadata", {}).get("type", None)
         if content_type != ContentTypeEnum.TEXT:
-            values['text_metadata'] = None
+            values["text_metadata"] = None
         if content_type != ContentTypeEnum.IMAGE:
-            values['image_metadata'] = None
+            values["image_metadata"] = None
         return values
 
 
 class ExtractedDocumentType(str, Enum):
-    text = 'text'
-    markdown = 'markdown'
-    unstructured_image = 'unstructured_image'
-    structured_image = 'structured_image'
+    text = "text"
+    markdown = "markdown"
+    unstructured_image = "unstructured_image"
+    structured_image = "structured_image"
 
 
 def validate_metadata(metadata: Dict[str, Any]) -> MetadataSchema:

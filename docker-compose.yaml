@@ -28,7 +28,7 @@ services:
           devices:
             - driver: nvidia
               count: 1
-              capabilities: [ gpu ]
+              capabilities: [gpu]
 
   redis:
     image: "redis/redis-stack"
@@ -56,7 +56,7 @@ services:
           devices:
             - driver: nvidia
               count: all
-              capabilities: [ gpu ]
+              capabilities: [gpu]
 
   nv-ingest-ms-runtime:
     image: "nv-ingest-ms-runtime:24.03"
@@ -76,7 +76,7 @@ services:
           devices:
             - driver: nvidia
               count: all
-              capabilities: [ gpu ]
+              capabilities: [gpu]
 
   nv-ingest-ms-dev:
     image: "nv-ingest-ms-dev:24.03"
@@ -88,7 +88,7 @@ services:
       - ${DATASET_ROOT}:/workspace/data
       - ${NV_INGEST_ROOT}/src:/workspace/src
     stdin_open: true
-    tty: true      
+    tty: true
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -99,4 +99,4 @@ services:
           devices:
             - driver: nvidia
               count: all
-              capabilities: [ gpu ]              
+              capabilities: [gpu]

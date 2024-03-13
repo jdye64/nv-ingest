@@ -78,17 +78,18 @@ vault-init:
     # TODO this should just be in the image already instead of downloading every time, same with git-core
     - pip install .
 
-# lint:
-#   extends: .python-basics
-#   stage: lint
-#   variables:
-#     PRE_COMMIT_HOME: ${CI_PROJECT_DIR}/.cache/pre-commit
-#   cache:
-#     key: pre-commit-$CI_COMMIT_REF_SLUG
-#     paths:
-#       - ${PRE_COMMIT_HOME}
-#   script:
-#     - ./script/lint.sh
+lint:
+  extends: .python-basics
+  stage: lint
+  variables:
+    PRE_COMMIT_HOME: ${CI_PROJECT_DIR}/.cache/pre-commit
+  cache:
+    key: pre-commit-$CI_COMMIT_REF_SLUG
+    paths:
+      - ${PRE_COMMIT_HOME}
+  script:
+    - pip install -r test-requirements.txt
+    - pre-commit run --all-files
 
 test:
   extends: .python-basics
@@ -172,7 +173,6 @@ test:
 #  stage: publish
 #  extends: .tag-release
 #  needs: [vault-init, build:docker]
-
 
 ##################
 ###  SECURITY  ###

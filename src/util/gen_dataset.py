@@ -22,7 +22,7 @@ def format_size(size_in_bytes):
     str
         The formatted size string with appropriate size suffix.
     """
-    for unit in ['', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB']:
+    for unit in ["", "KB", "MB", "GB", "TB", "PB", "EB", "ZB"]:
         if abs(size_in_bytes) < 1024.0:
             return f"{size_in_bytes:3.1f}{unit}"
         size_in_bytes /= 1024.0
@@ -31,7 +31,7 @@ def format_size(size_in_bytes):
 
 def parse_size(size):
     """Parse the size string with optional suffix (KB, MB) into bytes."""
-    units = {"KB": 1024, "MB": 1024 ** 2, "GB": 1024 ** 3}
+    units = {"KB": 1024, "MB": 1024**2, "GB": 1024**3}
     if size.isdigit():
         return int(size)
     unit = size[-2:].upper()
@@ -44,17 +44,21 @@ def parse_size(size):
 def load_or_scan_files(source_directory, cache_file=None):
     """Load file list from cache or scan the source directory."""
     if cache_file and os.path.exists(cache_file):
-        with open(cache_file, 'r') as f:
+        with open(cache_file, "r") as f:
             return json.load(f)
 
     file_list = defaultdict(list)
-    all_files = [os.path.join(root, file) for root, _, files in os.walk(source_directory) for file in files]
+    all_files = [
+        os.path.join(root, file)
+        for root, _, files in os.walk(source_directory)
+        for file in files
+    ]
     for file_path in tqdm(all_files, desc="Scanning files", leave=True):
-        ext = os.path.splitext(file_path)[-1].lower().strip('.')
+        ext = os.path.splitext(file_path)[-1].lower().strip(".")
         file_list[ext].append(file_path)
 
     if cache_file:
-        with open(cache_file, 'w') as f:
+        with open(cache_file, "w") as f:
             json.dump(file_list, f)
 
     return file_list
@@ -62,8 +66,8 @@ def load_or_scan_files(source_directory, cache_file=None):
 
 def sample_files(file_list, samples, total_size_bytes, with_replacement=True):
     """
-    Samples files to meet a target total size, respecting the specified proportions for each file type,
-    and allows for sampling with or without replacement.
+    Samples files to meet a target total size, respecting the specified proportions for each
+    file type, and allows for sampling with or without replacement.
 
     Parameters
     ----------
@@ -83,8 +87,13 @@ def sample_files(file_list, samples, total_size_bytes, with_replacement=True):
         and 'metadata', a dictionary with details about the sampling process.
     """
     sampled_files = []
-    metadata = {"total_sampled_size_bytes": 0, "file_type_proportions": {},
-                "sampling_method": "with_replacement" if with_replacement else "without_replacement"}
+    metadata = {
+        "total_sampled_size_bytes": 0,
+        "file_type_proportions": {},
+        "sampling_method": "with_replacement"
+        if with_replacement
+        else "without_replacement",
+    }
     selected_files = set()
 
     for ftype, proportion in samples.items():
@@ -100,7 +109,9 @@ def sample_files(file_list, samples, total_size_bytes, with_replacement=True):
             if with_replacement:
                 file_path = random.choice(available_files)
             else:
-                file_path = available_files.pop(0)  # Treat as a queue for without replacement
+                file_path = available_files.pop(
+                    0
+                )  # Treat as a queue for without replacement
                 selected_files.add(file_path)
 
             file_size = os.path.getsize(file_path)
@@ -118,7 +129,7 @@ def sample_files(file_list, samples, total_size_bytes, with_replacement=True):
 
         metadata["file_type_proportions"][ftype] = {
             "target_proportion": proportion,
-            "achieved_size_bytes": ftype_sampled_size
+            "achieved_size_bytes": ftype_sampled_size,
         }
         metadata["total_sampled_size_bytes"] += ftype_sampled_size
 
@@ -152,10 +163,12 @@ def process_samples(sample_options):
     sample_dict = {}
     for sample_str in sample_options:
         try:
-            key, value = sample_str.split('=')
+            key, value = sample_str.split("=")
             sample_dict[key] = int(value)
         except ValueError:
-            raise ValueError(f"Invalid sample format: {sample_str}. Expected format: 'key=value'.")
+            raise ValueError(
+                f"Invalid sample format: {sample_str}. Expected format: 'key=value'."
+            )
     return sample_dict
 
 
@@ -166,7 +179,7 @@ def validate_output_file(output_file_path):
     actual proportions match the expected proportions within a 5% tolerance.
     """
     try:
-        with open(output_file_path, 'r') as f:
+        with open(output_file_path, "r") as f:
             data = json.load(f)
             sampled_files = data["sampled_files"]
             metadata = data["metadata"]
@@ -184,7 +197,7 @@ def validate_output_file(output_file_path):
 
     for file_path in sampled_files:
         file_type = os.path.splitext(file_path)[-1].lower()
-        file_type = file_type[1:] if file_type.startswith('.') else 'unknown'
+        file_type = file_type[1:] if file_type.startswith(".") else "unknown"
         file_size = os.path.getsize(file_path)
         total_bytes_by_type[file_type] += file_size
 
@@ -195,10 +208,14 @@ def validate_output_file(output_file_path):
     # Validate proportions
     for file_type, expected_prop in expected_proportions.items():
         actual_size = total_bytes_by_type.get(file_type, 0)
-        actual_prop = (actual_size / total_sampled_size) * 100 if total_sampled_size else 0
+        actual_prop = (
+            (actual_size / total_sampled_size) * 100 if total_sampled_size else 0
+        )
         if not (expected_prop * 0.95 <= actual_prop <= expected_prop * 1.05):
             logging.warning(
-                f"Proportion of {file_type} files is off by more than 5%: Expected {expected_prop}%, got {actual_prop:.2f}%.")
+                f"Proportion of {file_type} files is off by more than 5%: "
+                f"Expected {expected_prop}%, got {actual_prop:.2f}%."
+            )
 
     # Log total sizes
     for file_type, total_size in total_bytes_by_type.items():
@@ -208,23 +225,48 @@ def validate_output_file(output_file_path):
 
 
 @click.command()
-@click.option('--source_directory', required=True, help='Path to the source directory.')
-@click.option('--size', required=True, help='Total size of files to sample, e.g., 1024, 1KB, 1MB.')
-@click.option('--sample', multiple=True, type=str, help='File type and proportion, e.g., pdf=40.')
-@click.option('--cache_file', help='Path to cache the file list as JSON.')
-@click.option('--output_file', help='Path to output the sampled file list as JSON.')
-@click.option('--validate-output', is_flag=True,
-              help="Re-validate the 'output_file' JSON and log total bytes for each file type.")
-@click.option('--log-level', default='INFO',
-              type=click.Choice(['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'], case_sensitive=False),
-              help="Sets the logging level.")
-@click.option('--with-replacement', is_flag=True, default=True,
-              help="Sample with replacement. Files can be selected multiple times.")
-def main(source_directory, size, sample, cache_file, output_file, validate_output, log_level, with_replacement):
+@click.option("--source_directory", required=True, help="Path to the source directory.")
+@click.option(
+    "--size", required=True, help="Total size of files to sample, e.g., 1024, 1KB, 1MB."
+)
+@click.option(
+    "--sample", multiple=True, type=str, help="File type and proportion, e.g., pdf=40."
+)
+@click.option("--cache_file", help="Path to cache the file list as JSON.")
+@click.option("--output_file", help="Path to output the sampled file list as JSON.")
+@click.option(
+    "--validate-output",
+    is_flag=True,
+    help="Re-validate the 'output_file' JSON and log total bytes for each file type.",
+)
+@click.option(
+    "--log-level",
+    default="INFO",
+    type=click.Choice(
+        ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False
+    ),
+    help="Sets the logging level.",
+)
+@click.option(
+    "--with-replacement",
+    is_flag=True,
+    default=True,
+    help="Sample with replacement. Files can be selected multiple times.",
+)
+def main(
+    source_directory,
+    size,
+    sample,
+    cache_file,
+    output_file,
+    validate_output,
+    log_level,
+    with_replacement,
+):
     """
     Samples files from a source directory based on specified proportions and total size,
     optionally caches the file list, outputs a sampled file list, and validates output.
-    
+
     Parameters
     ----------
     source_directory : str
@@ -232,7 +274,8 @@ def main(source_directory, size, sample, cache_file, output_file, validate_outpu
     size : str
         The total size of the files to sample, with optional suffix (KB, MB, GB).
     sample : tuple of str
-        Each string specifies a file type and its target proportion of the total size (e.g., "pdf=40").
+        Each string specifies a file type and its target proportion of the total size
+        (e.g., "pdf=40").
     cache_file : str, optional
         If specified, caches the scanned file list as JSON at this path.
     output_file : str, optional
@@ -240,10 +283,11 @@ def main(source_directory, size, sample, cache_file, output_file, validate_outpu
     validate_output : bool
         If set, validates the `output_file` by logging total bytes for each file type.
     log_level : str
-        The logging level for the script's output ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL').
+        The logging level for the script's output
+        ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL').
     with_replacement : bool
         If set, samples files with replacement. Files can be selected multiple times.
-    
+
     Notes
     -----
     The script performs a sampling process that respects the specified size and type proportions,
@@ -252,7 +296,9 @@ def main(source_directory, size, sample, cache_file, output_file, validate_outpu
     """  # Configure logging
 
     numeric_level = getattr(logging, log_level.upper(), None)
-    logging.basicConfig(level=numeric_level, format='%(asctime)s - %(levelname)s - %(message)s')
+    logging.basicConfig(
+        level=numeric_level, format="%(asctime)s - %(levelname)s - %(message)s"
+    )
 
     try:
         total_size_bytes = parse_size(size)
@@ -263,10 +309,12 @@ def main(source_directory, size, sample, cache_file, output_file, validate_outpu
     samples = {}
     for sample_str in sample:
         try:
-            key, value = sample_str.split('=')
+            key, value = sample_str.split("=")
             samples[key] = int(value)
         except ValueError:
-            click.echo(f"Error: Invalid sample format: {sample_str}. Expected format: 'key=value'.")
+            click.echo(
+                f"Error: Invalid sample format: {sample_str}. Expected format: 'key=value'."
+            )
             return
 
     if sum(samples.values()) != 100:
@@ -277,18 +325,22 @@ def main(source_directory, size, sample, cache_file, output_file, validate_outpu
     sampled_files = sample_files(file_list, samples, total_size_bytes, with_replacement)
 
     if output_file:
-        with open(output_file, 'w') as f:
+        with open(output_file, "w") as f:
             json.dump(sampled_files, f)
 
-    click.echo(f"Sampled files written to {output_file}" if output_file else "Sampling complete.")
+    click.echo(
+        f"Sampled files written to {output_file}"
+        if output_file
+        else "Sampling complete."
+    )
 
     if validate_output:
         if output_file:
             validate_output_file(output_file)
         else:
-            print("No output file specified for validation.")
+            logging.warning("No output file specified for validation.")
     return
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

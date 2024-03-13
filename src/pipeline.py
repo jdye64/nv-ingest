@@ -19,9 +19,7 @@ import time
 import typing
 
 import click
-from morpheus.config import Config
-from morpheus.config import CppConfig
-from morpheus.config import PipelineModes
+from morpheus.config import Config, CppConfig, PipelineModes
 from morpheus.messages import ControlMessage
 from morpheus.pipeline.pipeline import Pipeline
 from morpheus.stages.general.linear_modules_source import LinearModuleSourceStage
@@ -52,8 +50,10 @@ def configure_logging(level_name):
     if not isinstance(numeric_level, int):
         raise ValueError(f"Invalid log level: {level_name}")
 
-    console_handler = logging.StreamHandler(sys.stdout)
-    logging.basicConfig(level=numeric_level, format='%(asctime)s - %(levelname)s - %(message)s')
+    logging.StreamHandler(sys.stdout)
+    logging.basicConfig(
+        level=numeric_level, format="%(asctime)s - %(levelname)s - %(message)s"
+    )
     logger.setLevel(numeric_level)
 
 
@@ -75,8 +75,14 @@ def validate_source_config(source_info: typing.Dict[str, any]) -> None:
         If any of the required keys ('type', 'name', 'config') are missing
         in the source configuration.
     """
-    if ('type' not in source_info or 'name' not in source_info or 'config' not in source_info):
-        raise ValueError(f"Each source must have 'type', 'name', and 'config':\n {source_info}")
+    if (
+        "type" not in source_info
+        or "name" not in source_info
+        or "config" not in source_info
+    ):
+        raise ValueError(
+            f"Each source must have 'type', 'name', and 'config':\n {source_info}"
+        )
 
 
 def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
@@ -84,51 +90,75 @@ def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
     redis_port = os.environ.get("REDIS_PORT", "6379")
     logger.info(f"REDIS_HOST: {redis_host}")
     logger.info(f"REDIS_PORT: {redis_port}")
-    source_module_loader = RedisTaskSourceLoaderFactory.get_instance(module_name="redis_listener",
-                                                                     module_config={
-                                                                         "redis_client": {
-                                                                             "host": redis_host,
-                                                                             "port": redis_port,
-                                                                         }
-                                                                     })
+    source_module_loader = RedisTaskSourceLoaderFactory.get_instance(
+        module_name="redis_listener",
+        module_config={
+            "redis_client": {
+                "host": redis_host,
+                "port": redis_port,
+            }
+        },
+    )
 
     source_stage = pipe.add_stage(
-        LinearModuleSourceStage(config, source_module_loader, output_type=ControlMessage, output_port_name="output"))
+        LinearModuleSourceStage(
+            config,
+            source_module_loader,
+            output_type=ControlMessage,
+            output_port_name="output",
+        )
+    )
 
-    metadata_injector_loader = MetadataInjectorLoaderFactory.get_instance(module_name="metadata_injection",
-                                                                          module_config={})
+    metadata_injector_loader = MetadataInjectorLoaderFactory.get_instance(
+        module_name="metadata_injection", module_config={}
+    )
 
     metadata_injector_stage = pipe.add_stage(
-        LinearModulesStage(config, metadata_injector_loader,
-                           input_type=ControlMessage,
-                           output_type=ControlMessage,
-                           input_port_name="input",
-                           output_port_name="output"))
+        LinearModulesStage(
+            config,
+            metadata_injector_loader,
+            input_type=ControlMessage,
+            output_type=ControlMessage,
+            input_port_name="input",
+            output_port_name="output",
+        )
+    )
 
-    pdf_text_extract_loader = PDFExtractorLoaderFactory.get_instance(module_name="pdf_extractor",
-                                                                     module_config={})
+    pdf_text_extract_loader = PDFExtractorLoaderFactory.get_instance(
+        module_name="pdf_extractor", module_config={}
+    )
 
     extractor_stage = pipe.add_stage(
-        LinearModulesStage(config, pdf_text_extract_loader,
-                           input_type=ControlMessage,
-                           output_type=ControlMessage,
-                           input_port_name="input",
-                           output_port_name="output"))
+        LinearModulesStage(
+            config,
+            pdf_text_extract_loader,
+            input_type=ControlMessage,
+            output_type=ControlMessage,
+            input_port_name="input",
+            output_port_name="output",
+        )
+    )
 
-    nemo_splitter_loader = NemoDocSplitterLoaderFactory.get_instance(module_name="nemo_doc_splitter",
-                                                                     module_config={
-                                                                         "split_by": "word",
-                                                                         "split_length": 60,
-                                                                         "split_overlap": 10,
-                                                                         "max_character_length": 450,
-                                                                     })
+    nemo_splitter_loader = NemoDocSplitterLoaderFactory.get_instance(
+        module_name="nemo_doc_splitter",
+        module_config={
+            "split_by": "word",
+            "split_length": 60,
+            "split_overlap": 10,
+            "max_character_length": 450,
+        },
+    )
 
     nemo_splitter_stage = pipe.add_stage(
-        LinearModulesStage(config, nemo_splitter_loader,
-                           input_type=ControlMessage,
-                           output_type=ControlMessage,
-                           input_port_name="input",
-                           output_port_name="output"))
+        LinearModulesStage(
+            config,
+            nemo_splitter_loader,
+            input_type=ControlMessage,
+            output_type=ControlMessage,
+            input_port_name="input",
+            output_port_name="output",
+        )
+    )
 
     # tokenizer_config = {
     #    "model_kwargs": {
@@ -140,7 +170,9 @@ def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
     #    },
     #    "model_name": "bert-base-uncased-hash"
     # }
-    # nlp_stage = pipe.add_stage(PreprocessNLPStage(config, **tokenizer_config.get("model_kwargs", {})))
+    # nlp_stage = pipe.add_stage(
+    #     PreprocessNLPStage(config, **tokenizer_config.get("model_kwargs", {}))
+    # )
 
     # embeddings_config = {
     #    "model_kwargs": {
@@ -150,20 +182,28 @@ def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
     #        "use_shared_memory": True
     #    }
     # }
-    # embedding_stage = pipe.add_stage(TritonInferenceStage(config, **embeddings_config.get('model_kwargs', {})))
-    sink_module_loader = RedisTaskSinkLoaderFactory.get_instance(module_name="redis_task_sink",
-                                                                 module_config={
-                                                                     "redis_client": {
-                                                                         "host": redis_host,
-                                                                         "port": redis_port,
-                                                                     }
-                                                                 })
+    # embedding_stage = pipe.add_stage(
+    #     TritonInferenceStage(config, **embeddings_config.get("model_kwargs", {}))
+    # )
+    sink_module_loader = RedisTaskSinkLoaderFactory.get_instance(
+        module_name="redis_task_sink",
+        module_config={
+            "redis_client": {
+                "host": redis_host,
+                "port": redis_port,
+            }
+        },
+    )
     sink_stage = pipe.add_stage(
-        LinearModulesStage(config, sink_module_loader,
-                           input_type=typing.Any,
-                           output_type=ControlMessage,
-                           input_port_name="input",
-                           output_port_name="output"))
+        LinearModulesStage(
+            config,
+            sink_module_loader,
+            input_type=typing.Any,
+            output_type=ControlMessage,
+            input_port_name="input",
+            output_port_name="output",
+        )
+    )
 
     pipe.add_edge(source_stage, metadata_injector_stage)
     pipe.add_edge(metadata_injector_stage, extractor_stage)
@@ -201,18 +241,42 @@ def pipeline(pipeline_config: Config) -> float:
 
 
 @click.command()
-@click.option('--use_cpp', is_flag=True, help="Use C++ backend.")
-@click.option('--pipeline_batch_size', default=256, type=int, help="Batch size for the pipeline.")
-@click.option('--enable_monitor', is_flag=True, help="Enable monitoring.")
-@click.option('--feature_length', default=512, type=int, help="Feature length.")
-@click.option('--num_threads', default=os.cpu_count(), type=int, help="Number of threads.")
-@click.option('--model_max_batch_size', default=256, type=int, help="Model max batch size.")
-@click.option('--mode', type=click.Choice([mode.value for mode in PipelineModes], case_sensitive=False),
-              default=PipelineModes.NLP.value, help="Pipeline mode.")
-@click.option('--log_level', type=click.Choice(['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'], case_sensitive=True),
-              default='INFO', help="Sets the logging level.")
-def cli(use_cpp, pipeline_batch_size, enable_monitor, feature_length, num_threads, model_max_batch_size, mode,
-        log_level):
+@click.option("--use_cpp", is_flag=True, help="Use C++ backend.")
+@click.option(
+    "--pipeline_batch_size", default=256, type=int, help="Batch size for the pipeline."
+)
+@click.option("--enable_monitor", is_flag=True, help="Enable monitoring.")
+@click.option("--feature_length", default=512, type=int, help="Feature length.")
+@click.option(
+    "--num_threads", default=os.cpu_count(), type=int, help="Number of threads."
+)
+@click.option(
+    "--model_max_batch_size", default=256, type=int, help="Model max batch size."
+)
+@click.option(
+    "--mode",
+    type=click.Choice([mode.value for mode in PipelineModes], case_sensitive=False),
+    default=PipelineModes.NLP.value,
+    help="Pipeline mode.",
+)
+@click.option(
+    "--log_level",
+    type=click.Choice(
+        ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=True
+    ),
+    default="INFO",
+    help="Sets the logging level.",
+)
+def cli(
+    use_cpp,
+    pipeline_batch_size,
+    enable_monitor,
+    feature_length,
+    num_threads,
+    model_max_batch_size,
+    mode,
+    log_level,
+):
     """
     Command line interface for configuring and running the pipeline with specified options.
     """

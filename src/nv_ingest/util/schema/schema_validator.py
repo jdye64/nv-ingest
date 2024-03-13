@@ -12,8 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 from nv_ingest.util.exception_handlers.schemas import schema_exception_handler
-import json
+
 
 @schema_exception_handler
 def validate_schema(metadata, Schema):

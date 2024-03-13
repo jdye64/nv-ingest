@@ -13,13 +13,9 @@
 # limitations under the License.
 
 import logging
-from typing import Any
-from typing import Dict
-from typing import List
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +24,13 @@ class FileSourcePipeSchema(BaseModel):
     batch_size: int = 1024
     chunk_overlap: int = 51
     chunk_size: int = 512
-    converters_meta: Optional[Dict[Any, Any]] = {}  # Flexible dictionary for converters metadata
+    converters_meta: Optional[
+        Dict[Any, Any]
+    ] = {}  # Flexible dictionary for converters metadata
     enable_monitor: bool = False
-    extractor_config: Optional[Dict[Any, Any]] = {}  # Flexible dictionary for extractor configuration
+    extractor_config: Optional[
+        Dict[Any, Any]
+    ] = {}  # Flexible dictionary for extractor configuration
     filenames: List[str] = Field(default_factory=list)  # List of file paths
     num_threads: int = 1  # Number of threads for processing
     vdb_resource_name: str

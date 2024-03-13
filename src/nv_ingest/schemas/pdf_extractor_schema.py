@@ -17,23 +17,24 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from nv_ingest.schemas.metadata import SourceMetadataSchema
-from nv_ingest.schemas.metadata import ContentMetadataSchema
-from nv_ingest.schemas.metadata import TextMetadataSchema
-from nv_ingest.schemas.metadata import ImageMetadataSchema
-from nv_ingest.schemas.metadata import ErrorMetadataSchema
+from nv_ingest.schemas.metadata import (
+    ContentMetadataSchema,
+    ErrorMetadataSchema,
+    ImageMetadataSchema,
+    SourceMetadataSchema,
+    TextMetadataSchema,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class PDFExtractorSchema(BaseModel):
-
     content: str = ""
     source_metadata: Optional[SourceMetadataSchema]
     content_metadata: Optional[ContentMetadataSchema]
-    text_metadata:  Optional[TextMetadataSchema]
-    image_metadata:  Optional[ImageMetadataSchema]
-    error_metadata:  Optional[ErrorMetadataSchema]
+    text_metadata: Optional[TextMetadataSchema]
+    image_metadata: Optional[ImageMetadataSchema]
+    error_metadata: Optional[ErrorMetadataSchema]
 
     class Config:
         extra = "forbid"
