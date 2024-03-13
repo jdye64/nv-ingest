@@ -119,14 +119,14 @@ def _process_pdf_bytes(df, task_props):
 
 @register_module(MODULE_NAME, MODULE_NAMESPACE)
 def _pdf_text_extractor(builder: mrc.Builder):
-    builder.get_current_module_config()
-
     @filter_by_task(["extract"])
     @traceable(MODULE_NAME)
     def process_task(ctrl_msg: ControlMessage) -> None:
         task_props = ctrl_msg.remove_task("extract")
 
-        df = ctrl_msg.payload().copy_dataframe().to_pandas()
+        with ctrl_msg.payload().mutable_dataframe() as mdf:
+            df = mdf.to_pandas()
+
         try:
             result = _process_pdf_bytes(df, task_props)
             df_result = cudf.DataFrame(result, columns=["document_type", "metadata"])

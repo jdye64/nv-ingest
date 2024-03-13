@@ -645,13 +645,15 @@ def process_tasks(future_to_file, output_directory, progress_bar):
             doc_map = {}
             if output_directory:
                 response_data = json.loads(response["data"])
-                doc_meta = response_data[0]["metadata"]
-                source_meta = doc_meta["source_metadata"]
+                doc_meta_base = response_data[0]["metadata"]
+                source_meta = doc_meta_base["source_metadata"]
                 doc_name = source_meta["source_id"]
                 output_name = f"{doc_name}.metadata.json"
 
                 for document in response_data:
-                    doc_type = document["document_type"]
+                    doc_meta = document["metadata"]
+                    doc_content_metadata = doc_meta["content_metadata"]
+                    doc_type = doc_content_metadata["type"]
 
                     if doc_type not in doc_map:
                         doc_map[doc_type] = []
@@ -668,9 +670,6 @@ def process_tasks(future_to_file, output_directory, progress_bar):
 
             total_data_processed += data_processed
             process_response(response, stage_elapsed_times)
-
-            # with open("response.json", "w") as f:
-            #    f.write(json.dumps(json.loads(response['data']), indent=2))
 
         except Exception as e:
             traceback.print_exc()

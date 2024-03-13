@@ -119,8 +119,12 @@ class ImageTypeEnum(str, Enum):
 
 
 class TaskTypeEnum(str, Enum):
+    CAPTION = "caption"
+    EMBED = "embed"
     EXTRACT = "extract"
+    FILTER = "filter"
     SPLIT = "split"
+    TRANSFORM = "transform"
 
 
 class StatusEnum(str, Enum):

@@ -217,25 +217,6 @@ def _nemo_document_splitter(builder: mrc.Builder):
 
             split_docs = []
             for _, row in df_filtered.iterrows():
-                # TODO(Devin): Remove once we have a fix for StructDtype issue in
-                # metadata_injector.
-                if "metadata" not in row or "content" not in row["metadata"]:
-                    row["metadata"] = {
-                        "content": row["content"],
-                        "content_metadata": {
-                            "type": "text",
-                        },
-                        "error_metadata": None,
-                        "image_metadata": None,
-                        "source_metadata": {
-                            "source_id": row["source_id"],
-                            "source_name": row["source_name"],
-                            "source_type": row["document_type"],
-                        },
-                        "text_metadata": {"text_type": "document"},
-                    }
-
-                # validate_metadata(row['metadata'])
                 content = row["metadata"]["content"]
 
                 if content is None:
@@ -265,7 +246,6 @@ def _nemo_document_splitter(builder: mrc.Builder):
             ).reset_index(drop=True)
 
             message_meta = MessageMeta(df=cudf.from_pandas(split_docs_df))
-
             message.payload(message_meta)
 
             return message

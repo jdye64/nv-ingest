@@ -400,9 +400,6 @@ python ./src/util/upload_to_ingest_ms.py \
 
 (Error) Submit a PDF file with only a splitting task.
 
-**Note:** This will not currently produce what you want as it will try to split one giant base64 encoded string. This
-should be updated to decode the base64 string and then split it into chunks.
-
 ```bash
 python ./src/util/upload_to_ingest_ms.py \
   --file_source ./path_to_document.txt \
