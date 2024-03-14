@@ -38,3 +38,11 @@ class PDFExtractorSchema(BaseModel):
 
     class Config:
         extra = "forbid"
+
+
+class PDFExtractorModuleSchema(BaseModel):
+    n_workers: int = 16
+    max_queue_size: int = 1
+
+    class Config:
+        extra = "forbid"

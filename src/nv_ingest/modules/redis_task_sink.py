@@ -86,6 +86,7 @@ def _redis_task_sink(builder: mrc.Builder):
     process_node = builder.make_node(
         "process_and_forward", ops.map(process_and_forward)
     )
+    process_node.launch_options.engines_per_pe = 6
 
     # Register the final output of the module
     builder.register_module_input("input", process_node)
