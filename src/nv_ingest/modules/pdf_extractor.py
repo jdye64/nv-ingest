@@ -13,9 +13,13 @@
 # limitations under the License.
 
 import base64
+import ctypes
 import functools
 import io
 import logging
+import multiprocessing as mp
+import os
+import queue
 import traceback
 
 import cudf
@@ -24,9 +28,11 @@ import mrc.core.operators as ops
 import pandas as pd
 from morpheus.messages import ControlMessage, MessageMeta
 from morpheus.utils.module_utils import ModuleLoaderFactory, register_module
+from mrc.core.node import RoundRobinRouter
+from pydantic import ValidationError
 
 from nv_ingest.modules import pdf
-from nv_ingest.schemas.pdf_extractor_schema import PDFExtractorSchema
+from nv_ingest.schemas.pdf_extractor_schema import PDFExtractorModuleSchema
 from nv_ingest.util.exception_handlers.pdf import create_exception_tag
 from nv_ingest.util.flow_control import filter_by_task
 from nv_ingest.util.tracing import traceable
@@ -36,7 +42,7 @@ logger = logging.getLogger(__name__)
 MODULE_NAME = "pdf_content_extractor"
 MODULE_NAMESPACE = "nv-ingest"
 PDFExtractorLoaderFactory = ModuleLoaderFactory(
-    MODULE_NAME, MODULE_NAMESPACE, PDFExtractorSchema
+    MODULE_NAME, MODULE_NAMESPACE, PDFExtractorModuleSchema
 )
 
 
@@ -117,31 +123,116 @@ def _process_pdf_bytes(df, task_props):
     return df
 
 
+def _worker_target(recv_queue, send_queue, **kwargs):
+    affinity = kwargs.get("affinity")
+    cancellation_token = kwargs.get("cancellation_token")
+    os.sched_setaffinity(0, affinity)
+
+    while not cancellation_token.value:
+        try:
+            work = recv_queue.get(timeout=1.0)
+        except queue.Empty:
+            continue
+
+        df, task_props = work
+        result = _process_pdf_bytes(df, task_props)
+
+        send_queue.put(result)
+
+
 @register_module(MODULE_NAME, MODULE_NAMESPACE)
 def _pdf_text_extractor(builder: mrc.Builder):
+    module_config = builder.get_current_module_config()
+
+    try:
+        validated_config = PDFExtractorModuleSchema(**module_config)
+    except ValidationError as e:
+        error_messages = "; ".join(
+            [f"{error['loc'][0]}: {error['msg']}" for error in e.errors()]
+        )
+        log_error_message = f"Invalid extractor configuration: {error_messages}"
+        logger.error(log_error_message)
+        raise ValueError(log_error_message)
+
+    workers = {}
+    mp_context = mp.get_context("fork")
+    cancellation_token = mp_context.Value(ctypes.c_int8, False)
+    send_queues = {
+        i: mp_context.Queue(maxsize=validated_config.max_queue_size)
+        for i in range(validated_config.n_workers)
+    }
+    recv_queues = {
+        i: mp_context.Queue(maxsize=validated_config.max_queue_size)
+        for i in range(validated_config.n_workers)
+    }
+
+    for i in range(validated_config.n_workers):
+        worker_kwargs = dict(
+            affinity=[i + 1],
+            cancellation_token=cancellation_token,
+        )
+
+        workers[i] = mp_context.Process(
+            target=_worker_target,
+            args=(send_queues[i], recv_queues[i]),
+            kwargs=worker_kwargs,
+        )
+
+    for worker_id in workers.keys():
+        workers[worker_id].start()
+
+    def recv_deque(worker_id):
+        yield recv_queues[worker_id].get()
+
     @filter_by_task(["extract"])
     @traceable(MODULE_NAME)
-    def process_task(ctrl_msg: ControlMessage) -> None:
+    def _worker_fn(ctrl_msg: ControlMessage, port_id: int):
+        # Must copy payload and control message here?
+        with ctrl_msg.payload().mutable_dataframe() as mdf:
+            x_c = mdf.to_pandas()
+        ctrl_msg = ctrl_msg.copy()
         task_props = ctrl_msg.remove_task("extract")
 
-        with ctrl_msg.payload().mutable_dataframe() as mdf:
-            df = mdf.to_pandas()
+        # Put/get from spawned extraction process
+        send_queues[port_id].put((x_c, task_props))
+        result = next(recv_deque(port_id))
 
-        try:
-            result = _process_pdf_bytes(df, task_props)
-            df_result = cudf.DataFrame(result, columns=["document_type", "metadata"])
-            ctrl_msg.payload(MessageMeta(df=df_result))
-        except Exception as e:
-            logger.error(f"Failed to extract text from PDF: {e}")
-            ctrl_msg.set_metadata("cm_failed", True)
-
+        # Update control message with new payload
+        msg_meta = MessageMeta(df=cudf.DataFrame(result))
+        ctrl_msg.payload(msg_meta)
         return ctrl_msg
 
-    # Create a node for processing incoming messages and submitting tasks
-    input_node = builder.make_node(
-        "pdf_content_extractor",
-        ops.map(process_task),
-        ops.filter(lambda x: x is not None),
+    @traceable("extract_no_op")
+    def no_op(ctrl_msg: ControlMessage):
+        return ctrl_msg
+
+    def on_completed():
+        cancellation_token.value = True
+        for worker_id in workers.keys():
+            workers[worker_id].join()
+
+    # Create pass-through input node
+    input_node = builder.make_node("pdf_content_extractor", ops.map(no_op))
+
+    # Create router node
+    router_node = RoundRobinRouter(builder, "router")
+    builder.make_edge(input_node, router_node)
+
+    # create merge node
+    merge_node = builder.make_node(
+        "merge",
+        ops.map(no_op),
+        ops.on_completed(on_completed),
     )
+
+    # router-> worker -> merge nodes
+    for port_id in range(validated_config.n_workers):
+        worker_fn = functools.partial(_worker_fn, port_id=port_id)
+        pe_worker_node = builder.make_node(
+            f"extract-worker-{port_id}", ops.map(worker_fn)
+        )
+        builder.make_edge(router_node, pe_worker_node)
+        builder.make_edge(pe_worker_node, merge_node)
+
     builder.register_module_input("input", input_node)
-    builder.register_module_output("output", input_node)
+    builder.register_module_output("output", merge_node)

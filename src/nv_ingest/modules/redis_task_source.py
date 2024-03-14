@@ -135,4 +135,5 @@ def _redis_task_source(builder: mrc.Builder):
         return control_message
 
     node = builder.make_source("fetch_messages", fetch_and_process_messages)
+    node.launch_options.engines_per_pe = 6
     builder.register_module_output("output", node)

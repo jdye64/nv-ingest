@@ -31,9 +31,6 @@ from nv_ingest.modules.pdf_extractor import PDFExtractorLoaderFactory
 from nv_ingest.modules.redis_task_sink import RedisTaskSinkLoaderFactory
 from nv_ingest.modules.redis_task_source import RedisTaskSourceLoaderFactory
 
-# from morpheus.stages.inference.triton_inference_stage import TritonInferenceStage
-# from morpheus.stages.preprocess.preprocess_nlp_stage import PreprocessNLPStage
-
 logger = logging.getLogger(__name__)
 
 
@@ -85,11 +82,14 @@ def validate_source_config(source_info: typing.Dict[str, any]) -> None:
         )
 
 
-def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
+def setup_pdf_ingest_pipeline(pipe: Pipeline, config: Config):
+    # Set proper redis hostname and port
     redis_host = os.environ.get("REDIS_HOST", "localhost")
     redis_port = os.environ.get("REDIS_PORT", "6379")
     logger.info(f"REDIS_HOST: {redis_host}")
     logger.info(f"REDIS_PORT: {redis_port}")
+
+    # Add task-source stage ("redis_listener")
     source_module_loader = RedisTaskSourceLoaderFactory.get_instance(
         module_name="redis_listener",
         module_config={
@@ -99,7 +99,6 @@ def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
             }
         },
     )
-
     source_stage = pipe.add_stage(
         LinearModuleSourceStage(
             config,
@@ -109,10 +108,10 @@ def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
         )
     )
 
+    # Add metadata-injection stage ("pdf_extractor")
     metadata_injector_loader = MetadataInjectorLoaderFactory.get_instance(
         module_name="metadata_injection", module_config={}
     )
-
     metadata_injector_stage = pipe.add_stage(
         LinearModulesStage(
             config,
@@ -124,10 +123,11 @@ def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
         )
     )
 
+    # Add pdf-extraction stage ("pdf_extractor")
     pdf_text_extract_loader = PDFExtractorLoaderFactory.get_instance(
-        module_name="pdf_extractor", module_config={}
+        module_name="pdf_extractor",
+        module_config={"n_workers": min(23, os.cpu_count() - 1), "max_queue_size": 1},
     )
-
     extractor_stage = pipe.add_stage(
         LinearModulesStage(
             config,
@@ -139,6 +139,7 @@ def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
         )
     )
 
+    # Add doc-splitter stage ("nemo_doc_splitter")
     nemo_splitter_loader = NemoDocSplitterLoaderFactory.get_instance(
         module_name="nemo_doc_splitter",
         module_config={
@@ -148,7 +149,6 @@ def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
             "max_character_length": 450,
         },
     )
-
     nemo_splitter_stage = pipe.add_stage(
         LinearModulesStage(
             config,
@@ -160,31 +160,7 @@ def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
         )
     )
 
-    # tokenizer_config = {
-    #    "model_kwargs": {
-    #        "add_special_tokens": False,
-    #        "column": "content",
-    #        "do_lower_case": True,
-    #        "truncation": True,
-    #        "vocab_hash_file": "data/bert-base-uncased-hash.txt",
-    #    },
-    #    "model_name": "bert-base-uncased-hash"
-    # }
-    # nlp_stage = pipe.add_stage(
-    #     PreprocessNLPStage(config, **tokenizer_config.get("model_kwargs", {}))
-    # )
-
-    # embeddings_config = {
-    #    "model_kwargs": {
-    #        "force_convert_inputs": True,
-    #        "model_name": "intfloat/e5-small-v2",
-    #        "server_url": "localhost:8001",
-    #        "use_shared_memory": True
-    #    }
-    # }
-    # embedding_stage = pipe.add_stage(
-    #     TritonInferenceStage(config, **embeddings_config.get("model_kwargs", {}))
-    # )
+    # Add task-sink stage ("redis_task_sink")
     sink_module_loader = RedisTaskSinkLoaderFactory.get_instance(
         module_name="redis_task_sink",
         module_config={
@@ -205,23 +181,22 @@ def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
         )
     )
 
+    # Add edges
     pipe.add_edge(source_stage, metadata_injector_stage)
     pipe.add_edge(metadata_injector_stage, extractor_stage)
     pipe.add_edge(extractor_stage, nemo_splitter_stage)
-    # pipe.add_edge(nemo_splitter_stage, nlp_stage)
-    # pipe.add_edge(nlp_stage, embedding_stage)
     pipe.add_edge(nemo_splitter_stage, sink_stage)
 
     return sink_stage
 
 
-def pipeline(pipeline_config: Config) -> float:
+def pipeline(config) -> float:
     logging.info("Starting pipeline setup")
 
-    pipe = Pipeline(pipeline_config)
+    pipe = Pipeline(config)
     start_abs = time.time_ns()
 
-    setup_pdf_ingest_pipe(pipe, pipeline_config)
+    setup_pdf_ingest_pipeline(pipe, config)
 
     end_setup = start_run = time.time_ns()
     setup_elapsed = (end_setup - start_abs) / 1e9
@@ -280,6 +255,7 @@ def cli(
     """
     Command line interface for configuring and running the pipeline with specified options.
     """
+
     configure_logging(log_level.upper())
     CppConfig.set_should_use_cpp(use_cpp)
 
