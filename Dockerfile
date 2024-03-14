@@ -1,5 +1,8 @@
+ARG BASE_IMG=morpheus-ms-base
+ARG TAG=24.03
+
 # Use NVIDIA Morpheus as the base image
-FROM morpheus-ms-base:24.03 as base
+FROM $BASE_IMG:$TAG as base
 
 # Set the working directory in the container
 WORKDIR /workspace

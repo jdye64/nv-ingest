@@ -38,7 +38,8 @@ variables:
   GIT_SUBMODULE_STRATEGY: recursive
   GIT_SUBMODULE_FORCE_HTTPS: "true"
   GIT_SUBMODULE_DEPTH: 1
-  PYTHON_SLIM_IMAGE: python:3.10.13-slim
+  MORPHEUS_BASE_IMG: gitlab-master.nvidia.com:5005/dl/ai-services/microservices/nv-ingest/morpheus
+  MORPHEUS_TAG: 24.03-runtime
   POETRY_VERSION: 1.7.1
   POETRY_CACHE_DIR: "$CI_PROJECT_DIR/.cache/poetry"
   SERVICE_NAME: nv-ingest
@@ -63,7 +64,7 @@ vault-init:
 ###   PYTHON   ###
 ##################
 .python-basics:
-  image: $PYTHON_SLIM_IMAGE
+  image: $MORPHEUS_BASE_IMG:$MORPHEUS_TAG
   # DAG approach, does not wait for previous state to finish
   needs: []
   # cache for python packages, unique for each branch (not shared across branches)
@@ -111,14 +112,14 @@ test:
 ###   DOCKER   ###
 ##################
 
-# build:docker:
-#   stage: build
-#   extends: .docker-kaniko-build
-#   needs: []
-#   variables:
-#     BUILD_ARGS: '--build-arg TARGETARCH=amd64 --build-arg POETRY_VERSION=${POETRY_VERSION}'
-#   rules:
-#     - when: on_success
+build:docker:
+  stage: build
+  extends: .docker-kaniko-build
+  needs: []
+  variables:
+    BUILD_ARGS: "--build-arg BASE_IMG=$MORPHEUS_BASE_IMG --build-arg TAG=$MORPHEUS_TAG"
+  rules:
+    - when: on_success
 
 ##################
 ### HELM CHART ###
