@@ -1,3 +1,13 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
 # Copyright (c) 2024, NVIDIA CORPORATION.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,16 +27,15 @@ from datetime import datetime
 
 import fitz
 
-from nv_ingest.schemas.metadata import (
-    AccessLevelEnum,
-    ContentTypeEnum,
-    ImageTypeEnum,
-    SourceTypeEnum,
-    StdContentDescEnum,
-    TextTypeEnum,
-)
+from nv_ingest.schemas.metadata import AccessLevelEnum
+from nv_ingest.schemas.metadata import ContentTypeEnum
+from nv_ingest.schemas.metadata import ImageTypeEnum
+from nv_ingest.schemas.metadata import SourceTypeEnum
+from nv_ingest.schemas.metadata import StdContentDescEnum
+from nv_ingest.schemas.metadata import TextTypeEnum
 from nv_ingest.schemas.pdf_extractor_schema import PDFExtractorSchema
-from nv_ingest.util.converters import bytetools, datetools
+from nv_ingest.util.converters import bytetools
+from nv_ingest.util.converters import datetools
 from nv_ingest.util.detectors.language import detect_language
 from nv_ingest.util.exception_handlers.pdf import pymupdf_exception_handler
 from nv_ingest.util.schema.schema_validator import validate_schema
