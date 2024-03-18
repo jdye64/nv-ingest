@@ -1,8 +1,19 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
 import pytest
 from pydantic import ValidationError
 
 from nv_ingest.schemas import validate_ingest_job
-from nv_ingest.schemas.ingest_job import DocumentTypeEnum, TaskTypeEnum
+from nv_ingest.schemas.ingest_job import DocumentTypeEnum
+from nv_ingest.schemas.ingest_job import TaskTypeEnum
 
 
 # Helper Functions
@@ -203,8 +214,7 @@ def test_missing_required_fields():
             {
                 "type": "split",
                 "task_properties": {
-                    "split_by": "sentence",
-                    # Missing split_length
+                    "split_by": "sentence",  # Missing split_length
                     "split_overlap": 0,
                 },
             }

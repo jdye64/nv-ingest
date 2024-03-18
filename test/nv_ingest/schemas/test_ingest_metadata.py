@@ -1,3 +1,13 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
 from datetime import datetime
 
 import pytest
@@ -75,7 +85,7 @@ def test_missing_required_fields_main_schema(key):
         ("source_metadata", "source_type"),
         ("content_metadata", "type"),
         ("text_metadata", "text_type"),
-        #    ("image_metadata", "image_type")
+        # ("image_metadata", "image_type")
     ],
 )
 def test_missing_required_fields_sub_schemas(sub_schema_key, missing_key):

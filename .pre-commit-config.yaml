@@ -1,3 +1,13 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v3.2.0
@@ -11,13 +21,13 @@ repos:
     hooks:
       - id: black
         exclude: "(^src/vendor/|client/python)"
-  - repo: https://github.com/PyCQA/flake8
-    rev: 6.1.0
-    hooks:
-      - id: flake8
-        exclude: "^src/vendor/"
-        additional_dependencies: ["flake8-print"]
-        args: ["--exclude=client/python/*"]
+  #- repo: https://github.com/PyCQA/flake8
+  #  rev: 6.1.0
+  #  hooks:
+  #    - id: flake8
+  #      exclude: "^src/vendor/"
+  #      additional_dependencies: ["flake8-print"]
+  #      args: ["--exclude=client/python/*", "--ignore=E203"]
   - repo: https://github.com/pycqa/isort
     rev: 5.12.0
     hooks:

@@ -1,7 +1,25 @@
-from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Union
+# SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
 
-from pydantic import conint, root_validator, validator
+
+from enum import Enum
+from typing import Any
+from typing import Dict
+from typing import List
+from typing import Literal
+from typing import Optional
+from typing import Union
+
+from pydantic import conint
+from pydantic import root_validator
+from pydantic import validator
 
 from nv_ingest.schemas.base_model_noext import BaseModelNoExt
 
@@ -81,8 +99,7 @@ class IngestTaskSchema(BaseModelNoExt):
             expected_type = {
                 TaskTypeEnum.split: IngestTaskSplitSchema,
                 TaskTypeEnum.extract: IngestTaskExtractSchema,
-                TaskTypeEnum.embed: IngestTaskEmbedSchema,
-                # Extend this mapping as necessary
+                TaskTypeEnum.embed: IngestTaskEmbedSchema,  # Extend this mapping as necessary
             }.get(task_type)
 
             # Validate that task_properties is of the expected type

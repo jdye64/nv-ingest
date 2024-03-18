@@ -1,3 +1,14 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
+
 import base64
 import glob
 import json
@@ -9,14 +20,18 @@ import time
 import traceback
 import uuid
 from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
-from statistics import mean, median
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import as_completed
+from statistics import mean
+from statistics import median
 
 import chardet
 import click
 from tqdm import tqdm
 
-from nv_ingest.schemas.ingest_job import DocumentTypeEnum, validate_ingest_job
+from nv_ingest.schemas.ingest_job import DocumentTypeEnum
+from nv_ingest.schemas.ingest_job import validate_ingest_job
 from nv_ingest.util.redis import RedisClient
 
 logger = logging.getLogger(__name__)
