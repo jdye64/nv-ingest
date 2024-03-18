@@ -40,8 +40,12 @@ include:
     file:
       - /templates/docker-utils.gitlab-ci.yml
       #- /templates/ephemeral-utils.gitlab-ci.yml
-      - /templates/security-utils.gitlab-ci.yml
       #- /templates/helm-utils.gitlab-ci.yml
+  - component: gitlab-master.nvidia.com/dl/ai-services/gitlab-components/nemo-util/vault-init@v0.1.0
+  - component: gitlab-master.nvidia.com/dl/ai-services/gitlab-components/nemo-pipeline/security@v0.1.0
+    inputs:
+      archive_name: ${SERVICE_NAME}.tar
+      nspect_id: NSPECT-4DWD-VFPM
 
 # common variables for the pipeline
 variables:
@@ -53,22 +57,10 @@ variables:
   POETRY_VERSION: 1.7.1
   POETRY_CACHE_DIR: "$CI_PROJECT_DIR/.cache/poetry"
   SERVICE_NAME: nv-ingest
-  NSPECT_ID: NSPECT-4DWD-VFPM
   NGC_REGISTRY: nvcr.io
   HELM_REPO: https://helm.ngc.nvidia.com/nvidian/nemo-llm
   HELM_REPO_NAME: ngc
   HELM_API_TOKEN: $NGC_REGISTRY_PASSWORD
-
-# init vault secrets
-vault-init:
-  image: gitlab-master.nvidia.com:5005/dl/ai-services/nemollm-cicd-images/cicd-llm:stable
-  stage: .pre
-  script:
-    - vault version
-    - vault agent -config=.gitlab/vault/vault-agent.config -exit-after-auth
-  artifacts:
-    reports:
-      dotenv: ci_secrets.env
 
 ##################
 ###   PYTHON   ###
@@ -184,32 +176,3 @@ build:docker:
 #  stage: publish
 #  extends: .tag-release
 #  needs: [vault-init, build:docker]
-
-##################
-###  SECURITY  ###
-##################
-
-#container-scan:
-#  needs:
-#    - job: security-config
-#    - job: build:docker
-#      optional: true
-#  extends: .container-scan
-#  # use this to prevent random shared runners from picking up this job
-#  tags:
-#    - gitlab-runner-bignlp-api
-#  variables:
-#    CONTAINER_ARCHIVE: ${SERVICE_NAME}.tar
-
-iac-scan:
-  extends: .iac-scan
-  parallel:
-    matrix:
-      # TODO add chart when available
-      - TARGET_CONFIG_PATH: [Dockerfile]
-
-sast-scan:
-  extends: .sast-scan
-
-cred-scan:
-  extends: .cred-scan

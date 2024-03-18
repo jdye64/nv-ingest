@@ -8,6 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
+exclude: \.gitlab.*|helm/.*
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v3.2.0
