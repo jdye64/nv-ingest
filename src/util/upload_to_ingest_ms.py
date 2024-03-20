@@ -28,6 +28,7 @@ from statistics import median
 
 import chardet
 import click
+import fitz
 from tqdm import tqdm
 
 from nv_ingest.schemas.ingest_job import DocumentTypeEnum
@@ -81,17 +82,43 @@ def setup_global_executor(n_workers, concurrency_mode="thread", use_dask=False):
             )
         else:
             executor = Client(n_workers=n_workers, threads_per_worker=1)
-        logger.info(f"Global dask client initialized with {n_workers} workers.")
+        logger.debug(f"Global dask client initialized with {n_workers} workers.")
     else:
         executor_class = (
             ThreadPoolExecutor if concurrency_mode == "thread" else ProcessPoolExecutor
         )
         executor = executor_class(max_workers=n_workers)
-        logger.info(
+        logger.debug(
             f"Global {str(executor_class)} initialized with {n_workers} workers."
         )
 
     return executor
+
+
+def estimate_page_count(file_path):
+    _, file_extension = os.path.splitext(file_path)
+    try:
+        if file_extension.lower() == ".pdf":
+            # Handle PDF files with PyMuPDF
+            with fitz.open(file_path) as doc:
+                return len(doc)
+        elif file_extension.lower() in [".txt", ".md"]:
+            # Handle text files
+            with open(file_path, "r", encoding="utf-8") as file:
+                text = file.read()
+                word_count = len(text.split())
+                pages_estimated = word_count / 300
+                return round(pages_estimated)
+        else:
+            print(f"Unsupported file type: {file_extension}")
+            return 1
+
+    except FileNotFoundError:
+        print(f"The file {file_path} was not found.")
+        return None
+    except Exception as e:
+        print(f"An error occurred while processing {file_path}: {e}")
+        return None
 
 
 def build_extraction_tasks(methods, file_type):
@@ -621,76 +648,90 @@ def submit_tasks(executor, matching_files, processing_function, processing_args)
     """
 
     return {
-        executor.submit(processing_function, source, *processing_args): source
+        executor.submit(processing_function, source, *processing_args): {
+            "source": source,
+            "pages": estimate_page_count(
+                source
+            ),  # Short term hack to get pages/sec -- needs to go into service
+        }
         for source in matching_files
     }
 
 
-def process_tasks(future_to_file, output_directory, progress_bar):
-    """
-    Processes submitted tasks, updates the progress bar, and accumulates processed data and stage
-    times.
+def handle_future_result(future, future_data, output_directory, stage_elapsed_times):
+    source = future_data["source"]
+    try:
+        response, data_processed = future.result()
+        if response is None:
+            logger.error(f"Error processing file {source}: No response received.")
+            return None, 0  # Indicates an error; no data processed
 
-    Parameters
-    ----------
-    future_to_file : dict
-        A dictionary mapping futures to their corresponding source file paths.
-    progress_bar : tqdm.tqdm
-        A tqdm progress bar instance to be updated as tasks are completed.
+        if output_directory:
+            save_response_data(response, source, output_directory)
 
-    Returns
-    -------
-    tuple
-        A tuple containing a dictionary of stage elapsed times and the total data processed in
-        bytes.
-    """
+        process_response(response, stage_elapsed_times)
+        return response, data_processed
+    except Exception as e:
+        traceback.print_exc()
+        logger.error(f"Error processing file {source}: {str(e)}")
+        return None, 0  # Indicates an error; no data processed
 
+
+def save_response_data(response, source, output_directory):
+    response_data = json.loads(response["data"])
+    doc_meta_base = response_data[0]["metadata"]
+    source_meta = doc_meta_base["source_metadata"]
+    doc_name = source_meta["source_id"]
+    output_name = f"{doc_name}.metadata.json"
+
+    doc_map = organize_documents_by_type(response_data)
+    for doc_type, documents in doc_map.items():
+        doc_type_path = os.path.join(output_directory, doc_type)
+        if not os.path.exists(doc_type_path):
+            os.makedirs(doc_type_path)
+
+        with open(os.path.join(doc_type_path, output_name), "w") as f:
+            f.write(json.dumps(documents, indent=2))
+
+
+def organize_documents_by_type(response_data):
+    doc_map = {}
+    for document in response_data:
+        doc_meta = document["metadata"]
+        doc_content_metadata = doc_meta["content_metadata"]
+        doc_type = doc_content_metadata["type"]
+        if doc_type not in doc_map:
+            doc_map[doc_type] = []
+        doc_map[doc_type].append(document)
+    return doc_map
+
+
+def process_tasks(future_to_file, output_directory, progress_bar, start_time_ns):
     stage_elapsed_times = defaultdict(list)
     total_data_processed = 0
+    total_pages_processed = 0
 
     for future in as_completed(future_to_file):
-        source = future_to_file.pop(future)  # Cleanup as tasks complete
-        try:
-            response, data_processed = future.result()
-            progress_bar.update(1)
-            if response is None:
-                logger.error(f"Error processing file {source}: No response received.")
-                continue
+        progress_bar.update(1)
+        future_data = future_to_file.pop(future)  # Cleanup as tasks complete
+        pages = future_data["pages"]
+        total_pages_processed += pages
 
-            doc_map = {}
-            if output_directory:
-                response_data = json.loads(response["data"])
-                doc_meta_base = response_data[0]["metadata"]
-                source_meta = doc_meta_base["source_metadata"]
-                doc_name = source_meta["source_id"]
-                output_name = f"{doc_name}.metadata.json"
+        response, data_processed = handle_future_result(
+            future, future_data, output_directory, stage_elapsed_times
+        )
+        if response is None:
+            continue  # Skip to next future if there was an error
 
-                for document in response_data:
-                    doc_meta = document["metadata"]
-                    doc_content_metadata = doc_meta["content_metadata"]
-                    doc_type = doc_content_metadata["type"]
+        total_data_processed += data_processed
 
-                    if doc_type not in doc_map:
-                        doc_map[doc_type] = []
-                    doc_map[doc_type].append(document)
+        # Calculate and update performance metrics
+        elapsed_time_ns = time.time_ns() - start_time_ns
+        elapsed_time = elapsed_time_ns / 1e9
+        pages_per_sec = total_pages_processed / elapsed_time if elapsed_time > 0 else 0
+        progress_bar.set_postfix(pages_per_sec=f"{pages_per_sec:.2f}", refresh=True)
 
-                for doc_type, output_names in doc_map.items():
-                    if not os.path.exists(os.path.join(output_directory, doc_type)):
-                        os.makedirs(os.path.join(output_directory, doc_type))
-
-                    with open(
-                        os.path.join(output_directory, doc_type, output_name), "w"
-                    ) as f:
-                        f.write(json.dumps(doc_map[doc_type], indent=2))
-
-            total_data_processed += data_processed
-            process_response(response, stage_elapsed_times)
-
-        except Exception as e:
-            traceback.print_exc()
-            logger.error(f"Error processing file {source}: {str(e)}")
-
-    return stage_elapsed_times, total_data_processed
+    return stage_elapsed_times, total_data_processed, total_pages_processed
 
 
 def process_response(response, stage_elapsed_times):
@@ -770,7 +811,9 @@ def report_stage_statistics(stage_elapsed_times, total_trace_elapsed, abs_elapse
         )
 
 
-def report_overall_speed(total_data_processed, start_time_ns, total_files):
+def report_overall_speed(
+    total_data_processed, total_pages_processed, start_time_ns, total_files
+):
     """
     Reports the overall processing speed and the total data processed.
 
@@ -794,18 +837,29 @@ def report_overall_speed(total_data_processed, start_time_ns, total_files):
     total_elapsed_time_s = (
         total_elapsed_time_ns / 1_000_000_000
     )  # Convert nanoseconds to seconds
+
     total_data_size_mb = total_data_processed / (
         1024 * 1024
     )  # Convert bytes to megabytes
-    overall_speed = total_data_size_mb / total_elapsed_time_s  # MB/sec
+
+    throughput_pages = total_pages_processed / total_elapsed_time_s  # pages/sec
+    throughput_files = total_files / total_elapsed_time_s  # files/sec
+    throughput_mb = total_data_size_mb / total_elapsed_time_s  # MB/sec
 
     logger.info(f"Processed {total_files} files in {total_elapsed_time_s:.2f} seconds.")
-    logger.info(f"Total data processed: {total_data_size_mb:.2f} MB")
-    logger.info(f"Overall processing speed: {overall_speed:.2f} MB/sec")
+    logger.info(f"Total pages processed    : {total_pages_processed:.2f}")
+    logger.info(f"Total data processed(MB) : {total_data_size_mb:.2f} MB")
+    logger.info(f"Throughput (Pages/sec)   : {throughput_pages:.2f}")
+    logger.info(f"Throughput (Files/sec    : {throughput_files:.2f}")
+    logger.info(f"Throughput (MB/sec)      : {throughput_mb:.2f}")
 
 
 def report_statistics(
-    start_time_ns, stage_elapsed_times, total_data_processed, total_files
+    start_time_ns,
+    stage_elapsed_times,
+    total_data_processed,
+    total_pages_processed,
+    total_files,
 ):
     """
     Aggregates and reports statistics for the entire processing session.
@@ -831,7 +885,9 @@ def report_statistics(
     abs_elapsed = time.time_ns() - start_time_ns
     total_trace_elapsed = sum(sum(times) for times in stage_elapsed_times.values())
     report_stage_statistics(stage_elapsed_times, total_trace_elapsed, abs_elapsed)
-    report_overall_speed(total_data_processed, start_time_ns, total_files)
+    report_overall_speed(
+        total_data_processed, total_pages_processed, start_time_ns, total_files
+    )
 
 
 def determine_processing_function(
@@ -874,6 +930,8 @@ def determine_processing_function(
         such as 'use_dask' to specify whether to use Dask for distributed processing and
         'concurrency_mode' to specify the mode of concurrency (e.g., process-based or
         thread-based).
+    split_params : dict
+        ...
 
     Returns
     -------
@@ -881,6 +939,7 @@ def determine_processing_function(
         A tuple where the first element is the selected processing function (callable) and the
         second element is a tuple containing the arguments to be passed to the processing
         function.
+        :param split_params:
     """
     use_dask = concurrency_options["use_dask"]
     if use_dask or concurrency_options.get("concurrency_mode") == "process":
@@ -961,6 +1020,7 @@ def main(
         return
 
     progress_bar = tqdm(total=len(matching_files), desc="Processing files", unit="file")
+    progress_bar.set_postfix(pages_per_sec="0.0")
 
     with setup_global_executor(**concurrency_options) as executor:
         processing_function, processing_args = determine_processing_function(
@@ -973,16 +1033,24 @@ def main(
             concurrency_options,
             split_params,
         )
+
         future_to_file = submit_tasks(
             executor, matching_files, processing_function, processing_args
         )
-        stage_elapsed_times, total_data_processed = process_tasks(
-            future_to_file, output_directory, progress_bar
-        )
+
+        (
+            stage_elapsed_times,
+            total_data_processed,
+            total_pages_processed,
+        ) = process_tasks(future_to_file, output_directory, progress_bar, start_time_ns)
 
     progress_bar.close()
     report_statistics(
-        start_time_ns, stage_elapsed_times, total_data_processed, len(matching_files)
+        start_time_ns,
+        stage_elapsed_times,
+        total_data_processed,
+        total_pages_processed,
+        len(matching_files),
     )
 
 
