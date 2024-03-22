@@ -31,8 +31,8 @@ import click
 import fitz
 from tqdm import tqdm
 
-from nv_ingest.schemas.ingest_job import DocumentTypeEnum
-from nv_ingest.schemas.ingest_job import validate_ingest_job
+from nv_ingest.schemas.ingest_job_schema import DocumentTypeEnum
+from nv_ingest.schemas.ingest_job_schema import validate_ingest_job
 from nv_ingest.util.redis import RedisClient
 
 logger = logging.getLogger(__name__)

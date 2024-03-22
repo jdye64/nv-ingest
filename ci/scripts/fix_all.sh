@@ -88,6 +88,8 @@ if [[ -z "${SKIP_FLAKE8}" ]]; then
     fi
 fi
 
+$(python3 -m autoflake ${PY_MODIFIED_FILES[@]} --in-place --remove-all-unused-imports --remove-unused-variables --expand-star-imports --recursive)
+
 # Report errors
 if [ ${#ERRORS[@]} -ne 0 ]; then
     echo "Errors occurred during the run:"

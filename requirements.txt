@@ -7,7 +7,7 @@ fsspec
 more_itertools
 onnx==1.15.0
 pandas
-pydantic
+pydantic==1.10.14
 pyinstrument
 PyMuPDF
 redis~=5.0.1

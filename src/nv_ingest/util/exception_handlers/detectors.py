@@ -13,7 +13,7 @@ import logging
 
 from langdetect.lang_detect_exception import LangDetectException
 
-from nv_ingest.schemas.metadata import LanguageEnum
+from nv_ingest.schemas.metadata_schema import LanguageEnum
 
 logger = logging.getLogger(__name__)
 

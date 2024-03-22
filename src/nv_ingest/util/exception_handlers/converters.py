@@ -11,6 +11,7 @@
 
 import logging
 from datetime import datetime
+from datetime import timezone
 
 from nv_ingest.util.converters import datetools
 
@@ -23,7 +24,7 @@ def datetools_exception_handler(func, **kwargs):
             return func(*args, **kwargs)
         except Exception as e:
             log_error_message = f"Invalid date format: {e}"
-            logger.warn(log_error_message)
-            return datetools.remove_tz(datetime.now()).isoformat()
+            logger.warning(log_error_message)
+            return datetools.remove_tz(datetime.now(timezone.utc)).isoformat()
 
     return inner_function

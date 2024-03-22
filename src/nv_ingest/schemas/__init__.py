@@ -9,10 +9,28 @@
 # its affiliates is strictly prohibited.
 
 
-from .ingest_job import validate_ingest_job
-from .metadata import validate_metadata
+from .ingest_job_schema import IngestJobSchema
+from .ingest_job_schema import validate_ingest_job
+from .metadata_injector_schema import MetadataInjectorSchema
+from .metadata_schema import validate_metadata
+from .nemo_doc_splitter_schema import DocumentSplitterSchema
+from .pdf_extractor_schema import PDFExtractorModuleSchema
+from .pdf_extractor_schema import PDFExtractorSchema
+from .redis_client_schema import RedisClientSchema
+from .redis_task_sink_schema import RedisTaskSinkSchema
+from .redis_task_source_schema import RedisTaskSourceSchema
+from .task_injection_schema import TaskInjectionSchema
 
 __all__ = [
+    "DocumentSplitterSchema",
+    "IngestJobSchema",
+    "MetadataInjectorSchema",
+    "PDFExtractorModuleSchema",
+    "PDFExtractorSchema",
+    "RedisClientSchema",
+    "RedisTaskSinkSchema",
+    "RedisTaskSourceSchema",
+    "TaskInjectionSchema",
     "validate_ingest_job",
     "validate_metadata",
 ]

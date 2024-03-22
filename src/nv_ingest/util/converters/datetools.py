@@ -9,7 +9,7 @@
 # its affiliates is strictly prohibited.
 
 from datetime import datetime
-from datetime import timedelta
+from datetime import timezone
 
 from dateutil.parser import parse
 
@@ -69,14 +69,13 @@ def remove_tz(datetime_obj):
 
     """
 
-    if datetime_obj.tzinfo is None:
-        return datetime_obj
+    if datetime_obj.tzinfo is not None:  # If timezone info is present
+        # Convert to UTC
+        datetime_obj = datetime_obj.astimezone(timezone.utc)
+        # Remove timezone information
+        datetime_obj = datetime_obj.replace(tzinfo=None)
 
-    utc_delta = timedelta(seconds=datetime_obj.utcoffset().total_seconds())
-
-    datetime_obj = datetime_obj.replace(tzinfo=None)
-
-    return datetime_obj + utc_delta
+    return datetime_obj
 
 
 def validate_iso8601(date_string):

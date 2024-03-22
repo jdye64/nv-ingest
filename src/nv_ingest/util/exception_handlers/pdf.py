@@ -11,8 +11,8 @@
 
 import logging
 
-from nv_ingest.schemas.metadata import StatusEnum
-from nv_ingest.schemas.metadata import TaskTypeEnum
+from nv_ingest.schemas.metadata_schema import StatusEnum
+from nv_ingest.schemas.metadata_schema import TaskTypeEnum
 from nv_ingest.schemas.pdf_extractor_schema import PDFExtractorSchema
 from nv_ingest.util.schema.schema_validator import validate_schema
 
