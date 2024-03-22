@@ -23,6 +23,7 @@ class DocumentSplitterSchema(BaseModel):
     split_overlap: conint(ge=0) = 10
     max_character_length: Optional[conint(gt=0)] = 450
     sentence_window_size: Optional[conint(ge=0)] = 0
+    raise_on_failure: bool = False
 
     @validator("sentence_window_size")
     def check_sentence_window_size(cls, v, values, **kwargs):

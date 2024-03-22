@@ -31,6 +31,7 @@ class RedisClient:
         connection_timeout=300,
         max_pool_size=128,
         use_ssl=False,
+        redis_allocator=redis.Redis,  # New parameter for custom Redis allocator
     ):
         self.host = host
         self.port = port
@@ -46,18 +47,20 @@ class RedisClient:
             socket_connect_timeout=self.connection_timeout,
             max_connections=max_pool_size,
         )
-        self.client = redis.Redis(connection_pool=self.pool)
+        self.redis_allocator = redis_allocator
+        # Use the custom allocator if provided
+        self.client = self.redis_allocator(connection_pool=self.pool)
         self.retries = 0
+
+    def _connect(self):
+        if not self.ping():
+            logger.debug("Reconnecting to Redis")
+            self.client = self.redis_allocator(connection_pool=self.pool)
 
     def get_client(self):
         if self.client is None or not self.ping():
-            self.connect()
+            self._connect()
         return self.client
-
-    def connect(self):
-        if not self.ping():
-            logger.debug("Reconnecting to Redis")
-            self.client = redis.Redis(connection_pool=self.pool)
 
     def ping(self):
         try:
@@ -73,12 +76,11 @@ class RedisClient:
                 _, job_payload = self.get_client().blpop([task_queue])
                 return job_payload
             except RedisError as err:
-                logger.error(f"Redis error during fetch: {err}")
-                self.client = None  # Invalidate client to force reconnection
                 retries += 1
+                logger.error(f"Redis error during fetch: {err}")
                 backoff_delay = min(2**retries, self.max_backoff)
 
-                if self.max_retries == 0 or retries < self.max_retries:
+                if self.max_retries == 0 or retries <= self.max_retries:
                     logger.error(
                         f"Fetch attempt failed, retrying in {backoff_delay}s..."
                     )
@@ -88,6 +90,8 @@ class RedisClient:
                         f"Failed to fetch message from {task_queue} after {retries} attempts."
                     )
                     raise
+
+                self.client = None  # Invalidate client to force reconnection
 
     def submit_message(self, queue_name, message):
         """
@@ -161,21 +165,23 @@ class RedisClient:
                 f"Waiting for response on channel '{response_channel}' for up to {timeout} "
                 "seconds..."
             )
+
             response = self.get_client().blpop(response_channel, timeout=timeout)
 
             if response:
                 _, response_data = response
                 # Delete the response channel after retrieving the response to ensure cleanup
-                self.get_client().delete(response_channel)
                 return json.loads(response_data)
             else:
                 # Ensure the response channel is cleaned up if no response is received
-                self.get_client().delete(response_channel)
                 logger.error("No response received within timeout period")
                 raise RuntimeError("No response received within timeout period")
         except Exception:
             traceback.print_exc()
             raise
+        finally:
+            # Ensure the response channel is cleaned up if an exception occurs
+            self.get_client().delete(response_channel)
 
 
 class RedisStreamsClient:

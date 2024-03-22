@@ -9,8 +9,8 @@
 # its affiliates is strictly prohibited.
 
 
-from nv_ingest.schemas.ingest_job import DocumentTypeEnum
-from nv_ingest.schemas.metadata import ContentTypeEnum
+from nv_ingest.schemas.ingest_job_schema import DocumentTypeEnum
+from nv_ingest.schemas.metadata_schema import ContentTypeEnum
 
 DOC_TO_CONTENT_MAP = {
     DocumentTypeEnum.bmp: ContentTypeEnum.IMAGE,

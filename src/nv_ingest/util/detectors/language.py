@@ -11,7 +11,7 @@
 
 import langdetect
 
-from nv_ingest.schemas.metadata import LanguageEnum
+from nv_ingest.schemas.metadata_schema import LanguageEnum
 from nv_ingest.util.exception_handlers.detectors import langdetect_exception_handler
 
 

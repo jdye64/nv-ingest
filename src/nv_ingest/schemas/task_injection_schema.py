@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class TaskInjectionSchema(BaseModel):
-    dummy_var: str = "dummy"
+    raise_on_failure: bool = False
 
     class Config:
         extra = "forbid"

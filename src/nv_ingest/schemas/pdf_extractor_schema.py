@@ -14,11 +14,11 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from nv_ingest.schemas.metadata import ContentMetadataSchema
-from nv_ingest.schemas.metadata import ErrorMetadataSchema
-from nv_ingest.schemas.metadata import ImageMetadataSchema
-from nv_ingest.schemas.metadata import SourceMetadataSchema
-from nv_ingest.schemas.metadata import TextMetadataSchema
+from nv_ingest.schemas.metadata_schema import ContentMetadataSchema
+from nv_ingest.schemas.metadata_schema import ErrorMetadataSchema
+from nv_ingest.schemas.metadata_schema import ImageMetadataSchema
+from nv_ingest.schemas.metadata_schema import SourceMetadataSchema
+from nv_ingest.schemas.metadata_schema import TextMetadataSchema
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,7 @@ class PDFExtractorSchema(BaseModel):
     text_metadata: Optional[TextMetadataSchema]
     image_metadata: Optional[ImageMetadataSchema]
     error_metadata: Optional[ErrorMetadataSchema]
+    raise_on_failure: bool = False
 
     class Config:
         extra = "forbid"
@@ -38,6 +39,7 @@ class PDFExtractorSchema(BaseModel):
 class PDFExtractorModuleSchema(BaseModel):
     n_workers: int = 16
     max_queue_size: int = 1
+    raise_on_failure: bool = False
 
     class Config:
         extra = "forbid"
