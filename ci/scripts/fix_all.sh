@@ -74,6 +74,19 @@ if [[ "${SKIP_YAPF}" == "" ]]; then
    python3 -m yapf -i --style ${PY_CFG} -r ${PY_MODIFIED_FILES[@]}
 fi
 
+if [[ -z "${SKIP_AUTOFLAKE}" ]]; then
+    echo "Running autoflake..."
+    AUTOFLAKE_OUTPUT=$(python3 -m autoflake ${PY_MODIFIED_FILES[@]} --in-place --remove-all-unused-imports --remove-unused-variables --expand-star-imports --recursive 2>&1)
+    AUTOFLAKE_EXIT_CODE=$?
+
+    if [[ $AUTOFLAKE_EXIT_CODE -ne 0 ]]; then
+        echo "Autoflake encountered errors."
+        ERRORS+=("Autoflake errors: ${AUTOFLAKE_OUTPUT}")
+    else
+        echo "Autoflake completed successfully."
+    fi
+fi
+
 # Run flake8
 if [[ -z "${SKIP_FLAKE8}" ]]; then
     echo "Running flake8..."
@@ -88,7 +101,6 @@ if [[ -z "${SKIP_FLAKE8}" ]]; then
     fi
 fi
 
-$(python3 -m autoflake ${PY_MODIFIED_FILES[@]} --in-place --remove-all-unused-imports --remove-unused-variables --expand-star-imports --recursive)
 
 # Report errors
 if [ ${#ERRORS[@]} -ne 0 ]; then

@@ -41,9 +41,7 @@ def _run_cmd(exe: str, *args: str):
         return output
     except subprocess.CalledProcessError as e:
         error_output = e.stderr.decode("UTF-8").rstrip("\n")
-        logging.warning(
-            "Command [ERRORED]: `%s`, Error Output: '%s'", cmd_str, error_output
-        )
+        logging.warning("Command [ERRORED]: `%s`, Error Output: '%s'", cmd_str, error_output)
         raise
 
 
@@ -87,9 +85,7 @@ class GitWrapper:
 
         full_repo_version = GitWrapper.get_closest_tag()
 
-        match = re.match(
-            r"^v?(?P<major>[0-9]+)(?:\.(?P<minor>[0-9]+))?", full_repo_version
-        )
+        match = re.match(r"^v?(?P<major>[0-9]+)(?:\.(?P<minor>[0-9]+))?", full_repo_version)
 
         if match is None:
             logging.debug(
@@ -110,17 +106,13 @@ class GitWrapper:
     def get_repo_owner_name():
         # pylint: disable=anomalous-backslash-in-string
         return "nv-morpheus/" + _run_cmd(
-            "git remote -v | awk '/fetch/ {sub(/.*\\//, "
-            ", $2); sub(/\\.git/, "
-            ", $2); print $2}'"
+            "git remote -v | awk '/fetch/ {sub(/.*\\//, " ", $2); sub(/\\.git/, " ", $2); print $2}'"
         )  # noqa: W605
 
     @functools.lru_cache
     @staticmethod
     def get_repo_remote_name(repo_owner_and_name: str):
-        return _run_cmd(
-            f'git remote -v | grep :{repo_owner_and_name} | grep "(fetch)" | head -1 | cut -f1'
-        )
+        return _run_cmd(f'git remote -v | grep :{repo_owner_and_name} | grep "(fetch)" | head -1 | cut -f1')
 
     @functools.lru_cache
     @staticmethod
@@ -209,9 +201,7 @@ class GitWrapper:
     @staticmethod
     def get_file_add_date(file_path):
         """Return the date a given file was added to git"""
-        date_str = _git(
-            "log", "--format=%as", "--follow", f"'{file_path}'", "|", "tail", "-n 1"
-        )
+        date_str = _git("log", "--format=%as", "--follow", f"'{file_path}'", "|", "tail", "-n 1")
         return datetime.datetime.strptime(date_str, "%Y-%m-%d")
 
     @staticmethod
@@ -233,13 +223,9 @@ class GitWrapper:
         return ret
 
     @staticmethod
-    def diff(
-        target_ref: str, base_ref: str, merge_base: bool = False, staged: bool = False
-    ):
+    def diff(target_ref: str, base_ref: str, merge_base: bool = False, staged: bool = False):
         assert base_ref is not None or base_ref != "", "base_ref must be a valid ref"
-        assert (
-            target_ref is not None or target_ref != ""
-        ), "target_ref must be a valid ref"
+        assert target_ref is not None or target_ref != "", "target_ref must be a valid ref"
 
         args = ["--no-pager", "diff", "--name-only", "--ignore-submodules"]
 
@@ -255,9 +241,7 @@ class GitWrapper:
 
     @staticmethod
     def diff_index(target_ref: str, merge_base: bool = False, staged: bool = False):
-        assert (
-            target_ref is not None or target_ref != ""
-        ), "target_ref must be a valid ref"
+        assert target_ref is not None or target_ref != "", "target_ref must be a valid ref"
 
         args = [
             "--no-pager",
@@ -280,9 +264,7 @@ class GitWrapper:
     @staticmethod
     def merge_base(target_ref: str, base_ref: str = "HEAD"):
         assert base_ref is not None or base_ref != "", "base_ref must be a valid ref"
-        assert (
-            target_ref is not None or target_ref != ""
-        ), "target_ref must be a valid ref"
+        assert target_ref is not None or target_ref != "", "target_ref must be a valid ref"
 
         return _git("merge-base", target_ref, base_ref)
 
@@ -295,9 +277,7 @@ class GithubWrapper:
             _gh("--version")
 
             # Run a test function
-            repo_name = _gh(
-                "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"
-            )
+            repo_name = _gh("repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner")
 
             logging.debug("Github CLI is installed. Using repo: %s", repo_name)
             return True
@@ -327,9 +307,7 @@ class GithubWrapper:
             "number",
         ]
 
-        json_output = _gh(
-            "pr", "status", "--json", ",".join(fields), "--jq", ".currentBranch"
-        )
+        json_output = _gh("pr", "status", "--json", ",".join(fields), "--jq", ".currentBranch")
 
         if json_output == "":
             return None
@@ -372,9 +350,7 @@ class GithubWrapper:
         base_ref = GithubWrapper.get_pr_base_ref_name()
 
         # Now determine the remote ref name matching our repository
-        remote_name = GitWrapper.get_remote_branch(
-            base_ref, repo_owner_and_name=GithubWrapper.get_repo_owner_name()
-        )
+        remote_name = GitWrapper.get_remote_branch(base_ref, repo_owner_and_name=GithubWrapper.get_repo_owner_name())
 
         return remote_name
 
@@ -414,9 +390,7 @@ def get_merge_target():
         remote_branch = GitWrapper.get_target_remote_branch()
 
     if remote_branch is None:
-        raise RuntimeError(
-            "Could not determine remote_branch. Manually set TARGET_BRANCH to continue"
-        )
+        raise RuntimeError("Could not determine remote_branch. Manually set TARGET_BRANCH to continue")
 
     return remote_branch
 
@@ -493,9 +467,7 @@ def filter_files(
 
     for file in files:
         # Check that we are relative to the git repo
-        assert _is_repo_relative(
-            file, git_root=git_root
-        ), f"Path {file} must be relative to git root: {git_root}"
+        assert _is_repo_relative(file, git_root=git_root), f"Path {file} must be relative to git root: {git_root}"
 
         if path_filter is None or path_filter(file):
             ret_files.append(file)
@@ -623,14 +595,10 @@ def staged_files(base_ref="HEAD", *, path_filter: typing.Callable[[str], bool] =
         The list of files that have changed between the refs filtered by `path_filter`
     """
 
-    return modified_files(
-        target_ref=base_ref, merge_base=False, staged=True, path_filter=path_filter
-    )
+    return modified_files(target_ref=base_ref, merge_base=False, staged=True, path_filter=path_filter)
 
 
-def all_files(
-    *paths, base_ref="HEAD", path_filter: typing.Callable[[str], bool] = None
-):
+def all_files(*paths, base_ref="HEAD", path_filter: typing.Callable[[str], bool] = None):
     """
     Returns a list of all files in the repo that have been filtered by `path_filter`.
 
@@ -688,9 +656,7 @@ def get_file_add_date(filename: str):
 
 def _parse_args():
     argparser = argparse.ArgumentParser("Executes a gitutil action")
-    argparser.add_argument(
-        "action", choices=["get_merge_target"], help="Action to execute"
-    )
+    argparser.add_argument("action", choices=["get_merge_target"], help="Action to execute")
     args = argparser.parse_args()
     return args
 

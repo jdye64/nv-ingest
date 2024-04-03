@@ -34,9 +34,7 @@ def test_redis_client_schema_invalid_port(port):
         (False, 0, 0, 0),  # Test with optional fields set to their minimum values
     ],
 )
-def test_redis_client_schema_optional_fields(
-    use_ssl, connection_timeout, max_backoff, max_retries
-):
+def test_redis_client_schema_optional_fields(use_ssl, connection_timeout, max_backoff, max_retries):
     """
     Parametrized test for RedisClientSchema to check behavior with various combinations of optional fields.
     """

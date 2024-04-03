@@ -58,9 +58,7 @@ class IngestTaskSplitSchema(BaseModelNoExt):
     @validator("sentence_window_size")
     def check_sentence_window_size(cls, v, values, **kwargs):
         if v is not None and v > 0 and values["split_by"] != "sentence":
-            raise ValueError(
-                "When using sentence_window_size, split_by must be 'sentence'."
-            )
+            raise ValueError("When using sentence_window_size, split_by must be 'sentence'.")
         return v
 
 
@@ -106,8 +104,7 @@ class IngestTaskSchema(BaseModelNoExt):
             # Validate that task_properties is of the expected type
             if not isinstance(task_properties, expected_type):
                 raise ValueError(
-                    f"task_properties must be of type {expected_type.__name__} "
-                    f"for task type '{task_type}'"
+                    f"task_properties must be of type {expected_type.__name__} " f"for task type '{task_type}'"
                 )
         return values
 

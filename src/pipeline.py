@@ -47,9 +47,7 @@ def configure_logging(level_name):
         raise ValueError(f"Invalid log level: {level_name}")
 
     logging.StreamHandler(sys.stdout)
-    logging.basicConfig(
-        level=numeric_level, format="%(asctime)s - %(levelname)s - %(message)s"
-    )
+    logging.basicConfig(level=numeric_level, format="%(asctime)s - %(levelname)s - %(message)s")
     logger.setLevel(numeric_level)
 
 
@@ -71,14 +69,8 @@ def validate_source_config(source_info: typing.Dict[str, any]) -> None:
         If any of the required keys ('type', 'name', 'config') are missing
         in the source configuration.
     """
-    if (
-        "type" not in source_info
-        or "name" not in source_info
-        or "config" not in source_info
-    ):
-        raise ValueError(
-            f"Each source must have 'type', 'name', and 'config':\n {source_info}"
-        )
+    if "type" not in source_info or "name" not in source_info or "config" not in source_info:
+        raise ValueError(f"Each source must have 'type', 'name', and 'config':\n {source_info}")
 
 
 def setup_pdf_ingest_pipeline(pipe: Pipeline, config: Config):
@@ -216,17 +208,11 @@ def pipeline(config) -> float:
 
 @click.command()
 @click.option("--use_cpp", is_flag=True, help="Use C++ backend.")
-@click.option(
-    "--pipeline_batch_size", default=256, type=int, help="Batch size for the pipeline."
-)
+@click.option("--pipeline_batch_size", default=256, type=int, help="Batch size for the pipeline.")
 @click.option("--enable_monitor", is_flag=True, help="Enable monitoring.")
 @click.option("--feature_length", default=512, type=int, help="Feature length.")
-@click.option(
-    "--num_threads", default=os.cpu_count(), type=int, help="Number of threads."
-)
-@click.option(
-    "--model_max_batch_size", default=256, type=int, help="Model max batch size."
-)
+@click.option("--num_threads", default=os.cpu_count(), type=int, help="Number of threads.")
+@click.option("--model_max_batch_size", default=256, type=int, help="Model max batch size.")
 @click.option(
     "--mode",
     type=click.Choice([mode.value for mode in PipelineModes], case_sensitive=False),
@@ -235,9 +221,7 @@ def pipeline(config) -> float:
 )
 @click.option(
     "--log_level",
-    type=click.Choice(
-        ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=True
-    ),
+    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=True),
     default="INFO",
     help="Sets the logging level.",
 )

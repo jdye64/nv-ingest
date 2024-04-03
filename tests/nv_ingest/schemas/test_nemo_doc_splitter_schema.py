@@ -42,23 +42,17 @@ def test_document_splitter_schema_invalid_split_length(invalid_value):
         ),  # Invalid because sentence_window_size > 0 requires split_by to be 'sentence'
     ],
 )
-def test_document_splitter_schema_sentence_window_size_validation(
-    split_by, sentence_window_size, is_valid
-):
+def test_document_splitter_schema_sentence_window_size_validation(split_by, sentence_window_size, is_valid):
     """
     Parametrized test for validating the sentence_window_size logic in DocumentSplitterSchema.
     """
     if is_valid:
-        schema = DocumentSplitterSchema(
-            split_by=split_by, sentence_window_size=sentence_window_size
-        )
+        schema = DocumentSplitterSchema(split_by=split_by, sentence_window_size=sentence_window_size)
         assert schema.sentence_window_size == sentence_window_size
         assert schema.split_by == split_by
     else:
         with pytest.raises(ValidationError) as excinfo:
-            DocumentSplitterSchema(
-                split_by=split_by, sentence_window_size=sentence_window_size
-            )
+            DocumentSplitterSchema(split_by=split_by, sentence_window_size=sentence_window_size)
         assert "split_by must be 'sentence'" in str(excinfo.value)
 
 
@@ -66,8 +60,6 @@ def test_document_splitter_schema_optional_fields_none():
     """
     Test DocumentSplitterSchema with optional fields set to None.
     """
-    schema = DocumentSplitterSchema(
-        max_character_length=None, sentence_window_size=None
-    )
+    schema = DocumentSplitterSchema(max_character_length=None, sentence_window_size=None)
     assert schema.max_character_length is None
     assert schema.sentence_window_size is None

@@ -57,9 +57,7 @@ def configure_logging(level_name):
         raise ValueError(f"Invalid log level: {level_name}")
 
     logging.StreamHandler(sys.stdout)
-    logging.basicConfig(
-        level=numeric_level, format="%(asctime)s - %(levelname)s - %(message)s"
-    )
+    logging.basicConfig(level=numeric_level, format="%(asctime)s - %(levelname)s - %(message)s")
     logger.setLevel(numeric_level)
 
 
@@ -77,20 +75,14 @@ def setup_global_executor(n_workers, concurrency_mode="thread", use_dask=False):
         if n_workers == 0:
             n_workers = None  # Use default
         if concurrency_mode == "thread":
-            executor = Client(
-                n_workers=n_workers, threads_per_worker=1, processes=False
-            )
+            executor = Client(n_workers=n_workers, threads_per_worker=1, processes=False)
         else:
             executor = Client(n_workers=n_workers, threads_per_worker=1)
         logger.debug(f"Global dask client initialized with {n_workers} workers.")
     else:
-        executor_class = (
-            ThreadPoolExecutor if concurrency_mode == "thread" else ProcessPoolExecutor
-        )
+        executor_class = ThreadPoolExecutor if concurrency_mode == "thread" else ProcessPoolExecutor
         executor = executor_class(max_workers=n_workers)
-        logger.debug(
-            f"Global {str(executor_class)} initialized with {n_workers} workers."
-        )
+        logger.debug(f"Global {str(executor_class)} initialized with {n_workers} workers.")
 
     return executor
 
@@ -154,9 +146,7 @@ def build_extraction_tasks(methods, file_type):
 
     tasks = []
     if (not methods) or (file_type not in EXTRACTABLE_FILE_TYPES):
-        logger.debug(
-            "No extraction tasks specified or file type does not require extraction."
-        )
+        logger.debug("No extraction tasks specified or file type does not require extraction.")
         return tasks
 
     common_properties = {
@@ -235,9 +225,7 @@ def extract_file_content(path):
     """
 
     document_type = os.path.basename(path).split(".")[-1].lower()
-    if (
-        document_type not in DocumentTypeEnum.__members__
-    ):  # Check if file type is supported
+    if document_type not in DocumentTypeEnum.__members__:  # Check if file type is supported
         raise ValueError(f"Unsupported file type: {document_type}")
 
     if document_type != DocumentTypeEnum.txt.name.lower():
@@ -245,9 +233,7 @@ def extract_file_content(path):
         with open(path, "rb") as file:
             encoding = "utf-8"
             content = base64.b64encode(file.read()).decode(encoding)
-            logger.debug(
-                f"Encoded {document_type} content: {content[:100]}... (truncated)"
-            )
+            logger.debug(f"Encoded {document_type} content: {content[:100]}... (truncated)")
     else:
         # Detect encoding for non-PDF files
         with open(path, "rb") as file:
@@ -259,8 +245,7 @@ def extract_file_content(path):
         with open(path, "r", encoding=encoding) as file:
             content = file.read()
             logger.debug(
-                f"Read plain text content with detected encoding ({encoding}): "
-                f"{content[:100]}... (truncated)"
+                f"Read plain text content with detected encoding ({encoding}): " f"{content[:100]}... (truncated)"
             )
 
     logger.debug(f"Content length: {len(content)}")
@@ -303,9 +288,7 @@ def process_file(file_path):
 
     try:
         file_name = os.path.basename(file_path)
-        content, document_type = extract_file_content(
-            file_path
-        )  # Call the synchronous function directly
+        content, document_type = extract_file_content(file_path)  # Call the synchronous function directly
 
         return {
             "source_name": file_name,
@@ -381,15 +364,11 @@ def debug_print_job_payload(job_payload):
     import copy
 
     payload = copy.deepcopy(job_payload)
-    payload["job_payload"]["content"][0] = (
-        payload["job_payload"]["content"][0][:20] + "..."
-    )
+    payload["job_payload"]["content"][0] = payload["job_payload"]["content"][0][:20] + "..."
     logger.info(json.dumps(payload, indent=2))
 
 
-def submit_job_and_wait_for_response(
-    redis_client, job_data, tasks, task_queue, timeout=90
-):
+def submit_job_and_wait_for_response(redis_client, job_data, tasks, task_queue, timeout=90):
     """
     Submits a job consisting of multiple tasks to the Redis task queue and waits for a response.
 
@@ -436,9 +415,7 @@ def submit_job_and_wait_for_response(
     validate_ingest_job(job_desc)
 
     response_channel = f"response_{job_id}"
-    response_channel_expiration = int(
-        timeout * 1.05
-    )  # Set expiration to timeout+grace period
+    response_channel_expiration = int(timeout * 1.05)  # Set expiration to timeout+grace period
 
     # Use submit_job method of RedisClient
     try:
@@ -548,9 +525,7 @@ def process_source(
     )
 
 
-def _process_source(
-    source, redis_client, task_queue, extract, extract_method, split, split_params
-):
+def _process_source(source, redis_client, task_queue, extract, extract_method, split, split_params):
     """
     Processes a single source file by applying specified tasks such as splitting and extracting
     content, and submits these tasks along with the job data to a specified Redis task queue.
@@ -595,9 +570,7 @@ def _process_source(
 
     try:
         job_data = load_data_from_path(source)
-        response = submit_job_and_wait_for_response(
-            redis_client, job_data, tasks, task_queue, timeout=300
-        )
+        response = submit_job_and_wait_for_response(redis_client, job_data, tasks, task_queue, timeout=300)
 
         return response, data_size
     except Exception:
@@ -650,9 +623,7 @@ def submit_tasks(executor, matching_files, processing_function, processing_args)
     return {
         executor.submit(processing_function, source, *processing_args): {
             "source": source,
-            "pages": estimate_page_count(
-                source
-            ),  # Short term hack to get pages/sec -- needs to go into service
+            "pages": estimate_page_count(source),  # Short term hack to get pages/sec -- needs to go into service
         }
         for source in matching_files
     }
@@ -717,9 +688,7 @@ def process_tasks(future_to_file, output_directory, progress_bar, start_time_ns)
         pages = future_data["pages"]
         total_pages_processed += pages
 
-        response, data_processed = handle_future_result(
-            future, future_data, output_directory, stage_elapsed_times
-        )
+        response, data_processed = handle_future_result(future, future_data, output_directory, stage_elapsed_times)
         if response is None:
             continue  # Skip to next future if there was an error
 
@@ -787,11 +756,7 @@ def report_stage_statistics(stage_elapsed_times, total_trace_elapsed, abs_elapse
         avg_time = mean(times)
         med_time = median(times)
         total_stage_time = sum(times)
-        percent_of_total = (
-            (total_stage_time / total_trace_elapsed) * 100
-            if total_trace_elapsed > 0
-            else 0
-        )
+        percent_of_total = (total_stage_time / total_trace_elapsed) * 100 if total_trace_elapsed > 0 else 0
         logger.info(
             f"{stage}: Avg: {avg_time / 1e6:.2f} ms, Median: {med_time / 1e6:.2f} ms, "
             f"Total Time: {total_stage_time / 1e6:.2f} ms, "
@@ -802,18 +767,13 @@ def report_stage_statistics(stage_elapsed_times, total_trace_elapsed, abs_elapse
     if unresolved_time > 0:
         percent_unresolved = (unresolved_time / abs_elapsed) * 100
         logger.info(
-            f"Unresolved time: {unresolved_time / 1e6:.2f} ms, "
-            f"Percent of Total Elapsed: {percent_unresolved:.2f}%"
+            f"Unresolved time: {unresolved_time / 1e6:.2f} ms, " f"Percent of Total Elapsed: {percent_unresolved:.2f}%"
         )
     elif unresolved_time <= 0:
-        logger.info(
-            "No unresolved time detected. Trace times account for the entire elapsed duration."
-        )
+        logger.info("No unresolved time detected. Trace times account for the entire elapsed duration.")
 
 
-def report_overall_speed(
-    total_data_processed, total_pages_processed, start_time_ns, total_files
-):
+def report_overall_speed(total_data_processed, total_pages_processed, start_time_ns, total_files):
     """
     Reports the overall processing speed and the total data processed.
 
@@ -834,13 +794,9 @@ def report_overall_speed(
     """
 
     total_elapsed_time_ns = time.time_ns() - start_time_ns
-    total_elapsed_time_s = (
-        total_elapsed_time_ns / 1_000_000_000
-    )  # Convert nanoseconds to seconds
+    total_elapsed_time_s = total_elapsed_time_ns / 1_000_000_000  # Convert nanoseconds to seconds
 
-    total_data_size_mb = total_data_processed / (
-        1024 * 1024
-    )  # Convert bytes to megabytes
+    total_data_size_mb = total_data_processed / (1024 * 1024)  # Convert bytes to megabytes
 
     throughput_pages = total_pages_processed / total_elapsed_time_s  # pages/sec
     throughput_files = total_files / total_elapsed_time_s  # files/sec
@@ -885,9 +841,7 @@ def report_statistics(
     abs_elapsed = time.time_ns() - start_time_ns
     total_trace_elapsed = sum(sum(times) for times in stage_elapsed_times.values())
     report_stage_statistics(stage_elapsed_times, total_trace_elapsed, abs_elapsed)
-    report_overall_speed(
-        total_data_processed, total_pages_processed, start_time_ns, total_files
-    )
+    report_overall_speed(total_data_processed, total_pages_processed, start_time_ns, total_files)
 
 
 def determine_processing_function(
@@ -1034,9 +988,7 @@ def main(
             split_params,
         )
 
-        future_to_file = submit_tasks(
-            executor, matching_files, processing_function, processing_args
-        )
+        future_to_file = submit_tasks(executor, matching_files, processing_function, processing_args)
 
         (
             stage_elapsed_times,

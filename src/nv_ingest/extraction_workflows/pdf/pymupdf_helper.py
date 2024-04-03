@@ -45,9 +45,7 @@ logger = logging.getLogger(__name__)
 
 # Define a helper function to use unstructured-io to extract text from a base64
 # encoded bytestram PDF
-def pymupdf(
-    pdf_stream, extract_text: bool, extract_images: bool, extract_tables: bool, **kwargs
-):
+def pymupdf(pdf_stream, extract_text: bool, extract_images: bool, extract_tables: bool, **kwargs):
     """
     Helper function to use PyMuPDF to extract text from a bytestream PDF.
 
@@ -81,9 +79,7 @@ def pymupdf(
     # get base metadata
     metadata_col = kwargs.get("metadata_column", "metadata")
 
-    base_unified_metadata = (
-        row_data[metadata_col] if metadata_col in row_data.index else {}
-    )
+    base_unified_metadata = row_data[metadata_col] if metadata_col in row_data.index else {}
 
     # get base source_metadata
     base_source_metadata = base_unified_metadata.get("source_metadata", {})
@@ -151,9 +147,7 @@ def pymupdf(
                 if (extract_text) and (block["type"] == 0):
                     block_idx = block["number"]
                     for line_idx, line in enumerate(block["lines"]):  # lines a list
-                        for span_idx, span in enumerate(
-                            line["spans"]
-                        ):  # spans is a list
+                        for span_idx, span in enumerate(line["spans"]):  # spans is a list
                             accumulated_text.append(span["text"])
 
                             if text_depth == TextTypeEnum.SPAN:
@@ -323,9 +317,7 @@ def _construct_text_metadata(
         }
     )
 
-    validated_unified_metadata = validate_schema(
-        ext_unified_metadata, PDFExtractorSchema
-    )
+    validated_unified_metadata = validate_schema(ext_unified_metadata, PDFExtractorSchema)
 
     return [ContentTypeEnum.TEXT, validated_unified_metadata.dict()]
 

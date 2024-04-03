@@ -187,9 +187,7 @@ class TextMetadataSchema(BaseModelNoExt):
     text_type: TextTypeEnum
     summary: str = ""
     keywords: Union[str, List[str], Dict] = ""
-    language: LanguageEnum = (
-        "en"  # default to Unknown? Maybe do some kind of heuristic check
-    )
+    language: LanguageEnum = "en"  # default to Unknown? Maybe do some kind of heuristic check
 
 
 class ImageMetadataSchema(BaseModelNoExt):

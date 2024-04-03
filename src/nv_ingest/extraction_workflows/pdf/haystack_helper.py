@@ -146,8 +146,7 @@ class PDFtoTextConverterStream(PDFToTextConverter):
 
         if encoding:
             warnings.warn(
-                "The encoding parameter is being deprecated. It will be automatically detected "
-                "by PyMuPDF.",
+                "The encoding parameter is being deprecated. It will be automatically detected " "by PyMuPDF.",
                 DeprecationWarning,
             )
 
@@ -221,12 +220,8 @@ class PDFtoTextConverterStream(PDFToTextConverter):
             partial_tp = None
             if ocr is not None:
                 full = ocr == "full"
-                partial_tp = page.get_textpage_ocr(
-                    flags=0, full=full, dpi=300, language=ocr_language
-                )
-            text_list.append(
-                page.get_text("text", textpage=partial_tp, sort=sort_by_position)
-            )
+                partial_tp = page.get_textpage_ocr(flags=0, full=full, dpi=300, language=ocr_language)
+            text_list.append(page.get_text("text", textpage=partial_tp, sort=sort_by_position))
             text_list.append("\f")
 
         text = "".join(text_list)
@@ -308,22 +303,15 @@ class PDFtoTextConverterStream(PDFToTextConverter):
                 partial_tp = None
                 if ocr is not None:
                     full = ocr == "full"
-                    partial_tp = page.get_textpage_ocr(
-                        flags=0, full=full, dpi=300, language=ocr_language
-                    )
-                document_list.append(
-                    page.get_text("text", textpage=partial_tp, sort=sort_by_position)
-                )
+                    partial_tp = page.get_textpage_ocr(flags=0, full=full, dpi=300, language=ocr_language)
+                document_list.append(page.get_text("text", textpage=partial_tp, sort=sort_by_position))
                 document_list.append("\f")
         else:
             cpu = cpu_count() if isinstance(multiprocessing, bool) else multiprocessing
             page_list = list(range(start_page, end_page))
             cpu = cpu if len(page_list) > cpu else len(page_list)
             parts = divide(cpu, page_list)
-            pages_mp = [
-                (i, stream, parts, sort_by_position, ocr, ocr_language)
-                for i in range(cpu)
-            ]
+            pages_mp = [(i, stream, parts, sort_by_position, ocr, ocr_language) for i in range(cpu)]
 
             with ProcessPoolExecutor(max_workers=cpu) as pool:
                 results = pool.map(self._get_text_parallel, pages_mp)
@@ -341,9 +329,7 @@ class PDFtoTextConverterStream(PDFToTextConverter):
 
 
 # Define a helper function to use haystack to extract text from a base64 encoded bytestram PDF
-def haystack(
-    pdf_stream, extract_text: bool, extract_images: bool, extract_tables: bool, **kwargs
-):
+def haystack(pdf_stream, extract_text: bool, extract_images: bool, extract_tables: bool, **kwargs):
     """
     Helper function to use haystack to extract text from a bytestream PDF.
 
@@ -368,9 +354,7 @@ def haystack(
 
     logger.info("Extracting PDF with haystack backend.")
 
-    converter = PDFtoTextConverterStream(
-        remove_numeric_tables=True, valid_languages=["en"]
-    )
+    converter = PDFtoTextConverterStream(remove_numeric_tables=True, valid_languages=["en"])
     converted_pdf = converter.convert(stream=pdf_stream, meta=None)
 
     preprocessor = PreProcessor(

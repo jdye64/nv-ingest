@@ -27,9 +27,7 @@ class Builder:
 mock_builder = Mock(spec=Builder)
 
 
-@pytest.mark.skipif(
-    not MORPHEUS_IMPORT_OK, reason="Morpheus modules are not available."
-)
+@pytest.mark.skipif(not MORPHEUS_IMPORT_OK, reason="Morpheus modules are not available.")
 @pytest.mark.skipif(
     not CUDA_DRIVER_OK,
     reason="Test environment does not have a compatible CUDA driver.",
@@ -47,9 +45,7 @@ def test_fetch_and_validate_module_config_valid():
     assert validated_config.age == 30
 
 
-@pytest.mark.skipif(
-    not MORPHEUS_IMPORT_OK, reason="Morpheus modules are not available."
-)
+@pytest.mark.skipif(not MORPHEUS_IMPORT_OK, reason="Morpheus modules are not available.")
 @pytest.mark.skipif(
     not CUDA_DRIVER_OK,
     reason="Test environment does not have a compatible CUDA driver.",
@@ -70,9 +66,7 @@ def test_fetch_and_validate_module_config_invalid(mock_logger):
     assert "Invalid configuration: age: field required" in str(exc_info.value)
 
 
-@pytest.mark.skipif(
-    not MORPHEUS_IMPORT_OK, reason="Morpheus modules are not available."
-)
+@pytest.mark.skipif(not MORPHEUS_IMPORT_OK, reason="Morpheus modules are not available.")
 @pytest.mark.skipif(
     not CUDA_DRIVER_OK,
     reason="Test environment does not have a compatible CUDA driver.",
