@@ -54,14 +54,8 @@ def validate_source_config(source_info: typing.Dict[str, any]) -> None:
         If any of the required keys ('type', 'name', 'config') are missing
         in the source configuration.
     """
-    if (
-        "type" not in source_info
-        or "name" not in source_info
-        or "config" not in source_info
-    ):
-        raise ValueError(
-            f"Each source must have 'type', 'name', and 'config':\n {source_info}"
-        )
+    if "type" not in source_info or "name" not in source_info or "config" not in source_info:
+        raise ValueError(f"Each source must have 'type', 'name', and 'config':\n {source_info}")
 
 
 def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
@@ -79,12 +73,8 @@ def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
     with open(dataset_json, "r") as f:
         source_config = json.load(f)
 
-    source_stage = pipe.add_stage(
-        PdfMemoryFileSource(config, source_config, repeat=repeat_count)
-    )
-    source_monitor = pipe.add_stage(
-        MonitorStage(config, description="Source Throughput", unit="msgs")
-    )
+    source_stage = pipe.add_stage(PdfMemoryFileSource(config, source_config, repeat=repeat_count))
+    source_monitor = pipe.add_stage(MonitorStage(config, description="Source Throughput", unit="msgs"))
 
     trigger_stage = pipe.add_stage(TriggerStage(config))
 

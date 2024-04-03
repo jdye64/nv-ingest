@@ -28,6 +28,7 @@ from nv_ingest.schemas import validate_ingest_job
 from nv_ingest.schemas.redis_task_source_schema import RedisTaskSourceSchema
 from nv_ingest.util.modules.config_validator import fetch_and_validate_module_config
 from nv_ingest.util.redis import RedisClient
+from nv_ingest.util.tracing.logging import annotate_cm
 
 logger = logging.getLogger(__name__)
 
@@ -36,18 +37,14 @@ MODULE_NAMESPACE = "nv_ingest"
 RedisTaskSourceLoaderFactory = ModuleLoaderFactory(MODULE_NAME, MODULE_NAMESPACE)
 
 
-def fetch_and_process_messages(
-    redis_client: RedisClient, validated_config: RedisTaskSourceSchema
-):
+def fetch_and_process_messages(redis_client: RedisClient, validated_config: RedisTaskSourceSchema):
     """Fetch messages from the Redis list and process them."""
 
     while True:
         try:
             job_payload = redis_client.fetch_message(validated_config.task_queue)
             ts_fetched = time.time_ns()
-            yield process_message(
-                job_payload, ts_fetched
-            )  # process_message remains unchanged
+            yield process_message(job_payload, ts_fetched)  # process_message remains unchanged
         except RedisError:
             continue  # Reconnection will be attempted on the next fetch
         except Exception as err:
@@ -78,6 +75,7 @@ def process_message(job_payload: str, ts_fetched: int) -> ControlMessage:
 
     control_message = ControlMessage()
     control_message.payload(message_meta)
+    annotate_cm(control_message, message="Created")
     control_message.set_metadata("response_channel", response_channel)
     control_message.set_metadata("job_id", job_id)
 
@@ -93,12 +91,8 @@ def process_message(job_payload: str, ts_fetched: int) -> ControlMessage:
         control_message.set_metadata(f"trace::exit::{MODULE_NAME}", ts_exit)
 
         if ts_send is not None:
-            control_message.set_metadata(
-                "trace::entry::redis_source_network_in", ts_send
-            )
-            control_message.set_metadata(
-                "trace::exit::redis_source_network_in", ts_fetched
-            )
+            control_message.set_metadata("trace::entry::redis_source_network_in", ts_send)
+            control_message.set_metadata("trace::exit::redis_source_network_in", ts_fetched)
 
         control_message.set_metadata("latency::ts_send", time.time_ns())
 

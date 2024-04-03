@@ -29,6 +29,4 @@ def test_langdetect_exception_handler_success():
     Test that the decorator correctly passes through the return value of the function when no exception is raised.
     """
     result = decorated_sample_func("Test text")
-    assert (
-        result == "detected_language"
-    ), "The function should return the detected language."
+    assert result == "detected_language", "The function should return the detected language."

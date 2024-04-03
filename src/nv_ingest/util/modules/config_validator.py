@@ -26,9 +26,7 @@ def fetch_and_validate_module_config(builder: mrc.Builder, schema_class):
     try:
         validated_config = schema_class(**module_config)
     except ValidationError as e:
-        error_messages = "; ".join(
-            [f"{error['loc'][0]}: {error['msg']}" for error in e.errors()]
-        )
+        error_messages = "; ".join([f"{error['loc'][0]}: {error['msg']}" for error in e.errors()])
         log_error_message = f"Invalid configuration: {error_messages}"
         logger.error(log_error_message)
         raise ValueError(log_error_message)

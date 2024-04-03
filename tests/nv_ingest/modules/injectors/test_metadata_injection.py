@@ -41,17 +41,13 @@ def document_df():
     )
 
 
-@pytest.mark.skipif(
-    not MORPHEUS_IMPORT_OK, reason="Morpheus modules are not available."
-)
+@pytest.mark.skipif(not MORPHEUS_IMPORT_OK, reason="Morpheus modules are not available.")
 @pytest.mark.skipif(
     not CUDA_DRIVER_OK,
     reason="Test environment does not have a compatible CUDA driver.",
 )
 @pytest.mark.parametrize("doc_type, expected_content_type", DOC_TO_CONTENT_MAP.items())
-def test_on_data_injects_correct_metadata_and_validates_schema(
-    document_df, doc_type, expected_content_type
-):
+def test_on_data_injects_correct_metadata_and_validates_schema(document_df, doc_type, expected_content_type):
     document_df = document_df.copy()
     document_df["document_type"] = [doc_type.value]
     document_df["content"] = ["Dummy content for testing"]
@@ -69,17 +65,12 @@ def test_on_data_injects_correct_metadata_and_validates_schema(
     for _, row in updated_df.iterrows():
         metadata = row["metadata"]
         validated_metadata = MetadataSchema(**metadata)
-        assert (
-            validated_metadata.content_metadata.type == expected_content_type.value
-        ), (
-            f"Document type {doc_type.value}"
-            f" should have content type {expected_content_type}"
+        assert validated_metadata.content_metadata.type == expected_content_type.value, (
+            f"Document type {doc_type.value}" f" should have content type {expected_content_type}"
         )
 
 
-@pytest.mark.skipif(
-    not MORPHEUS_IMPORT_OK, reason="Morpheus modules are not available."
-)
+@pytest.mark.skipif(not MORPHEUS_IMPORT_OK, reason="Morpheus modules are not available.")
 @pytest.mark.skipif(
     not CUDA_DRIVER_OK,
     reason="Test environment does not have a compatible CUDA driver.",
@@ -108,9 +99,7 @@ def test_on_data_non_image_types_have_no_image_metadata(document_df, doc_type):
         ), f"image_metadata should be None for non-image content types, failed for {doc_type}"
 
 
-@pytest.mark.skipif(
-    not MORPHEUS_IMPORT_OK, reason="Morpheus modules are not available."
-)
+@pytest.mark.skipif(not MORPHEUS_IMPORT_OK, reason="Morpheus modules are not available.")
 @pytest.mark.skipif(
     not CUDA_DRIVER_OK,
     reason="Test environment does not have a compatible CUDA driver.",
@@ -130,27 +119,19 @@ def test_metadata_schema_validation(document_df):
     for _, row in updated_df.iterrows():
         metadata = row["metadata"]
         assert isinstance(metadata["content"], str), "Content should be a string."
-        assert isinstance(
-            metadata["content_metadata"], dict
-        ), "Content metadata should be a dictionary."
-        assert (
-            "type" in metadata["content_metadata"]
-        ), "Content metadata should include a type."
+        assert isinstance(metadata["content_metadata"], dict), "Content metadata should be a dictionary."
+        assert "type" in metadata["content_metadata"], "Content metadata should include a type."
         # Add more schema validation checks as necessary
 
 
-@pytest.mark.skipif(
-    not MORPHEUS_IMPORT_OK, reason="Morpheus modules are not available."
-)
+@pytest.mark.skipif(not MORPHEUS_IMPORT_OK, reason="Morpheus modules are not available.")
 @pytest.mark.skipif(
     not CUDA_DRIVER_OK,
     reason="Test environment does not have a compatible CUDA driver.",
 )
 def test_handling_missing_required_fields(document_df):
     """Test how missing required fields are handled."""
-    document_df.drop(
-        "document_type", axis=1, inplace=True
-    )  # Simulate missing 'document_type'
+    document_df.drop("document_type", axis=1, inplace=True)  # Simulate missing 'document_type'
     document_df["content"] = ["Dummy content for testing"]
     document_df["source_id"] = ["source1"]
     document_df["source_name"] = ["Source One"]
@@ -163,9 +144,7 @@ def test_handling_missing_required_fields(document_df):
         _ = on_data(message)
 
 
-@pytest.mark.skipif(
-    not MORPHEUS_IMPORT_OK, reason="Morpheus modules are not available."
-)
+@pytest.mark.skipif(not MORPHEUS_IMPORT_OK, reason="Morpheus modules are not available.")
 @pytest.mark.skipif(
     not CUDA_DRIVER_OK,
     reason="Test environment does not have a compatible CUDA driver.",

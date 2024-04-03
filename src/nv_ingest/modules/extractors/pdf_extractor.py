@@ -23,8 +23,6 @@ import mrc.core.operators as ops
 import pandas as pd
 from morpheus.messages import ControlMessage
 from morpheus.messages import MessageMeta
-from morpheus.utils.control_message_utils import cm_default_failure_context_manager
-from morpheus.utils.control_message_utils import cm_skip_processing_if_failed
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
 from mrc.core.node import RoundRobinRouter
@@ -33,6 +31,7 @@ import cudf
 
 from nv_ingest.extraction_workflows import pdf
 from nv_ingest.schemas.pdf_extractor_schema import PDFExtractorModuleSchema
+from nv_ingest.util.exception_handlers.decorators import nv_ingest_node_failure_context_manager
 from nv_ingest.util.exception_handlers.pdf import create_exception_tag
 from nv_ingest.util.flow_control import filter_by_task
 from nv_ingest.util.modules.config_validator import fetch_and_validate_module_config
@@ -42,9 +41,7 @@ logger = logging.getLogger(__name__)
 
 MODULE_NAME = "pdf_content_extractor"
 MODULE_NAMESPACE = "nv-ingest"
-PDFExtractorLoaderFactory = ModuleLoaderFactory(
-    MODULE_NAME, MODULE_NAMESPACE, PDFExtractorModuleSchema
-)
+PDFExtractorLoaderFactory = ModuleLoaderFactory(MODULE_NAME, MODULE_NAMESPACE, PDFExtractorModuleSchema)
 
 
 def _process_pdf_bytes(df, task_props):
@@ -93,25 +90,19 @@ def _process_pdf_bytes(df, task_props):
             logger.error(f"Failed on file:{source_id}")
 
         # Propagate error back and tag message as failed.
-        exception_tag = create_exception_tag(
-            error_message=log_error_message, source_id=source_id
-        )
+        exception_tag = create_exception_tag(error_message=log_error_message, source_id=source_id)
 
         return exception_tag
 
     try:
         # Apply the helper function to each row in the 'content' column
-        _decode_and_extract = functools.partial(
-            decode_and_extract, task_props=task_props
-        )
+        _decode_and_extract = functools.partial(decode_and_extract, task_props=task_props)
         logger.debug(f"processing ({task_props.get('method', None)})")
         sr_extraction = df.apply(_decode_and_extract, axis=1)
         sr_extraction = sr_extraction.explode().dropna()
 
         if not sr_extraction.empty:
-            extracted_df = pd.DataFrame(
-                sr_extraction.to_list(), columns=["document_type", "metadata"]
-            )
+            extracted_df = pd.DataFrame(sr_extraction.to_list(), columns=["document_type", "metadata"])
         else:
             return pd.DataFrame(columns=["document_type", "metadata"])
 
@@ -143,20 +134,16 @@ def _worker_target(recv_queue, send_queue, **kwargs):
 
 @register_module(MODULE_NAME, MODULE_NAMESPACE)
 def _pdf_text_extractor(builder: mrc.Builder):
-    validated_config = fetch_and_validate_module_config(
-        builder, PDFExtractorModuleSchema
-    )
+    validated_config = fetch_and_validate_module_config(builder, PDFExtractorModuleSchema)
 
     workers = {}
     mp_context = mp.get_context("fork")
     cancellation_token = mp_context.Value(ctypes.c_int8, False)
     send_queues = {
-        i: mp_context.Queue(maxsize=validated_config.max_queue_size)
-        for i in range(validated_config.n_workers)
+        i: mp_context.Queue(maxsize=validated_config.max_queue_size) for i in range(validated_config.n_workers)
     }
     recv_queues = {
-        i: mp_context.Queue(maxsize=validated_config.max_queue_size)
-        for i in range(validated_config.n_workers)
+        i: mp_context.Queue(maxsize=validated_config.max_queue_size) for i in range(validated_config.n_workers)
     }
 
     for i in range(validated_config.n_workers):
@@ -179,9 +166,9 @@ def _pdf_text_extractor(builder: mrc.Builder):
 
     @filter_by_task(["extract"])
     @traceable(MODULE_NAME)
-    @cm_skip_processing_if_failed
-    @cm_default_failure_context_manager(
-        raise_on_failure=validated_config.raise_on_failure
+    @nv_ingest_node_failure_context_manager(
+        annotation_id=MODULE_NAME,
+        raise_on_failure=validated_config.raise_on_failure,
     )
     def _worker_fn(ctrl_msg: ControlMessage, port_id: int):
         # Must copy payload and control message here?
@@ -225,9 +212,7 @@ def _pdf_text_extractor(builder: mrc.Builder):
     # router-> worker -> merge nodes
     for port_id in range(validated_config.n_workers):
         worker_fn = functools.partial(_worker_fn, port_id=port_id)
-        pe_worker_node = builder.make_node(
-            f"extract-worker-{port_id}", ops.map(worker_fn)
-        )
+        pe_worker_node = builder.make_node(f"extract-worker-{port_id}", ops.map(worker_fn))
         builder.make_edge(router_node, pe_worker_node)
         builder.make_edge(pe_worker_node, merge_node)
 

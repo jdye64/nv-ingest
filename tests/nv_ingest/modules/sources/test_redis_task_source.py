@@ -53,9 +53,7 @@ def ts_fetched():
     return 1625072042123456789
 
 
-@pytest.mark.skipif(
-    not MORPHEUS_IMPORT_OK, reason="Morpheus modules are not available."
-)
+@pytest.mark.skipif(not MORPHEUS_IMPORT_OK, reason="Morpheus modules are not available.")
 @pytest.mark.skipif(
     not CUDA_DRIVER_OK,
     reason="Test environment does not have a compatible CUDA driver.",
@@ -89,13 +87,8 @@ def test_process_message(job_payload, add_trace_tagging, ts_send, ts_fetched):
         assert result.get_metadata(f"trace::entry::{MODULE_NAME}") is not None
         assert result.get_metadata(f"trace::exit::{MODULE_NAME}") is not None
         if ts_send is not None:
-            assert (
-                result.get_metadata("trace::entry::redis_source_network_in") == ts_send
-            )
-            assert (
-                result.get_metadata("trace::exit::redis_source_network_in")
-                == ts_fetched
-            )
+            assert result.get_metadata("trace::entry::redis_source_network_in") == ts_send
+            assert result.get_metadata("trace::exit::redis_source_network_in") == ts_fetched
         assert result.get_metadata("latency::ts_send") is not None
     else:
         assert result.get_metadata("config::add_trace_tagging") is None
@@ -106,6 +99,4 @@ def test_process_message(job_payload, add_trace_tagging, ts_send, ts_fetched):
     # Check for the presence of tasks in the ControlMessage
     tasks = ["split", "extract"]
     for task in tasks:
-        assert result.has_task(
-            task
-        ), f"Expected task {task['type']} not found in ControlMessage."
+        assert result.has_task(task), f"Expected task {task['type']} not found in ControlMessage."

@@ -60,9 +60,7 @@ def test_filter_by_task_without_required_task_with_forward_func(mock_control_mes
     forward_func.assert_called_once_with(mock_control_message)
 
     # Assert that the result of calling the decorated function is as expected
-    assert (
-        result is None
-    ), "Should return the mock_control_message from the forward function."
+    assert result is None, "Should return the mock_control_message from the forward function."
 
 
 def test_filter_by_task_with_invalid_argument():

@@ -49,8 +49,7 @@ def filter_by_task(required_tasks, forward_func=None):
                     return message
             else:
                 raise ValueError(
-                    "The first argument must be a ControlMessage object with task handling "
-                    "capabilities."
+                    "The first argument must be a ControlMessage object with task handling " "capabilities."
                 )
 
         return wrapper

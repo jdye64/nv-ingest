@@ -14,8 +14,6 @@ import mrc
 import pandas as pd
 from morpheus.messages import ControlMessage
 from morpheus.messages import MessageMeta
-from morpheus.utils.control_message_utils import cm_default_failure_context_manager
-from morpheus.utils.control_message_utils import cm_skip_processing_if_failed
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
 
@@ -25,6 +23,7 @@ from nv_ingest.schemas import MetadataInjectorSchema
 from nv_ingest.schemas.ingest_job_schema import DocumentTypeEnum
 from nv_ingest.schemas.metadata_schema import ContentTypeEnum
 from nv_ingest.util.converters.type_mappings import doc_type_to_content_type
+from nv_ingest.util.exception_handlers.decorators import nv_ingest_node_failure_context_manager
 from nv_ingest.util.modules.config_validator import fetch_and_validate_module_config
 from nv_ingest.util.tracing import traceable
 
@@ -53,20 +52,14 @@ def on_data(message: ControlMessage):
                 },
                 "error_metadata": None,
                 "image_metadata": (
-                    None
-                    if content_type != ContentTypeEnum.IMAGE
-                    else {"image_type": row["document_type"]}
+                    None if content_type != ContentTypeEnum.IMAGE else {"image_type": row["document_type"]}
                 ),
                 "source_metadata": {
                     "source_id": row["source_id"],
                     "source_name": row["source_name"],
                     "source_type": row["document_type"],
                 },
-                "text_metadata": (
-                    None
-                    if (content_type != ContentTypeEnum.TEXT)
-                    else {"text_type": "document"}
-                ),
+                "text_metadata": (None if (content_type != ContentTypeEnum.TEXT) else {"text_type": "document"}),
             }
 
         rows.append(row)
@@ -84,11 +77,11 @@ def on_data(message: ControlMessage):
 def _metadata_injection(builder: mrc.Builder):
     validated_config = fetch_and_validate_module_config(builder, MetadataInjectorSchema)
 
-    @cm_skip_processing_if_failed
-    @cm_default_failure_context_manager(
-        raise_on_failure=validated_config.raise_on_failure
-    )
     @traceable(MODULE_NAME)
+    @nv_ingest_node_failure_context_manager(
+        annotation_id=MODULE_NAME,
+        raise_on_failure=validated_config.raise_on_failure,
+    )
     def _on_data(message: ControlMessage):
         return on_data(message)
 

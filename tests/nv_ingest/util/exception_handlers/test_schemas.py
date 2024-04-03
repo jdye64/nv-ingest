@@ -44,6 +44,4 @@ def test_schema_exception_handler_with_validation_error(mock_logger):
     mock_logger.error.assert_called_once_with(expected_error_message)
 
     # Verify the ValueError contains the correct message
-    assert (
-        str(exc_info.value) == expected_error_message
-    ), "A ValueError with the correct message should be raised."
+    assert str(exc_info.value) == expected_error_message, "A ValueError with the correct message should be raised."

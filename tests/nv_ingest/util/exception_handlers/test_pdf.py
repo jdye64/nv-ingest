@@ -24,9 +24,7 @@ def mock_logger():
 def test_pymupdf_exception_handler(mock_logger):
     result = sample_func()
     assert result == [], "The function should return an empty list on exception."
-    mock_logger.warning.assert_called_once_with(
-        "PyMuPDF Error:sample_func error:Sample error"
-    )
+    mock_logger.warning.assert_called_once_with("PyMuPDF Error:sample_func error:Sample error")
 
 
 def test_create_exception_tag_with_source_id():
@@ -49,7 +47,5 @@ def test_create_exception_tag_with_source_id():
 def test_create_exception_tag_without_source_id():
     error_message = "test_error"
 
-    with pytest.raises(
-        ValueError, match="error_metadata: none is not an allowed value"
-    ):
+    with pytest.raises(ValueError, match="error_metadata: none is not an allowed value"):
         create_exception_tag(error_message)

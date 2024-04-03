@@ -36,9 +36,7 @@ def test_datetools_exception_handler_with_exception():
 
     assert (
         start_time - time_delta
-    ) <= result_datetime, (
-        "The returned datetime should be within a few minutes of the current time"
-    )
+    ) <= result_datetime, "The returned datetime should be within a few minutes of the current time"
     assert result_datetime <= (
         end_time + time_delta
     ), "The returned datetime should be within a few minutes of the current time"
@@ -49,6 +47,4 @@ def test_datetools_exception_handler_without_exception():
     Test the decorator with a function that does not raise an exception.
     """
     result = test_func_success()
-    assert (
-        result == "Success"
-    ), "Decorator should not interfere with the function's normal execution"
+    assert result == "Success", "Decorator should not interfere with the function's normal execution"

@@ -126,9 +126,7 @@ def test_custom_validator_logic_for_sentence_window_size():
     }
     with pytest.raises(ValidationError) as exc_info:
         validate_ingest_job(job_data)
-    assert "sentence_window_size" in str(
-        exc_info.value
-    ) and "must be 'sentence'" in str(exc_info.value)
+    assert "sentence_window_size" in str(exc_info.value) and "must be 'sentence'" in str(exc_info.value)
 
 
 def test_multiple_task_types():
@@ -194,9 +192,7 @@ def test_incorrect_property_types():
                 "type": "split",
                 "task_properties": {
                     "split_by": "word",
-                    "split_length": {
-                        "not an int": 123
-                    },  # Incorrect type (should be int)
+                    "split_length": {"not an int": 123},  # Incorrect type (should be int)
                     "split_overlap": 0,
                 },
             }

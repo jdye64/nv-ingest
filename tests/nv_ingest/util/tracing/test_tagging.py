@@ -50,12 +50,8 @@ def test_traceable_with_trace_tagging_enabled_no_custom_name(mock_control_messag
 
     assert "trace::entry::another_function" in mock_control_message.metadata
     assert "trace::exit::another_function" in mock_control_message.metadata
-    assert isinstance(
-        mock_control_message.metadata["trace::entry::another_function"], int
-    )
-    assert isinstance(
-        mock_control_message.metadata["trace::exit::another_function"], int
-    )
+    assert isinstance(mock_control_message.metadata["trace::entry::another_function"], int)
+    assert isinstance(mock_control_message.metadata["trace::exit::another_function"], int)
 
 
 # Test with trace tagging disabled

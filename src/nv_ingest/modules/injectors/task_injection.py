@@ -13,12 +13,11 @@ import logging
 
 import mrc
 from morpheus.messages import ControlMessage
-from morpheus.utils.control_message_utils import cm_default_failure_context_manager
-from morpheus.utils.control_message_utils import cm_skip_processing_if_failed
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
 
 from nv_ingest.schemas.task_injection_schema import TaskInjectionSchema
+from nv_ingest.util.exception_handlers.decorators import nv_ingest_node_failure_context_manager
 from nv_ingest.util.modules.config_validator import fetch_and_validate_module_config
 from nv_ingest.util.tracing import traceable
 
@@ -27,9 +26,7 @@ logger = logging.getLogger(__name__)
 MODULE_NAME = "task_injection"
 MODULE_NAMESPACE = "nv_ingest"
 
-TaskInjectorLoaderFactory = ModuleLoaderFactory(
-    MODULE_NAME, MODULE_NAMESPACE, TaskInjectionSchema
-)
+TaskInjectorLoaderFactory = ModuleLoaderFactory(MODULE_NAME, MODULE_NAMESPACE, TaskInjectionSchema)
 
 
 def on_data(message: ControlMessage):
@@ -42,9 +39,9 @@ def on_data(message: ControlMessage):
 def _task_injection(builder: mrc.Builder):
     validated_config = fetch_and_validate_module_config(builder, TaskInjectionSchema)
 
-    @cm_skip_processing_if_failed
-    @cm_default_failure_context_manager(
-        raise_on_failure=validated_config.raise_on_failure
+    @nv_ingest_node_failure_context_manager(
+        annotation_id=MODULE_NAME,
+        raise_on_failure=validated_config.raise_on_failure,
     )
     @traceable(MODULE_NAME)
     def _on_data(ctrl_msg: ControlMessage):

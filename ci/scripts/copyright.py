@@ -43,21 +43,13 @@ ExemptFiles: typing.List[re.Pattern] = [
     re.compile(r"^external\/.*$"),  # Ignore external
     re.compile(r"[^ \/\n]*docs/source/(_lib|_modules|_templates)/.*$"),
     re.compile(r"PULL_REQUEST_TEMPLATE.md"),  # Ignore the PR template,
-    re.compile(
-        r"[^ \/\n]*conda/environments/.*\.yaml$"
-    ),  # Ignore generated environment files
+    re.compile(r"[^ \/\n]*conda/environments/.*\.yaml$"),  # Ignore generated environment files
 ]
 
 # this will break starting at year 10000, which is probably OK :)
-CheckSimple = re.compile(
-    r"Copyright *(?:\(c\))? *(\d{4}),? *NVIDIA C(?:ORPORATION|orporation) & AFFILIATES."
-)
-CheckDouble = re.compile(
-    r"Copyright *(?:\(c\))? *(\d{4}),? *NVIDIA C(?:ORPORATION|orporation) & AFFILIATES."
-)
-CHECK_PROPRIETARY_LIC = (
-    "NVIDIA CORPORATION, its affiliates and licensors retain all intellectual"
-)
+CheckSimple = re.compile(r"Copyright *(?:\(c\))? *(\d{4}),? *NVIDIA C(?:ORPORATION|orporation) & AFFILIATES.")
+CheckDouble = re.compile(r"Copyright *(?:\(c\))? *(\d{4}),? *NVIDIA C(?:ORPORATION|orporation) & AFFILIATES.")
+CHECK_PROPRIETARY_LIC = "NVIDIA CORPORATION, its affiliates and licensors retain all intellectual"
 
 
 def is_file_empty(f):
@@ -94,9 +86,7 @@ def replace_current_year(line, start, end):
     res = CheckSimple.sub(r"Copyright (c) \1-\1, NVIDIA CORPORATION", line)
 
     # pylint: disable=consider-using-f-string
-    res = CheckDouble.sub(
-        r"Copyright (c) {:04d}-{:04d}, NVIDIA CORPORATION".format(start, end), res
-    )
+    res = CheckDouble.sub(r"Copyright (c) {:04d}-{:04d}, NVIDIA CORPORATION".format(start, end), res)
     return res
 
 
@@ -260,9 +250,7 @@ def _main():
     ret_val = 0
     global ExemptFiles
 
-    argparser = argparse.ArgumentParser(
-        "Checks for a consistent copyright header in git's modified files"
-    )
+    argparser = argparse.ArgumentParser("Checks for a consistent copyright header in git's modified files")
     argparser.add_argument(
         "--update-start-year",
         dest="update_start_year",
@@ -279,9 +267,7 @@ def _main():
         dest="update_current_year",
         action="store_true",
         required=False,
-        help="If set, "
-        "update the current year if a header is already "
-        "present and well formatted.",
+        help="If set, " "update the current year if a header is already " "present and well formatted.",
     )
 
     argparser.add_argument(
@@ -348,9 +334,7 @@ def _main():
         dest="verify_nvidia_proprietary",
         action="store_true",
         required=False,
-        help="If set, "
-        "verifies all files contain the Apache license "
-        "in their header",
+        help="If set, " "verifies all files contain the Apache license " "in their header",
     )
     argparser.add_argument(
         "--exclude",
@@ -358,9 +342,7 @@ def _main():
         action="append",
         required=False,
         default=["_version\\.py"],
-        help=(
-            "Exclude the paths specified (regexp). " "Can be specified multiple times."
-        ),
+        help=("Exclude the paths specified (regexp). " "Can be specified multiple times."),
     )
 
     (args, dirs) = argparser.parse_known_args()
@@ -391,9 +373,7 @@ def _main():
         errors += check_copyright(
             f,
             args.update_current_year,
-            verify_nv_proprietary_lic=(
-                args.verify_nvidia_proprietary or args.insert or args.fix_all
-            ),
+            verify_nv_proprietary_lic=(args.verify_nvidia_proprietary or args.insert or args.fix_all),
             update_start_year=(args.update_start_year or args.fix_all),
             do_insert_license=(args.insert or args.fix_all),
             git_add=args.git_add,

@@ -37,9 +37,7 @@ from nv_ingest.util.tracing import traceable
 logger = logging.getLogger(__name__)
 
 
-def _build_split_documents(
-    row, text_splits: List[str], sentence_window_size: int
-) -> List[dict[str, Any]]:
+def _build_split_documents(row, text_splits: List[str], sentence_window_size: int) -> List[dict[str, Any]]:
     """Build documents from text splits with window text."""
     documents: List[dict] = []
 
@@ -48,19 +46,11 @@ def _build_split_documents(
         if text is None or not text.strip():
             continue
 
-        metadata = (
-            row.metadata
-            if hasattr(row, "metadata") and isinstance(row.metadata, dict)
-            else {}
-        )
+        metadata = row.metadata if hasattr(row, "metadata") and isinstance(row.metadata, dict) else {}
         metadata = copy.deepcopy(metadata)
         if window_size > 0:
             window_text = "".join(
-                text_splits[
-                    max(0, i - window_size) : min(  # noqa: E203
-                        i + 1 + window_size, len(text_splits)
-                    )
-                ]
+                text_splits[max(0, i - window_size) : min(i + 1 + window_size, len(text_splits))]  # noqa: E203
             )
 
             metadata["window"] = window_text
@@ -68,16 +58,12 @@ def _build_split_documents(
 
         metadata["content"] = text
 
-        documents.append(
-            {"document_type": ExtractedDocumentType.text, "metadata": metadata}
-        )
+        documents.append({"document_type": ExtractedDocumentType.text, "metadata": metadata})
 
     return documents
 
 
-def _split_into_units(
-    text: str, split_by: Literal["word", "sentence", "passage"]
-) -> List[str]:
+def _split_into_units(text: str, split_by: Literal["word", "sentence", "passage"]) -> List[str]:
     if split_by == "passage":
         split_at = "\n\n"
     elif split_by == "sentence":
@@ -85,10 +71,7 @@ def _split_into_units(
     elif split_by == "word":
         split_at = " "
     else:
-        raise NotImplementedError(
-            "DocumentSplitter only supports 'passage', 'sentence'"
-            " or 'word' split_by options."
-        )
+        raise NotImplementedError("DocumentSplitter only supports 'passage', 'sentence'" " or 'word' split_by options.")
     units = text.split(split_at)
     # Add the delimiter back to all units except the last one
     for i in range(len(units) - 1):
@@ -97,9 +80,7 @@ def _split_into_units(
     return units
 
 
-def _concatenate_units(
-    units: List[str], split_length: int, split_overlap: int, max_character_length: int
-) -> List[str]:
+def _concatenate_units(units: List[str], split_length: int, split_overlap: int, max_character_length: int) -> List[str]:
     text_splits = []
     segments = windowed(units, n=split_length, step=split_length - split_overlap)
     for seg in segments:
@@ -133,8 +114,7 @@ def _process_content(row, validated_config):
 
     if content is None:
         raise ValueError(
-            "DocumentSplitter only works with text documents but one or more 'content' "
-            "values are None."
+            "DocumentSplitter only works with text documents but one or more 'content' " "values are None."
         )
 
     units = _split_into_units(content, validated_config.split_by)
@@ -144,9 +124,7 @@ def _process_content(row, validated_config):
         validated_config.split_overlap,
         max_character_length=validated_config.max_character_length,
     )
-    split_docs = _build_split_documents(
-        row, text_splits, sentence_window_size=validated_config.sentence_window_size
-    )
+    split_docs = _build_split_documents(row, text_splits, sentence_window_size=validated_config.sentence_window_size)
 
     return split_docs
 
@@ -154,9 +132,7 @@ def _process_content(row, validated_config):
 MODULE_NAME = "nemo_document_splitter"
 MODULE_NAMESPACE = "nv_ingest"
 
-NemoDocSplitterLoaderFactory = ModuleLoaderFactory(
-    MODULE_NAME, MODULE_NAMESPACE, DocumentSplitterSchema
-)
+NemoDocSplitterLoaderFactory = ModuleLoaderFactory(MODULE_NAME, MODULE_NAMESPACE, DocumentSplitterSchema)
 
 
 @register_module(MODULE_NAME, MODULE_NAMESPACE)
@@ -170,9 +146,7 @@ def _nemo_document_splitter(builder: mrc.Builder):
     @filter_by_task(["split"])
     @traceable(MODULE_NAME)
     @cm_skip_processing_if_failed
-    @cm_default_failure_context_manager(
-        raise_on_failure=validated_config.raise_on_failure
-    )
+    @cm_default_failure_context_manager(raise_on_failure=validated_config.raise_on_failure)
     def split_and_forward(message: ControlMessage):
         try:
             # Assume that df is going to have a 'content' column
@@ -195,15 +169,9 @@ def _nemo_document_splitter(builder: mrc.Builder):
             # Override parameters if set
             split_by = task_props.get("split_by", validated_config.split_by)
             split_length = task_props.get("split_length", validated_config.split_length)
-            split_overlap = task_props.get(
-                "split_overlap", validated_config.split_overlap
-            )
-            max_character_length = task_props.get(
-                "max_character_length", validated_config.max_character_length
-            )
-            sentence_window_size = task_props.get(
-                "sentence_window_size", validated_config.sentence_window_size
-            )
+            split_overlap = task_props.get("split_overlap", validated_config.split_overlap)
+            max_character_length = task_props.get("max_character_length", validated_config.max_character_length)
+            sentence_window_size = task_props.get("sentence_window_size", validated_config.sentence_window_size)
 
             logger.info(
                 f"Splitting documents with split_by: {split_by}, split_length: {split_length}, "
@@ -217,8 +185,7 @@ def _nemo_document_splitter(builder: mrc.Builder):
 
                 if content is None:
                     raise ValueError(
-                        "DocumentSplitter only works with text documents but one or more "
-                        "'content' values are None."
+                        "DocumentSplitter only works with text documents but one or more " "'content' values are None."
                     )
 
                 units = _split_into_units(content, split_by)
@@ -228,18 +195,12 @@ def _nemo_document_splitter(builder: mrc.Builder):
                     split_overlap,
                     max_character_length=max_character_length,
                 )
-                split_docs.extend(
-                    _build_split_documents(
-                        row, text_splits, sentence_window_size=sentence_window_size
-                    )
-                )
+                split_docs.extend(_build_split_documents(row, text_splits, sentence_window_size=sentence_window_size))
 
             split_docs_df = pd.DataFrame(split_docs)
 
             # Return both processed text and other document types
-            split_docs_df = pd.concat(
-                [split_docs_df, df[~bool_index]], axis=0
-            ).reset_index(drop=True)
+            split_docs_df = pd.concat([split_docs_df, df[~bool_index]], axis=0).reset_index(drop=True)
 
             message_meta = MessageMeta(df=cudf.from_pandas(split_docs_df))
             message.payload(message_meta)

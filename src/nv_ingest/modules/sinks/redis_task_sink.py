@@ -15,14 +15,13 @@ from functools import partial
 
 import mrc
 from morpheus.messages import ControlMessage
-from morpheus.utils.control_message_utils import cm_default_failure_context_manager
-from morpheus.utils.control_message_utils import cm_skip_processing_if_failed
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
 from mrc.core import operators as ops
 from redis import RedisError
 
 from nv_ingest.schemas.redis_task_sink_schema import RedisTaskSinkSchema
+from nv_ingest.util.exception_handlers.decorators import nv_ingest_node_failure_context_manager
 from nv_ingest.util.modules.config_validator import fetch_and_validate_module_config
 from nv_ingest.util.redis import RedisClient
 from nv_ingest.util.tracing import traceable
@@ -132,17 +131,15 @@ def _redis_task_sink(builder: mrc.Builder):
 
         return func(message)
 
-    @cm_skip_processing_if_failed
-    @cm_default_failure_context_manager(
-        raise_on_failure=validated_config.raise_on_failure
-    )
     @traceable(MODULE_NAME)
+    @nv_ingest_node_failure_context_manager(
+        annotation_id=MODULE_NAME,
+        raise_on_failure=validated_config.raise_on_failure,
+    )
     def _process_and_forward(message: ControlMessage):
         return wrapped_process_and_forward(message)
 
-    process_node = builder.make_node(
-        "process_and_forward", ops.map(_process_and_forward)
-    )
+    process_node = builder.make_node("process_and_forward", ops.map(_process_and_forward))
     process_node.launch_options.engines_per_pe = validated_config.progress_engines
 
     # Register the final output of the module

@@ -23,9 +23,7 @@ from nv_ingest.schemas.file_source_pipe_schema import FileSourcePipeSchema
 
 logger = logging.getLogger(__name__)
 
-FileSourcePipeLoaderFactory = ModuleLoaderFactory(
-    "file_source_pipe", "morpheus_examples_llm", FileSourcePipeSchema
-)
+FileSourcePipeLoaderFactory = ModuleLoaderFactory("file_source_pipe", "morpheus_examples_llm", FileSourcePipeSchema)
 
 
 @register_module("file_source_pipe", "morpheus_examples_llm")
@@ -72,9 +70,7 @@ def _file_source_pipe(builder: mrc.Builder):
     try:
         validated_config = FileSourcePipeSchema(**file_source_config)
     except ValidationError as e:
-        error_messages = "; ".join(
-            [f"{error['loc'][0]}: {error['msg']}" for error in e.errors()]
-        )
+        error_messages = "; ".join([f"{error['loc'][0]}: {error['msg']}" for error in e.errors()])
         log_error_message = f"Invalid file source configuration: {error_messages}"
         logger.error(log_error_message)
         raise ValueError(log_error_message)
@@ -89,9 +85,7 @@ def _file_source_pipe(builder: mrc.Builder):
         "watch_interval": validated_config.watch_interval,
         "watch_dir": validated_config.watch,
     }
-    multi_file_loader = MultiFileSourceLoaderFactory.get_instance(
-        "multi_file_source", {"source_config": source_config}
-    )
+    multi_file_loader = MultiFileSourceLoaderFactory.get_instance("multi_file_source", {"source_config": source_config})
 
     # Configure and load the file content extractor module
     file_content_extractor_config = {
@@ -140,12 +134,8 @@ def _file_source_pipe(builder: mrc.Builder):
         file_content_extractor_module.output_port("output"),
         monitor_1_module.input_port("input"),
     )
-    builder.make_edge(
-        monitor_1_module.output_port("output"), deserialize_module.input_port("input")
-    )
-    builder.make_edge(
-        deserialize_module.output_port("output"), monitor_2_module.input_port("input")
-    )
+    builder.make_edge(monitor_1_module.output_port("output"), deserialize_module.input_port("input"))
+    builder.make_edge(deserialize_module.output_port("output"), monitor_2_module.input_port("input"))
 
     # Register the final output of the transformation module
     builder.register_module_output("output", monitor_2_module.output_port("output"))

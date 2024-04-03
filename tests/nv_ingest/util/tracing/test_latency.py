@@ -57,9 +57,7 @@ def test_latency_logger_without_existing_metadata(mock_logging, control_message)
     result = decorated_test_function(control_message)
 
     assert result == "Test Function Executed"
-    assert (
-        not mock_logging.debug.called
-    )  # No existing ts_send, no log about "since ts_send"
+    assert not mock_logging.debug.called  # No existing ts_send, no log about "since ts_send"
     assert "latency::test_function::elapsed_time" in control_message.metadata
 
 
