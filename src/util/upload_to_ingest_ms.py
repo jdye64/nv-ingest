@@ -411,7 +411,7 @@ def submit_job_and_wait_for_response(redis_client, job_data, tasks, task_queue, 
         "tracing_options": {"trace": True, "ts_send": time.time_ns()},
     }
 
-    # debug_print_job_payload(job_desc)
+    debug_print_job_payload(job_desc)
     validate_ingest_job(job_desc)
 
     response_channel = f"response_{job_id}"

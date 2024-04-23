@@ -63,6 +63,9 @@ def process_and_forward(message: ControlMessage, redis_client: RedisClient):
     if so, includes trace information in the forwarded message. Finally, the message is sent to the specified Redis
     channel. Errors during message forwarding are logged.
     """
+    if message.get_metadata("cm_failed", False):
+        logger.error("Received a failed message, skipping processing.")
+
     with message.payload().mutable_dataframe() as mdf:
         logger.info(f"Received DataFrame with {len(mdf)} rows.")
         # Work around until https://github.com/apache/arrow/pull/40412 is resolved
@@ -134,10 +137,6 @@ def _redis_task_sink(builder: mrc.Builder):
         return func(message)
 
     @traceable(MODULE_NAME)
-    @nv_ingest_node_failure_context_manager(
-        annotation_id=MODULE_NAME,
-        raise_on_failure=validated_config.raise_on_failure,
-    )
     def _process_and_forward(message: ControlMessage):
         return wrapped_process_and_forward(message)
 

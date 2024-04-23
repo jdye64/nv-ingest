@@ -22,6 +22,7 @@ WORKDIR /workspace
 COPY setup.py setup.py
 # Don't copy full source here, pipelines won't be installed via setup anyway, and this allows us to rebuild more quickly if we're just changing the pipeline
 COPY src/nv_ingest src/nv_ingest
+COPY client nv_ingest_client
 COPY requirements.txt test-requirements.txt util-requirements.txt ./
 SHELL ["/bin/bash", "-c"]
 
@@ -29,13 +30,17 @@ SHELL ["/bin/bash", "-c"]
 ENV HAYSTACK_TELEMETRY_ENABLED=False
 
 RUN source activate morpheus \
-    && pip install . \
+    && pip install .
+
+RUN source activate morpheus \
+    && pip install ./nv_ingest_client \
     && rm -rf src requirements.txt test-requirements.txt util-requirements.txt
 
 FROM base as runtime
 
 COPY src/pipeline.py ./
 COPY src/util/upload_to_ingest_ms.py ./
+COPY pyproject.toml ./
 
 CMD ["python", "/workspace/pipeline.py"]
 
