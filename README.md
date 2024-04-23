@@ -17,7 +17,6 @@ its affiliates is strictly prohibited.
 - [Morpheus-ms](https://github.com/nv-morpheus/Morpheus)
 - [nv-ingest-ms-runtime](https://gitlab-master.nvidia.com/dl/ai-services/microservices/nv-ingest)
 - [Nemo Retriever](https://gitlab-master.nvidia.com/drobison/devin-nemo-retrieval-microservice-private)
-- [Tracking Doc + Notes on Nemo Retriever](https://docs.google.com/document/d/12krzO82T-nhtyvTNh6Pbc8mqBOrBp4JZ9wWwM3OOR2Q/edit#heading=h.gya3si3lass1)
 - [Ryan Angilly's Engineering Overview of Nemo Retriever](https://nvidia-my.sharepoint.com/personal/rangilly_nvidia_com/_layouts/15/stream.aspx?id=%2Fpersonal%2Frangilly%5Fnvidia%5Fcom%2FDocuments%2FRecordings%2FRyan%20Angilly%20presents%20how%20Retriever%20Services%20work%2D20240124%5F120001%2DMeeting%20Recording%2Emp4&referrer=StreamWebApp%2EWeb&referrerScenario=AddressBarCopied%2Eview&ga=1)
 
 # Table of Contents
@@ -26,7 +25,7 @@ its affiliates is strictly prohibited.
 - [Submitting documents to an existing ingest-service](#submitting-documents-to-an-existing-ingest-service)
 - [Building the nv-ingest-ms-runtime container](#building-the-nv-ingest-ms-runtime-container)
 - [Utilities](#utilities)
-  - [upload_to_ingest_ms.py](#upload_to_ingest_mspy)
+  - [nv-ingest-cli](./client/README.md)
   - [gen_dataset.py](#gen_datasetpy)
   - [image_viewer.py](#image_viewerpy)
 
@@ -43,13 +42,16 @@ its affiliates is strictly prohibited.
 
 ### Submitting documents to an existing ingest-service
 
-If you already have an existing service, you can submit documents to it using the `upload_to_ingest_ms.py` script.
+If you already have an existing service, you can submit documents to it using the `nv-ingest-cli` tool.
 
 Pre-requisites:
 
 - Install nv-ingest package dev: `pip install -e .` full-install: `pip install .`
+- Install nv-ingest-client package: `pip install ./client/`
 
-Full reference: [upload_to_ingest_ms.py](#Command-line-interface-options)
+Full reference: [nv-ingest-cli](./client/README.md)
+
+````shell
 
 **Note:** In an upcoming release this will be replaced with a more general nv-ingest client library + and
 command-line tool.
@@ -60,13 +62,12 @@ Submit ./data/test.pdf to the ingest service at localhost:6379, and extract text
 method.
 
 ```shell
-python ./src/util/upload_to_ingest_ms.py \
-  --file_source ./data/test.pdf \
+nv-ingest-cli \
+  --doc ./data/test.pdf \
   --output_directory ./processed_docs \
-  --extract \
-  --extract_method=pymupdf \
-  --redis_host=localhost \
-  --redis_port=6379
+  --task='extract:{"document_type": "pdf", "extract_method": "pymupdf"}' \
+  --client_host=localhost \
+  --client_port=6379
 
 ls ./processed_docs/*
 processed_docs/image:
@@ -75,7 +76,7 @@ test.pdf.metadata.json
 processed_docs/text:
 test.pdf.metadata.json
 
-```
+````
 
 View images; see: [image_viewer.py](#image_viewerpy)
 
@@ -294,107 +295,23 @@ nv-ingest-ms-runtime-1  | INFO:morpheus.pipeline.pipeline:====Building Segment C
 
 ## Utilities
 
-### Command line document ingest
-
-#### upload_to_ingest_ms.py
-
-- `--file_source`: List of file sources/paths to be processed.
-
-  - **Type**: String (Multiple allowed)
-  - **Default**: []
-  - **Example Usage**: `--file_source path/to/file1.pdf --file_source path/to/file2.pdf`
-
-- `--dataset_json`: Path to a JSON file containing a list of file sources.
-
-  - **Type**: String
-  - **Default**: None
-  - **Example Usage**: `--dataset_json path/to/dataset.json`
-
-- `--redis-host`: DNS name for Redis.
-
-  - **Type**: String
-  - **Default**: "localhost"
-  - **Example Usage**: `--redis-host redis-server.domain.com`
-
-- `--redis-port`: Port for Redis.
-
-  - **Type**: Integer
-  - **Default**: 6379
-  - **Example Usage**: `--redis-port 6379`
-
-- `--extract`: Enable PDF text extraction task.
-
-  - **Type**: Flag (Boolean)
-  - **Default**: False (not set)
-  - **Example Usage**: `--extract`
-
-- `--split`: Enable text splitting task.
-
-  - **Type**: Flag (Boolean)
-  - **Default**: False (not set)
-  - **Example Usage**: `--split`
-
-- `--extract_method`: Specifies the type(s) of extraction to use.
-
-  - **Type**: Choice [pymupdf, haystack, tika, unstructured_io, unstructured_service, llama_parse]
-  - **Default**: ["pymupdf"]
-  - **Multiple**: Yes
-  - **Example Usage**: `--extract_method pymupdf --extract_method tika`
-
-- `--use_dask`: Use dask for concurrency.
-
-  - **Type**: Flag (Boolean)
-  - **Default**: False (not set)
-  - **Example Usage**: `--use_dask`
-
-- `--n_workers`: Number of workers for the ThreadPoolExecutor or dask.
-
-  - **Type**: Integer
-  - **Default**: 5
-  - **Example Usage**: `--n_workers 10`
-
-- `--log_level`: Sets the logging level.
-
-  - **Type**: Choice [DEBUG, INFO, WARNING, ERROR, CRITICAL]
-  - **Default**: "INFO"
-  - **Example Usage**: `--log_level ERROR`
-
-- `--concurrency_mode`: Choose 'thread' for ThreadPoolExecutor or 'process' for ProcessPoolExecutor.
-
-  - **Type**: Choice [thread, process]
-  - **Default**: "thread"
-  - **Example Usage**: `--concurrency_mode process`
-
-- `--dry-run`: Prints the steps to be executed without performing them.
-
-  - **Type**: Flag (Boolean)
-  - **Default**: False (not set)
-  - **Example Usage**: `--dry-run`
-
-- `--output_directory`: Directory where output files will be saved. If provided, must exist and be writable.
-  - **Type**: Path
-  - **Default**: None
-  - **Example Usage**: `--output_directory /path/to/output`
-
 ### Example document submission to the nv-ingest-ms-runtime service
 
 Each of the following can be run from the host machine or from within the nv-ingest-ms-runtime container.
 
-- Host: `python ./src/util/upload_to_ingest_ms.py ...`
-- Container: `python upload_to_ingest_ms.py ...`
+- Host: `nv-ingest-cli ...`
+- Container: `nv-ingest-cli ...`
 
 Submit a text file, with no splitting.
 
-**Note:** You will receive a response containing a single document, which is the entire text file -- NO-OP.
+**Note:** You will receive a response containing a single document, which is the entire text file -- This is mostly
+a NO-OP, but the returned data will be wrapped in the appropriate metadata structure.
 
 ```bash
-python ./src/util/upload_to_ingest_ms.py \
-  --file_source ./data/test.pdf \
-  --output_directory ./processed_docs \
-  --extract \
-  --extract_method=pymupdf \
-  --redis_host=[hostname]\
-  --redis_port=6379
+nv-ingest-cli \
+  --doc ./data/test.pdf \
+  --client_host=localhost \
+  --client_port=6379
 ```
 
 Submit a text file with a splitting task.
@@ -410,15 +327,15 @@ python ./src/util/upload_to_ingest_ms.py \
   --redis_port=6379
 ```
 
-(Error) Submit a PDF file with only a splitting task.
+Submit a PDF file with only a splitting task.
 
 ```bash
-python ./src/util/upload_to_ingest_ms.py \
-  --file_source ./path_to_document.txt \
+nv-ingest-cli \
+  --doc ./data/test.pdf \
   --output_directory ./processed_docs \
-  --split \
-  --redis_host=localhost \
-  --redis_port=6379
+  --task='split' \
+  --client_host=localhost \
+  --client_port=6379
 ```
 
 Submit a PDF file with splitting and extraction tasks.
@@ -426,31 +343,28 @@ Submit a PDF file with splitting and extraction tasks.
 **Note: (TODO)** This currently only works for pymupdf; haystack, Adobe, LlamaParse, and Unstructured.io have existing
 workflows but have not been fully converted to use our unified metadata schema.
 
-**Note: (TODO)** You can specify multiple extraction methods, but we currently won't do the right thing and produce two
-sets of outputs.
-
 ```bash
-python ./src/util/upload_to_ingest_ms.py \
-  --file_source ./path_to_document.txt \
+nv-ingest-cli \
+  --doc ./data/test.pdf \
   --output_directory ./processed_docs \
-  --extract \
-  --extract_method=pymupdf \
-  --split \
-  --redis_host=localhost \
-  --redis_port=6379
+  --task='extract:{"document_type": "pdf", "extract_method": "pymupdf"}' \
+  --task='extract:{"document_type": "docx", "extract_method": "python_docx"}' \
+  --task='split' \
+  --client_host=localhost \
+  --client_port=6379
+
 ```
 
 Submit a [dataset](#command-line-dataset-creation-with-enumeration-and-sampling) for processing
 
 ```shell
-python ./src/util/upload_to_ingest_ms.py \
-  --dataset_json ./dataset.json \
+nv-ingest-cli \
+  --dataset dataset.json \
   --output_directory ./processed_docs \
-  --extract \
-  --extract_method=pymupdf \
-  --split \
-  --redis_host=localhost \
-  --redis_port=6379
+  --task='extract:{"document_type": "pdf", "extract_method": "pymupdf"}' \
+  --client_host=localhost \
+  --client_port=6379
+
 ```
 
 ### Command line dataset creation with enumeration and sampling
