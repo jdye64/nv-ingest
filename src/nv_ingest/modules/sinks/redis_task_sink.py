@@ -21,6 +21,7 @@ from mrc.core import operators as ops
 from redis import RedisError
 
 from nv_ingest.schemas.redis_task_sink_schema import RedisTaskSinkSchema
+from nv_ingest.util.converters import dftools
 from nv_ingest.util.exception_handlers.decorators import nv_ingest_node_failure_context_manager
 from nv_ingest.util.modules.config_validator import fetch_and_validate_module_config
 from nv_ingest.util.redis import RedisClient
@@ -64,7 +65,8 @@ def process_and_forward(message: ControlMessage, redis_client: RedisClient):
     """
     with message.payload().mutable_dataframe() as mdf:
         logger.info(f"Received DataFrame with {len(mdf)} rows.")
-        df_json = mdf.to_json(orient="records")
+        # Work around until https://github.com/apache/arrow/pull/40412 is resolved
+        df_json = dftools.cudf_to_json(mdf, deserialize_cols=["document_type", "metadata"])
 
     ret_val_json = {
         "data": df_json,

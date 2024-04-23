@@ -22,6 +22,7 @@ import cudf
 from nv_ingest.schemas import MetadataInjectorSchema
 from nv_ingest.schemas.ingest_job_schema import DocumentTypeEnum
 from nv_ingest.schemas.metadata_schema import ContentTypeEnum
+from nv_ingest.util.converters import dftools
 from nv_ingest.util.converters.type_mappings import doc_type_to_content_type
 from nv_ingest.util.exception_handlers.decorators import nv_ingest_node_failure_context_manager
 from nv_ingest.util.modules.config_validator import fetch_and_validate_module_config
@@ -66,8 +67,9 @@ def on_data(message: ControlMessage):
 
     if update_required:
         docs = pd.DataFrame(rows)
-
-        message_meta = MessageMeta(df=cudf.from_pandas(docs))
+        # Work around until https://github.com/apache/arrow/pull/40412 is resolved
+        gdf = dftools.pandas_to_cudf(docs)
+        message_meta = MessageMeta(df=gdf)
         message.payload(message_meta)
 
     return message
