@@ -24,7 +24,8 @@ from morpheus.stages.general.linear_modules_stage import LinearModulesStage
 from morpheus.stages.general.monitor_stage import MonitorStage
 from morpheus.stages.general.trigger_stage import TriggerStage
 
-from nv_ingest.modules.pdf_extractor import PDFExtractorLoaderFactory
+from nv_ingest.modules.extractors.pdf_extractor import PDFExtractorLoaderFactory
+from nv_ingest.stages.pdf_extractor_stage import generate_pdf_extractor_stage
 from nv_ingest.stages.pdf_memory_source_stage import PdfMemoryFileSource
 
 logger = logging.getLogger(__name__)
@@ -65,8 +66,7 @@ def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
     logger.info(f"REDIS_PORT: {redis_port}")
 
     n_pe_workers = 23
-    max_queue_size = 1
-    dataset_json = "test_output.json"
+    dataset_json = "/workspace/src/test_output.json"
     delayed_start = False
     repeat_count = 5
 
@@ -78,20 +78,8 @@ def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
 
     trigger_stage = pipe.add_stage(TriggerStage(config))
 
-    pdf_text_extract_loader = PDFExtractorLoaderFactory.get_instance(
-        module_name="pdf_extractor",
-        module_config={"n_workers": n_pe_workers, "max_queue_size": max_queue_size},
-    )
-
     extractor_stage = pipe.add_stage(
-        LinearModulesStage(
-            config,
-            pdf_text_extract_loader,
-            input_type=ControlMessage,
-            output_type=ControlMessage,
-            input_port_name="input",
-            output_port_name="output",
-        )
+        generate_pdf_extractor_stage(config, pe_count=n_pe_workers, task="extract", task_desc="pdf_content_extractor")
     )
 
     extractor_monitor = pipe.add_stage(
@@ -163,6 +151,5 @@ if __name__ == "__main__":
     config.num_threads = os.cpu_count()
     config.model_max_batch_size = 256
     config.mode = PipelineModes.NLP
-    config.edge_buffer_size = 128
 
     pipeline(config)

@@ -24,11 +24,11 @@ from morpheus.pipeline.pipeline import Pipeline
 from morpheus.stages.general.linear_modules_source import LinearModuleSourceStage
 from morpheus.stages.general.linear_modules_stage import LinearModulesStage
 
-from nv_ingest.modules.extractors.pdf_extractor import PDFExtractorLoaderFactory
 from nv_ingest.modules.injectors.metadata_injector import MetadataInjectorLoaderFactory
 from nv_ingest.modules.sinks.redis_task_sink import RedisTaskSinkLoaderFactory
 from nv_ingest.modules.sources.redis_task_source import RedisTaskSourceLoaderFactory
 from nv_ingest.modules.transforms.nemo_doc_splitter import NemoDocSplitterLoaderFactory
+from nv_ingest.stages.pdf_extractor_stage import generate_pdf_extractor_stage
 
 logger = logging.getLogger(__name__)
 
@@ -114,20 +114,8 @@ def setup_pdf_ingest_pipeline(pipe: Pipeline, config: Config):
         )
     )
 
-    # Add pdf-extraction stage ("pdf_extractor")
-    pdf_text_extract_loader = PDFExtractorLoaderFactory.get_instance(
-        module_name="pdf_extractor",
-        module_config={"n_workers": min(23, os.cpu_count() - 1), "max_queue_size": 1},
-    )
     extractor_stage = pipe.add_stage(
-        LinearModulesStage(
-            config,
-            pdf_text_extract_loader,
-            input_type=ControlMessage,
-            output_type=ControlMessage,
-            input_port_name="input",
-            output_port_name="output",
-        )
+        generate_pdf_extractor_stage(config, pe_count=24, task="extract", task_desc="pdf_content_extractor")
     )
 
     # Add doc-splitter stage ("nemo_doc_splitter")

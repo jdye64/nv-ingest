@@ -22,6 +22,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import logging
 from datetime import datetime
 
@@ -78,8 +79,8 @@ def pymupdf(pdf_stream, extract_text: bool, extract_images: bool, extract_tables
     text_depth = TextTypeEnum[text_depth.upper()]
     # get base metadata
     metadata_col = kwargs.get("metadata_column", "metadata")
-
-    base_unified_metadata = row_data[metadata_col] if metadata_col in row_data.index else {}
+    # Work around until https://github.com/apache/arrow/pull/40412 is resolved
+    base_unified_metadata = json.loads(row_data[metadata_col]) if metadata_col in row_data.index else {}
 
     # get base source_metadata
     base_source_metadata = base_unified_metadata.get("source_metadata", {})
@@ -138,8 +139,8 @@ def pymupdf(pdf_stream, extract_text: bool, extract_images: bool, extract_tables
 
         accumulated_text = []
         for page_idx in range(len(doc)):
-            page = doc[page_idx]
-            page_dict = page.get_text("dict")
+            page = doc.load_page(page_idx)
+            page_dict = page.get_text("dict", sort=True)
             blocks = page_dict["blocks"]  # the list of block dictionaries
 
             for block in blocks:
@@ -319,7 +320,8 @@ def _construct_text_metadata(
 
     validated_unified_metadata = validate_schema(ext_unified_metadata, PDFExtractorSchema)
 
-    return [ContentTypeEnum.TEXT, validated_unified_metadata.dict()]
+    # Work around until https://github.com/apache/arrow/pull/40412 is resolved
+    return [ContentTypeEnum.TEXT.value, validated_unified_metadata.dict()]
 
 
 @pymupdf_exception_handler(descriptor="pymupdf")
@@ -367,4 +369,5 @@ def _extract_image(block, page_idx, page_count, source_metadata, base_unified_me
 
     validated_unified_metadata = validate_schema(unified_metadata, PDFExtractorSchema)
 
-    return [ContentTypeEnum.IMAGE, validated_unified_metadata.dict()]
+    # Work around until https://github.com/apache/arrow/pull/40412 is resolved
+    return [ContentTypeEnum.IMAGE.value, validated_unified_metadata.dict()]

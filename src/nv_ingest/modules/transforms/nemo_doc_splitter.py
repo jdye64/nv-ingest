@@ -9,6 +9,7 @@
 # its affiliates is strictly prohibited.
 
 import copy
+import json
 import logging
 import traceback
 from typing import Any
@@ -30,6 +31,7 @@ import cudf
 
 from nv_ingest.schemas.metadata_schema import ExtractedDocumentType
 from nv_ingest.schemas.nemo_doc_splitter_schema import DocumentSplitterSchema
+from nv_ingest.util.converters import dftools
 from nv_ingest.util.flow_control import filter_by_task
 from nv_ingest.util.modules.config_validator import fetch_and_validate_module_config
 from nv_ingest.util.tracing import traceable
@@ -58,7 +60,7 @@ def _build_split_documents(row, text_splits: List[str], sentence_window_size: in
 
         metadata["content"] = text
 
-        documents.append({"document_type": ExtractedDocumentType.text, "metadata": metadata})
+        documents.append({"document_type": ExtractedDocumentType.text.value, "metadata": metadata})
 
     return documents
 
@@ -154,16 +156,14 @@ def _nemo_document_splitter(builder: mrc.Builder):
 
             # Validate that all 'content' values are not None
             with message.payload().mutable_dataframe() as mdf:
-                df = mdf.to_pandas()
+                df = dftools.cudf_to_pandas(mdf)
 
             # Filter to text only
-            bool_index = df["document_type"] == ExtractedDocumentType.text
+            # Work around until https://github.com/apache/arrow/pull/40412 is resolved
+            bool_index = df["document_type"] == json.dumps(ExtractedDocumentType.text.value)
             df_filtered = df.loc[bool_index]
 
             if df_filtered.empty:
-                message_meta = MessageMeta(df=cudf.from_pandas(df))
-                message.payload(message_meta)
-
                 return message
 
             # Override parameters if set
@@ -181,7 +181,8 @@ def _nemo_document_splitter(builder: mrc.Builder):
 
             split_docs = []
             for _, row in df_filtered.iterrows():
-                content = row["metadata"]["content"]
+                # Work around until https://github.com/apache/arrow/pull/40412 is resolved
+                content = json.loads(row["metadata"])["content"]
 
                 if content is None:
                     raise ValueError(
@@ -201,8 +202,11 @@ def _nemo_document_splitter(builder: mrc.Builder):
 
             # Return both processed text and other document types
             split_docs_df = pd.concat([split_docs_df, df[~bool_index]], axis=0).reset_index(drop=True)
+            # Update control message with new payload
+            # Work around until https://github.com/apache/arrow/pull/40412 is resolved
+            split_docs_gdf = dftools.pandas_to_cudf(split_docs_df)
 
-            message_meta = MessageMeta(df=cudf.from_pandas(split_docs_df))
+            message_meta = MessageMeta(df=split_docs_gdf)
             message.payload(message_meta)
 
             return message

@@ -27,10 +27,9 @@ from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
 from mrc.core.node import RoundRobinRouter
 
-import cudf
-
 from nv_ingest.extraction_workflows import pdf
 from nv_ingest.schemas.pdf_extractor_schema import PDFExtractorModuleSchema
+from nv_ingest.util.converters import dftools
 from nv_ingest.util.exception_handlers.decorators import nv_ingest_node_failure_context_manager
 from nv_ingest.util.exception_handlers.pdf import create_exception_tag
 from nv_ingest.util.flow_control import filter_by_task
@@ -104,7 +103,7 @@ def _process_pdf_bytes(df, task_props):
         if not sr_extraction.empty:
             extracted_df = pd.DataFrame(sr_extraction.to_list(), columns=["document_type", "metadata"])
         else:
-            return pd.DataFrame(columns=["document_type", "metadata"])
+            extracted_df = pd.DataFrame({"document_type": [], "metadata": []})
 
         return extracted_df
 
@@ -171,18 +170,21 @@ def _pdf_text_extractor(builder: mrc.Builder):
         raise_on_failure=validated_config.raise_on_failure,
     )
     def _worker_fn(ctrl_msg: ControlMessage, port_id: int):
-        # Must copy payload and control message here?
         with ctrl_msg.payload().mutable_dataframe() as mdf:
-            x_c = mdf.to_pandas()
-        ctrl_msg = ctrl_msg.copy()
+            # Work around until https://github.com/apache/arrow/pull/40412 is resolved
+            x_c = dftools.cudf_to_pandas(mdf)
+
         task_props = ctrl_msg.remove_task("extract")
 
         # Put/get from spawned extraction process
         send_queues[port_id].put((x_c, task_props))
-        result = next(recv_deque(port_id))
+        result_df = next(recv_deque(port_id))
 
         # Update control message with new payload
-        msg_meta = MessageMeta(df=cudf.DataFrame(result))
+        # Work around until https://github.com/apache/arrow/pull/40412 is resolved
+        result_gdf = dftools.pandas_to_cudf(result_df)
+        msg_meta = MessageMeta(df=result_gdf)
+
         ctrl_msg.payload(msg_meta)
         return ctrl_msg
 
