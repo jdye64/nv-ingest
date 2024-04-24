@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 import time
 from collections import defaultdict
 from concurrent.futures import as_completed
@@ -225,7 +226,7 @@ def organize_documents_by_type(response_data):
 def save_response_data(response, output_directory):
     if ("data" not in response) or (not response["data"]):
         return
-    response_data = json.loads(response["data"])
+    response_data = response["data"]
 
     if not isinstance(response_data, list) or len(response_data) == 0:
         return
@@ -233,7 +234,8 @@ def save_response_data(response, output_directory):
     doc_meta_base = response_data[0]["metadata"]
     source_meta = doc_meta_base["source_metadata"]
     doc_name = source_meta["source_id"]
-    output_name = f"{os.path.basename(doc_name)}.metadata.json"
+    clean_doc_name = get_valid_filename(os.path.basename(doc_name))
+    output_name = f"{clean_doc_name}.metadata.json"
 
     doc_map = organize_documents_by_type(response_data)
     for doc_type, documents in doc_map.items():
@@ -364,3 +366,20 @@ def create_and_process_jobs(
         logger.error(f"Failed jobs due to decoding or other errors: {failed_jobs}")
 
     return total_files, trace_times, total_pages_processed, total_timeouts
+
+
+def get_valid_filename(name):
+    """
+    Taken from https://github.com/django/django/blob/main/django/utils/text.py.
+    Return the given string converted to a string that can be used for a clean
+    filename. Remove leading and trailing spaces; convert other spaces to
+    underscores; and remove anything that is not an alphanumeric, dash,
+    underscore, or dot.
+    >>> get_valid_filename("john's portrait in 2004.jpg")
+    'johns_portrait_in_2004.jpg'
+    """
+    s = str(name).strip().replace(" ", "_")
+    s = re.sub(r"(?u)[^-\w.]", "", s)
+    if s in {"", ".", ".."}:
+        raise ValueError("Could not derive file name from '%s'" % name)
+    return s
