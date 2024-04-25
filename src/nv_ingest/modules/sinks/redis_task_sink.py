@@ -69,7 +69,8 @@ def process_and_forward(message: ControlMessage, redis_client: RedisClient):
     with message.payload().mutable_dataframe() as mdf:
         logger.info(f"Received DataFrame with {len(mdf)} rows.")
         # Work around until https://github.com/apache/arrow/pull/40412 is resolved
-        df_json = dftools.cudf_to_json(mdf, deserialize_cols=["document_type", "metadata"])
+        keep_cols = ["document_type", "metadata"]
+        df_json = dftools.cudf_to_json(mdf[keep_cols], deserialize_cols=keep_cols)
 
     ret_val_json = {
         "data": df_json,

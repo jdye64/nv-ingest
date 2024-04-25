@@ -24,7 +24,7 @@ from morpheus.stages.general.linear_modules_stage import LinearModulesStage
 from morpheus.stages.general.monitor_stage import MonitorStage
 from morpheus.stages.general.trigger_stage import TriggerStage
 
-from nv_ingest.modules.extractors.pdf_extractor import PDFExtractorLoaderFactory
+from nv_ingest.modules.transforms.associate_nearby_text import AssociateNearbyTextLoaderFactory
 from nv_ingest.stages.pdf_extractor_stage import generate_pdf_extractor_stage
 from nv_ingest.stages.pdf_memory_source_stage import PdfMemoryFileSource
 
@@ -66,8 +66,8 @@ def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
     logger.info(f"REDIS_PORT: {redis_port}")
 
     n_pe_workers = 23
-    dataset_json = "/workspace/src/test_output.json"
-    delayed_start = False
+    dataset_json = "/workspace/src/new_test_output_100MB.json"
+    delayed_start = True
     repeat_count = 5
 
     with open(dataset_json, "r") as f:

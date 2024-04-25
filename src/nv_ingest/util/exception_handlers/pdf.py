@@ -13,8 +13,7 @@ import logging
 
 from nv_ingest.schemas.metadata_schema import StatusEnum
 from nv_ingest.schemas.metadata_schema import TaskTypeEnum
-from nv_ingest.schemas.pdf_extractor_schema import PDFExtractorSchema
-from nv_ingest.util.schema.schema_validator import validate_schema
+from nv_ingest.schemas.metadata_schema import validate_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +45,6 @@ def create_exception_tag(error_message, source_id=None):
 
     unified_metadata["error_metadata"] = error_metadata
 
-    validated_unified_metadata = validate_schema(unified_metadata, PDFExtractorSchema)
+    validated_unified_metadata = validate_metadata(unified_metadata)
 
     return [[None, validated_unified_metadata.dict()]]

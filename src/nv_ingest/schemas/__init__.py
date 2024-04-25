@@ -14,7 +14,6 @@ from .ingest_job_schema import validate_ingest_job
 from .metadata_injector_schema import MetadataInjectorSchema
 from .metadata_schema import validate_metadata
 from .nemo_doc_splitter_schema import DocumentSplitterSchema
-from .pdf_extractor_schema import PDFExtractorModuleSchema
 from .pdf_extractor_schema import PDFExtractorSchema
 from .redis_client_schema import RedisClientSchema
 from .redis_task_sink_schema import RedisTaskSinkSchema
@@ -25,7 +24,6 @@ __all__ = [
     "DocumentSplitterSchema",
     "IngestJobSchema",
     "MetadataInjectorSchema",
-    "PDFExtractorModuleSchema",
     "PDFExtractorSchema",
     "RedisClientSchema",
     "RedisTaskSinkSchema",

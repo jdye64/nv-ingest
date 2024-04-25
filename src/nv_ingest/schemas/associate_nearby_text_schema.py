@@ -13,18 +13,11 @@ import logging
 
 from pydantic import BaseModel
 
-from nv_ingest.schemas.metadata_schema import ContentMetadataSchema
-from nv_ingest.schemas.metadata_schema import ErrorMetadataSchema
-from nv_ingest.schemas.metadata_schema import ImageMetadataSchema
-from nv_ingest.schemas.metadata_schema import SourceMetadataSchema
-from nv_ingest.schemas.metadata_schema import TextMetadataSchema
-
 logger = logging.getLogger(__name__)
 
 
-class PDFExtractorSchema(BaseModel):
-    n_workers: int = 16
-    max_queue_size: int = 1
+class AssociateNearbyTextSchema(BaseModel):
+    n_neighbors: int = 5
     raise_on_failure: bool = False
 
     class Config:

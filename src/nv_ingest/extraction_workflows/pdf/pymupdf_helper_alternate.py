@@ -142,16 +142,8 @@ def pymupdf(pdf_stream, extract_text: bool, extract_images: bool, extract_tables
             page = doc.load_page(page_idx)
             page_dict = page.get_text("dict", sort=True)
             blocks = page_dict["blocks"]  # the list of block dictionaries
-
-            page_nearby_blocks = {
-                "text": {"content": [], "bbox": []},
-                "images": {"content": [], "bbox": []},
-                "structured": {"content": [], "bbox": []},
-            }
-
+            block_text = []
             for block in blocks:
-                block_text = []
-
                 # Extract text (a) - block/line/span
                 if (extract_text) and (block["type"] == 0):
                     block_idx = block["number"]
@@ -222,24 +214,38 @@ def pymupdf(pdf_stream, extract_text: bool, extract_images: bool, extract_tables
 
                         accumulated_text = []
 
-                if (extract_images) and (len(block_text) > 0):
-                    page_nearby_blocks["text"]["content"].append(" ".join(block_text))
-                    page_nearby_blocks["text"]["bbox"].append(block["bbox"])
-
-            if extract_images:
-                for block in blocks:
-                    # Extract images
-                    if (extract_images) and (block["type"] == 1):
-                        image_extraction = _extract_image(
+                    # Extract block level data
+                    if extract_images:
+                        nearby_block_extraction = _construct_text_metadata(
                             block,
+                            block_text,
+                            keywords,
                             page_idx,
+                            block_idx,
+                            -1,
+                            -1,
                             page_count,
+                            TextTypeEnum.NEARBY_BLOCK,
                             source_metadata,
                             base_unified_metadata,
-                            page_nearby_blocks,
                         )
 
-                        extracted_data.append(image_extraction)
+                        if len(nearby_block_extraction) > 0:
+                            extracted_data.append(nearby_block_extraction)
+
+                        block_text = []
+
+                # Extract images
+                if (extract_images) and (block["type"] == 1):
+                    image_extraction = _extract_image(
+                        block,
+                        page_idx,
+                        page_count,
+                        source_metadata,
+                        base_unified_metadata,
+                    )
+
+                    extracted_data.append(image_extraction)
 
             # Extract text - page (b)
             if (extract_text) and (text_depth == TextTypeEnum.PAGE):
@@ -320,6 +326,7 @@ def _construct_text_metadata(
             "line": line_idx,
             "span": span_idx,
         },
+        "uuid": str(uuid.uuid4()),
     }
 
     language = detect_language(extracted_text)
@@ -355,12 +362,11 @@ def _construct_text_metadata(
     validated_unified_metadata = validate_metadata(ext_unified_metadata)
 
     # Work around until https://github.com/apache/arrow/pull/40412 is resolved
-    return [ContentTypeEnum.TEXT.value, validated_unified_metadata.dict(), str(uuid.uuid4())]
+    return [ContentTypeEnum.TEXT.value, validated_unified_metadata.dict()]
 
 
-# need to add block text to hierarchy/nearby_objects, including bbox
 @pymupdf_exception_handler(descriptor="pymupdf")
-def _extract_image(block, page_idx, page_count, source_metadata, base_unified_metadata, page_nearby_blocks):
+def _extract_image(block, page_idx, page_count, source_metadata, base_unified_metadata):
     image_type = block["ext"]
     if ImageTypeEnum.has_value(image_type):
         image_type = ImageTypeEnum[image_type.upper()]
@@ -380,8 +386,8 @@ def _extract_image(block, page_idx, page_count, source_metadata, base_unified_me
             "block": page_block,
             "line": -1,
             "span": -1,
-            "nearby_objects": page_nearby_blocks,
         },
+        "uuid": str(uuid.uuid4()),
     }
 
     image_metadata = {
@@ -406,4 +412,4 @@ def _extract_image(block, page_idx, page_count, source_metadata, base_unified_me
     validated_unified_metadata = validate_metadata(unified_metadata)
 
     # Work around until https://github.com/apache/arrow/pull/40412 is resolved
-    return [ContentTypeEnum.IMAGE.value, validated_unified_metadata.dict(), str(uuid.uuid4())]
+    return [ContentTypeEnum.IMAGE.value, validated_unified_metadata.dict()]

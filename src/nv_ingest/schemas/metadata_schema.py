@@ -57,6 +57,7 @@ class TextTypeEnum(str, Enum):
     BLOCK = "block"
     PAGE = "page"
     DOCUMENT = "document"
+    NEARBY_BLOCK = "nearby_block"
     OTHER = "other"
 
 
@@ -172,6 +173,38 @@ class SourceMetadataSchema(BaseModelNoExt):
         return field_value
 
 
+class NearbyObjectsSubSchema(BaseModelNoExt):
+    """
+    Schema to hold related extracted object
+    """
+
+    content: List[str] = []
+    bbox: List[tuple] = []
+
+
+class NearbyObjectsSchema(BaseModelNoExt):
+    """
+    Schema to hold types of related extracted objects.
+    """
+
+    text: NearbyObjectsSubSchema = NearbyObjectsSubSchema()
+    images: NearbyObjectsSubSchema = NearbyObjectsSubSchema()
+    structured: NearbyObjectsSubSchema = NearbyObjectsSubSchema()
+
+
+class ContentHierarchySchema(BaseModelNoExt):
+    """
+    Schema for the extracted content hierarchy.
+    """
+
+    page_count: int
+    page: int = -1
+    block: int = -1
+    line: int = -1
+    span: int = -1
+    nearby_objects: NearbyObjectsSchema = NearbyObjectsSchema()
+
+
 class ContentMetadataSchema(BaseModelNoExt):
     """
     Data extracted from a source; generally Text or Image.
@@ -180,7 +213,7 @@ class ContentMetadataSchema(BaseModelNoExt):
     type: ContentTypeEnum
     description: str = ""
     page_number: int = -1
-    hierarchy: Union[str, Dict] = ""
+    hierarchy: ContentHierarchySchema
 
 
 class TextMetadataSchema(BaseModelNoExt):
@@ -188,6 +221,7 @@ class TextMetadataSchema(BaseModelNoExt):
     summary: str = ""
     keywords: Union[str, List[str], Dict] = ""
     language: LanguageEnum = "en"  # default to Unknown? Maybe do some kind of heuristic check
+    text_location: tuple = (0, 0, 0, 0)
 
 
 class ImageMetadataSchema(BaseModelNoExt):
@@ -195,7 +229,7 @@ class ImageMetadataSchema(BaseModelNoExt):
     structured_image_type: ImageTypeEnum = ImageTypeEnum.image_type_1
     caption: str = ""
     text: str = ""
-    image_location: tuple = (0, 0)
+    image_location: tuple = (0, 0, 0, 0)
 
 
 class ErrorMetadataSchema(BaseModelNoExt):
@@ -207,12 +241,13 @@ class ErrorMetadataSchema(BaseModelNoExt):
 
 # Main metadata schema
 class MetadataSchema(BaseModelNoExt):
-    content: str
-    source_metadata: SourceMetadataSchema
-    content_metadata: ContentMetadataSchema
+    content: str = ""
+    source_metadata: Optional[SourceMetadataSchema] = None
+    content_metadata: Optional[ContentMetadataSchema] = None
     text_metadata: Optional[TextMetadataSchema] = None
     image_metadata: Optional[ImageMetadataSchema] = None
     error_metadata: Optional[ErrorMetadataSchema] = None
+    raise_on_failure: bool = False
 
     @root_validator(pre=True)
     def check_metadata_type(cls, values):
@@ -222,13 +257,6 @@ class MetadataSchema(BaseModelNoExt):
         if content_type != ContentTypeEnum.IMAGE:
             values["image_metadata"] = None
         return values
-
-
-class ExtractedDocumentType(str, Enum):
-    text = "text"
-    markdown = "markdown"
-    unstructured_image = "unstructured_image"
-    structured_image = "structured_image"
 
 
 def validate_metadata(metadata: Dict[str, Any]) -> MetadataSchema:

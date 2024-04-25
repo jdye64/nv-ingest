@@ -26,9 +26,11 @@ class MemoryFiles:
         return i
 
 
-# TODO add docstrings...
 def pandas_to_cudf(
-    df: pd.DataFrame, deserialize_cols: list = [], default_cols: dict = {"document_type": str, "metadata": str}
+    df: pd.DataFrame,
+    deserialize_cols: list = [],
+    default_cols: dict = {"document_type": str, "metadata": str},
+    default_type: type = str,
 ) -> cudf.DataFrame:
     """
     Helper function to convert from pandas to cudf until https://github.com/apache/arrow/pull/40412 is resolved.
@@ -42,8 +44,6 @@ def pandas_to_cudf(
     cudf.DataFrame
         A cuDF dataframe.
     """
-
-    default_cols = {"document_type": str, "metadata": str}
 
     if not df.empty:
         files = MemoryFiles()
@@ -60,8 +60,9 @@ def pandas_to_cudf(
             return gdf
     else:
         gdf = cudf.DataFrame({col: [] for col in default_cols})
-        for col in default_cols:
-            gdf[col] = gdf[col].astype(default_cols[col])
+        for col in df.columns:
+            field_type = default_cols.get(col, default_type)
+            gdf[col] = gdf[col].astype(field_type)
 
         return gdf
 

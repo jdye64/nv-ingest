@@ -28,7 +28,7 @@ from morpheus.utils.module_utils import register_module
 from mrc.core.node import RoundRobinRouter
 
 from nv_ingest.extraction_workflows import pdf
-from nv_ingest.schemas.pdf_extractor_schema import PDFExtractorModuleSchema
+from nv_ingest.schemas.pdf_extractor_schema import PDFExtractorSchema
 from nv_ingest.util.converters import dftools
 from nv_ingest.util.exception_handlers.decorators import nv_ingest_node_failure_context_manager
 from nv_ingest.util.exception_handlers.pdf import create_exception_tag
@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 MODULE_NAME = "pdf_content_extractor"
 MODULE_NAMESPACE = "nv-ingest"
-PDFExtractorLoaderFactory = ModuleLoaderFactory(MODULE_NAME, MODULE_NAMESPACE, PDFExtractorModuleSchema)
+PDFExtractorLoaderFactory = ModuleLoaderFactory(MODULE_NAME, MODULE_NAMESPACE, PDFExtractorSchema)
 
 
 def _process_pdf_bytes(df, task_props):
@@ -133,7 +133,7 @@ def _worker_target(recv_queue, send_queue, **kwargs):
 
 @register_module(MODULE_NAME, MODULE_NAMESPACE)
 def _pdf_text_extractor(builder: mrc.Builder):
-    validated_config = fetch_and_validate_module_config(builder, PDFExtractorModuleSchema)
+    validated_config = fetch_and_validate_module_config(builder, PDFExtractorSchema)
 
     workers = {}
     mp_context = mp.get_context("fork")

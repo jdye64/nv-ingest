@@ -56,3 +56,7 @@ def test_create_exception_tag_without_source_id():
         ),
     ):
         create_exception_tag(error_message)
+
+
+if __name__ == "__main__":
+    test_create_exception_tag_without_source_id()
