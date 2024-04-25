@@ -27,6 +27,7 @@ from morpheus.stages.general.linear_modules_stage import LinearModulesStage
 from nv_ingest.modules.injectors.metadata_injector import MetadataInjectorLoaderFactory
 from nv_ingest.modules.sinks.redis_task_sink import RedisTaskSinkLoaderFactory
 from nv_ingest.modules.sources.redis_task_source import RedisTaskSourceLoaderFactory
+from nv_ingest.modules.transforms.associate_nearby_text import AssociateNearbyTextLoaderFactory
 from nv_ingest.modules.transforms.nemo_doc_splitter import NemoDocSplitterLoaderFactory
 from nv_ingest.stages.pdf_extractor_stage import generate_pdf_extractor_stage
 

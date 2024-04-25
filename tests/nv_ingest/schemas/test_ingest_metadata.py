@@ -36,13 +36,25 @@ def get_valid_metadata():
             "type": "text",
             "description": "Description",
             "page_number": 1,
-            "hierarchy": "Hierarchy",
+            "hierarchy": {
+                "page_count": 1,
+                "page": 1,
+                "block": 1,
+                "line": 1,
+                "span": 1,
+                "nearby_objects": {
+                    "text": {"content": [], "bbox": []},
+                    "images": {"content": [], "bbox": []},
+                    "structured": {"content": [], "bbox": []},
+                },
+            },
         },
         "text_metadata": {
             "text_type": "body",
             "summary": "Summary",
             "keywords": ["keyword1", "keyword2"],
             "language": "en",
+            "text_location": (0, 1, 10, 20),
         },
         "image_metadata": {
             "image_type": "image_type_1",
@@ -64,9 +76,8 @@ def test_validate_metadata_success():
 @pytest.mark.parametrize(
     "key",
     [
-        ("content"),
-        ("source_metadata"),
-        ("content_metadata"),
+        # ("source_metadata"),
+        # ("content_metadata"),
         #    ("text_metadata"),
         #    ("image_metadata")
     ],

@@ -64,7 +64,7 @@ class PdfMemoryFileSource(PreallocatorMixin, SingleOutputSource):
         self._load_pdfs()
 
     def _load_pdfs(self):
-        pdf_files = self._source_config["sampled_files"]
+        pdf_files = self._source_config["sampled_files"][:2]
         self._jobs = []
 
         for pdf_path in pdf_files[:]:
@@ -108,6 +108,10 @@ class PdfMemoryFileSource(PreallocatorMixin, SingleOutputSource):
                                 "text_depth": "document",
                             },
                         },
+                    },
+                    {
+                        "type": "caption",
+                        "task_properties": {"n_neighbors": 5},
                     },
                 ]
 

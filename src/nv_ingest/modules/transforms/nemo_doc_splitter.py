@@ -12,6 +12,7 @@ import copy
 import json
 import logging
 import traceback
+import uuid
 from typing import Any
 from typing import List
 from typing import Literal
@@ -29,7 +30,7 @@ from mrc.core import operators as ops
 
 import cudf
 
-from nv_ingest.schemas.metadata_schema import ExtractedDocumentType
+from nv_ingest.schemas.metadata_schema import ContentTypeEnum
 from nv_ingest.schemas.nemo_doc_splitter_schema import DocumentSplitterSchema
 from nv_ingest.util.converters import dftools
 from nv_ingest.util.flow_control import filter_by_task
@@ -60,7 +61,7 @@ def _build_split_documents(row, text_splits: List[str], sentence_window_size: in
 
         metadata["content"] = text
 
-        documents.append({"document_type": ExtractedDocumentType.text.value, "metadata": metadata})
+        documents.append({"document_type": ContentTypeEnum.TEXT.value, "metadata": metadata, "uuid": str(uuid.uuid4())})
 
     return documents
 
@@ -160,10 +161,13 @@ def _nemo_document_splitter(builder: mrc.Builder):
 
             # Filter to text only
             # Work around until https://github.com/apache/arrow/pull/40412 is resolved
-            bool_index = df["document_type"] == json.dumps(ExtractedDocumentType.text.value)
+            bool_index = df["document_type"] == json.dumps(ContentTypeEnum.TEXT.value)
             df_filtered = df.loc[bool_index]
 
             if df_filtered.empty:
+                message_meta = MessageMeta(df=cudf.from_pandas(df))
+                message.payload(message_meta)
+
                 return message
 
             # Override parameters if set

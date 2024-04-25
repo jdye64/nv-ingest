@@ -41,6 +41,7 @@ class TaskTypeEnum(str, Enum):
     split = "split"
     extract = "extract"
     embed = "embed"
+    caption = "caption"
 
 
 class TracingOptionsSchema(BaseModelNoExt):
@@ -82,12 +83,17 @@ class IngestTaskEmbedSchema(BaseModelNoExt):
     params: dict
 
 
+class IngestTaskCaptionSchema(BaseModelNoExt):
+    n_neighbors: int = 5
+
+
 class IngestTaskSchema(BaseModelNoExt):
     type: TaskTypeEnum
     task_properties: Union[
         IngestTaskEmbedSchema,
         IngestTaskExtractSchema,
         IngestTaskSplitSchema,
+        IngestTaskCaptionSchema,
     ]
     raise_on_failure: bool = False
 
@@ -98,7 +104,8 @@ class IngestTaskSchema(BaseModelNoExt):
             expected_type = {
                 TaskTypeEnum.split: IngestTaskSplitSchema,
                 TaskTypeEnum.extract: IngestTaskExtractSchema,
-                TaskTypeEnum.embed: IngestTaskEmbedSchema,  # Extend this mapping as necessary
+                TaskTypeEnum.embed: IngestTaskEmbedSchema,
+                TaskTypeEnum.caption: IngestTaskCaptionSchema,  # Extend this mapping as necessary
             }.get(task_type)
 
             # Validate that task_properties is of the expected type

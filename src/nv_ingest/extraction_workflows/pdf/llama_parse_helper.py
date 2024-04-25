@@ -32,7 +32,7 @@ from typing import List
 
 import aiohttp
 
-from nv_ingest.schemas.metadata_schema import ExtractedDocumentType
+from nv_ingest.schemas.metadata_schema import ContentTypeEnum
 
 DEFAULT_RESULT_TYPE = "text"
 DEFAULT_FILE_NAME = "_.pdf"
@@ -48,7 +48,7 @@ def llama_parse(
     extract_images: bool,
     extract_tables: bool,
     **kwargs,
-) -> List[Dict[ExtractedDocumentType, Dict[str, Any]]]:
+) -> List[Dict[ContentTypeEnum, Dict[str, Any]]]:
     """
     Helper function to use LlamaParse API to extract text from a bytestream
     PDF.
@@ -110,13 +110,13 @@ def llama_parse(
             {
                 "content": text,
                 "metadata": {
-                    "document_type": ExtractedDocumentType[result_type],
+                    "document_type": ContentTypeEnum[result_type],
                 },
             }
         )
 
         payload = [
-            ExtractedDocumentType[result_type],
+            ContentTypeEnum[result_type],
             text_metadata,
         ]
 

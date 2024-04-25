@@ -73,9 +73,9 @@ def _process_pdf_bytes(df, task_props):
         sr_extraction = sr_extraction.explode().dropna()
 
         if not sr_extraction.empty:
-            extracted_df = pd.DataFrame(sr_extraction.to_list(), columns=["document_type", "metadata"])
+            extracted_df = pd.DataFrame(sr_extraction.to_list(), columns=["document_type", "metadata", "uuid"])
         else:
-            extracted_df = pd.DataFrame({"document_type": [], "metadata": []})
+            extracted_df = pd.DataFrame({"document_type": [], "metadata": [], "uuid": []})
 
         return extracted_df
 
