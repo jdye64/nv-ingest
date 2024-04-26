@@ -10,8 +10,10 @@ import click
 from nv_ingest_client.cli.util.processing import check_schema
 from nv_ingest_client.primitives.tasks import ExtractTask
 from nv_ingest_client.primitives.tasks import SplitTask
+from nv_ingest_client.primitives.tasks import StoreTask
 from nv_ingest_client.primitives.tasks.extract import ExtractTaskSchema
 from nv_ingest_client.primitives.tasks.split import SplitTaskSchema
+from nv_ingest_client.primitives.tasks.store import StoreTaskSchema
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +94,10 @@ def click_validate_task(ctx, param, value):
                 task_options = check_schema(ExtractTaskSchema, options, task_id, json_options)
                 new_task_id = f"{task_id}_{task_options.document_type}"
                 new_task = ExtractTask(**task_options.dict())
+            elif task_id == "store":
+                task_options = check_schema(StoreTaskSchema, options, task_id, json_options)
+                new_task_id = f"{task_id}"
+                new_task = StoreTask(**task_options.dict())
             else:
                 raise ValueError(f"Unsupported task type: {task_id}")
 

@@ -17,8 +17,6 @@ from morpheus.messages import MessageMeta
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
 
-import cudf
-
 from nv_ingest.schemas import MetadataInjectorSchema
 from nv_ingest.schemas.ingest_job_schema import DocumentTypeEnum
 from nv_ingest.schemas.metadata_schema import ContentTypeEnum

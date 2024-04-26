@@ -39,6 +39,8 @@ def valid_task_properties(task_type):
         }
     elif task_type == TaskTypeEnum.extract:
         return {"document_type": "pdf", "method": "OCR", "params": {"language": "en"}}
+    elif task_type == TaskTypeEnum.store:
+        return {"content_type": "image", "method": "minio", "params": {"endpoint": "minio:9000"}}
     elif task_type == TaskTypeEnum.embed:
         return {
             "model": "e5-small-v2",
@@ -153,6 +155,16 @@ def test_multiple_task_types():
                     "document_type": "pdf",
                     "method": "OCR",
                     "params": {},
+                },
+            },
+            {
+                "type": "store",
+                "task_properties": {
+                    "content_type": "image",
+                    "method": "minio",
+                    "params": {
+                        "endpoint": "minio:9000",
+                    },
                 },
             },
             {"type": "embed", "task_properties": {"model": "bert", "params": {}}},

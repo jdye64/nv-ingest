@@ -175,7 +175,7 @@ def test_fetch_message_timeout(mock_redis_client, mock_redis):
 
     rval = mock_redis_client.fetch_message("response_channel", timeout=10)
 
-    assert rval == None
+    assert rval is None
 
 
 # Test case for handling errors during message submission

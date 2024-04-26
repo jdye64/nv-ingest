@@ -13,12 +13,6 @@ import logging
 
 from pydantic import BaseModel
 
-from nv_ingest.schemas.metadata_schema import ContentMetadataSchema
-from nv_ingest.schemas.metadata_schema import ErrorMetadataSchema
-from nv_ingest.schemas.metadata_schema import ImageMetadataSchema
-from nv_ingest.schemas.metadata_schema import SourceMetadataSchema
-from nv_ingest.schemas.metadata_schema import TextMetadataSchema
-
 logger = logging.getLogger(__name__)
 
 

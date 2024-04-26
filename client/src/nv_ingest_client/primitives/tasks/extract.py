@@ -49,7 +49,8 @@ class ExtractTaskSchema(BaseModel):
 
         if document_type not in _DEFAULT_EXTRACTOR_MAP:
             raise ValueError(
-                f"Unsupported document type: {document_type}. Supported types are: {list(_DEFAULT_EXTRACTOR_MAP.keys())}"
+                f"Unsupported document type: {document_type}."
+                f" Supported types are: {list(_DEFAULT_EXTRACTOR_MAP.keys())}"
             )
 
         if extract_method is None:

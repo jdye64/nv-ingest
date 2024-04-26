@@ -477,6 +477,7 @@ def process_source(
     extract_method,
     split,
     split_params,
+    store,
 ):
     """
     Processes a single source file according to the specified parameters, submitting the
@@ -500,6 +501,8 @@ def process_source(
         Specifies the methods to be used for content extraction.
     split : bool
         Indicates whether the content should be split according to specific properties.
+    store : bool
+        Indicates whether the extracted content should be saved in object storage.
 
     Raises
     ------
@@ -522,10 +525,11 @@ def process_source(
         extract_method,
         split,
         split_params,
+        store,
     )
 
 
-def _process_source(source, redis_client, task_queue, extract, extract_method, split, split_params):
+def _process_source(source, redis_client, task_queue, extract, extract_method, split, split_params, store):
     """
     Processes a single source file by applying specified tasks such as splitting and extracting
     content, and submits these tasks along with the job data to a specified Redis task queue.
@@ -544,6 +548,8 @@ def _process_source(source, redis_client, task_queue, extract, extract_method, s
         A list of methods to be used for content extraction, applicable if `extract` is True.
     split : bool
         Flag indicating whether the content should be split according to specified properties.
+    store : bool
+        Indicates whether the extracted content should be saved in object storage.
 
     Returns
     -------
@@ -565,6 +571,9 @@ def _process_source(source, redis_client, task_queue, extract, extract_method, s
         file_type = os.path.basename(source).split(".")[-1].lower()
         extract_tasks = build_extraction_tasks(extract_method, file_type)
         tasks.extend(extract_tasks)
+
+    if store:
+        tasks.append({"type": "store", "task_properties": {"method": "minio", "content_type": "image"}})
 
     data_size = os.path.getsize(source)
 
@@ -851,6 +860,7 @@ def determine_processing_function(
     extract,
     extract_method,
     split,
+    store,
     concurrency_options,
     split_params,
 ):
@@ -906,13 +916,14 @@ def determine_processing_function(
             extract_method,
             split,
             split_params,
+            store,
         )
     else:
         # Initialize the RedisClient only if not using Dask or when using thread-based
         # concurrency
         redis_client = RedisClient(host=redis_host, port=redis_port)
         processing_function = _process_source
-        args = (redis_client, task_queue, extract, extract_method, split, split_params)
+        args = (redis_client, task_queue, extract, extract_method, split, split_params, store)
 
     return processing_function, args
 
@@ -924,6 +935,7 @@ def main(
     extract,
     extract_method,
     split,
+    store,
     dry_run,
     concurrency_options,
     split_params,
@@ -947,6 +959,8 @@ def main(
         List of methods to use for extraction.
     split : bool
         Flag indicating whether to perform splitting tasks.
+    store: bool
+        Flag indicating whether to perform storing tasks.
     dry_run : bool
         # Not currently implemented
         Flag indicating whether to perform a dry-run, which prints the steps without executing
@@ -984,6 +998,7 @@ def main(
             extract,
             extract_method,
             split,
+            store,
             concurrency_options,
             split_params,
         )
@@ -1023,6 +1038,7 @@ def main(
 @click.option("--redis_port", default="6379", help="Port for Redis.", type=int)
 @click.option("--extract", is_flag=True, help="Enable PDF text extraction task.")
 @click.option("--split", is_flag=True, help="Enable text splitting task.")
+@click.option("--store", is_flag=True, help="Enable saving images to object storage.")
 @click.option(
     "--extract_method",
     default=["pymupdf"],
@@ -1118,6 +1134,7 @@ def cli(
     split_overlap,
     split_max_character_length,
     split_sentence_window_size,
+    store,
     n_workers,
     log_level,
     concurrency_mode,
@@ -1170,6 +1187,7 @@ def cli(
             extract,
             extract_method,
             split,
+            store,
             dry_run,
             concurrency_options,
             split_params,

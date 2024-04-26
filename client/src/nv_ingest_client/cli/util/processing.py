@@ -89,7 +89,8 @@ def report_stage_statistics(
 
     Notes
     -----
-    This function logs the average, median, and total time for each stage, along with the percentage of total computation.
+    This function logs the average, median, and total time for each stage, along with the percentage of total
+    computation.
     It also calculates and logs the unresolved time, if any, that is not accounted for by the recorded stages.
     """
 
@@ -215,6 +216,9 @@ def organize_documents_by_type(response_data):
     doc_map = {}
     for document in response_data:
         doc_meta = document["metadata"]
+        # TODO: fix this. doc_meta can be a json string or a dict.
+        if isinstance(doc_meta, str):
+            doc_meta = json.loads(doc_meta)
         doc_content_metadata = doc_meta["content_metadata"]
         doc_type = doc_content_metadata["type"]
         if doc_type not in doc_map:
@@ -272,6 +276,9 @@ def create_job_specs_for_batch(files_batch: List[str], tasks: Dict, client: NvIn
         if f"extract_{file_type}" in tasks:
             job_spec.add_task(tasks[f"extract_{file_type}"])
 
+        if "store" in tasks:
+            job_spec.add_task(tasks["store"])
+
         job_id = client.add_job(job_spec)
         job_ids.append(job_id)
 
@@ -312,7 +319,7 @@ def create_and_process_jobs(
 
             if (cur_job_count < batch_size) and (processed < len(files)):
                 new_job_count = batch_size - cur_job_count
-                batch_files = files[processed : processed + new_job_count]
+                batch_files = files[processed : processed + new_job_count]  # noqa: E203
 
                 new_job_ids = create_job_specs_for_batch(batch_files, tasks, client)
                 job_id_map.update({job_id: file for job_id, file in zip(new_job_ids, batch_files)})

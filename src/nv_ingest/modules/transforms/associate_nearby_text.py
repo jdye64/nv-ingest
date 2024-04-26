@@ -84,13 +84,13 @@ def _associate_nearby_text_blocks(df: pd.DataFrame, n_neighbors):
 
     for page in pages_with_images:
         page_df = filtered_df.loc[filtered_df["page"] == page]
-        page_nearest_text_block_df = page_df.loc[page_df["is_nearby_text"] == True]
+        page_nearest_text_block_df = page_df.loc[page_df["is_nearby_text"] is True]
         page_nearest_text_block_centers_df = page_nearest_text_block_df[["bbox_center_x", "bbox_center_y"]]
 
         if page_nearest_text_block_centers_df.empty:
             continue
 
-        page_image_df = page_df.loc[page_df["is_image"] == True]
+        page_image_df = page_df.loc[page_df["is_image"] is True]
         page_image_centers_df = page_image_df[["bbox_center_x", "bbox_center_y"]]
 
         knn_model = sklearn.neighbors.NearestNeighbors(n_neighbors=min(page_nearest_text_block_centers_df.shape[0], 5))

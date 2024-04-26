@@ -13,6 +13,7 @@ from nv_ingest_client.cli.util.click import debug_print_click_options
 from nv_ingest_client.cli.util.click import pre_process_dataset
 from nv_ingest_client.primitives.tasks import ExtractTask
 from nv_ingest_client.primitives.tasks import SplitTask
+from nv_ingest_client.primitives.tasks import StoreTask
 
 _MODULE_UNDER_TEST = "nv_ingest_client.cli.util.click"
 
@@ -22,7 +23,8 @@ def test_click_validate_file_exists_with_existing_file(tmp_path):
     temp_file = tmp_path / "testfile.txt"
     temp_file.write_text("Some content")
 
-    # Simulate Click's context and parameter (they can be None because the function doesn't use them directly in your case)
+    # Simulate Click's context and parameter.
+    # (they can be None because the function doesn't use them directly in your case)
     ctx = None
     param = None
     value = str(temp_file)
@@ -101,6 +103,15 @@ def test_validate_task_with_valid_extract():
 
     assert "extract_pdf" in result
     assert isinstance(result["extract_pdf"], ExtractTask)
+
+
+def test_validate_task_with_valid_store_task():
+    """Test with valid stor task options."""
+    value = ['store:{"content_type": "image", "store_method": "minio", "endpoint": "localhost:9000"}']
+    result = click_validate_task(None, None, value)
+
+    assert "store" in result
+    assert isinstance(result["store"], StoreTask)
 
 
 def test_validate_task_with_invalid_task_type():

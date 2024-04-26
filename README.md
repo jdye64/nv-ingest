@@ -367,6 +367,19 @@ nv-ingest-cli \
 
 ```
 
+Submit a PDF file with extraction tasks and upload extracted images to MinIO.
+
+```bash
+nv-ingest-cli \
+  --doc ./data/test.pdf \
+  --output_directory ./processed_docs \
+  --task='extract:{"document_type": "pdf", "extract_method": "pymupdf"}' \
+  --task='store:{"endpoint":"minio:9000","access_key":"minioadmin","secret_key":"minioadmin"}' \
+  --client_host=localhost \
+  --client_port=6379
+
+```
+
 ### Command line dataset creation with enumeration and sampling
 
 #### gen_dataset.py

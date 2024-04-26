@@ -42,6 +42,11 @@ class TaskTypeEnum(str, Enum):
     extract = "extract"
     embed = "embed"
     caption = "caption"
+    store = "store"
+
+
+class ContentTypeEnum(str, Enum):
+    image = "image"
 
 
 class TracingOptionsSchema(BaseModelNoExt):
@@ -78,6 +83,21 @@ class IngestTaskExtractSchema(BaseModelNoExt):
             raise ValueError(f"{v} is not a valid DocumentTypeEnum value")
 
 
+class IngestTaskStoreSchema(BaseModelNoExt):
+    content_type: ContentTypeEnum
+    method: str
+    params: dict
+
+    @validator("content_type", pre=True)
+    def case_insensitive_content_type(cls, v):
+        if isinstance(v, str):
+            v = v.lower()
+        try:
+            return ContentTypeEnum(v)
+        except ValueError:
+            raise ValueError(f"{v} is not a valid ContentTypeEnum value")
+
+
 class IngestTaskEmbedSchema(BaseModelNoExt):
     model: str
     params: dict
@@ -94,6 +114,7 @@ class IngestTaskSchema(BaseModelNoExt):
         IngestTaskExtractSchema,
         IngestTaskSplitSchema,
         IngestTaskCaptionSchema,
+        IngestTaskStoreSchema,
     ]
     raise_on_failure: bool = False
 
@@ -104,6 +125,7 @@ class IngestTaskSchema(BaseModelNoExt):
             expected_type = {
                 TaskTypeEnum.split: IngestTaskSplitSchema,
                 TaskTypeEnum.extract: IngestTaskExtractSchema,
+                TaskTypeEnum.store: IngestTaskStoreSchema,
                 TaskTypeEnum.embed: IngestTaskEmbedSchema,
                 TaskTypeEnum.caption: IngestTaskCaptionSchema,  # Extend this mapping as necessary
             }.get(task_type)
