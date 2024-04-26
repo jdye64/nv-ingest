@@ -230,6 +230,7 @@ class ImageMetadataSchema(BaseModelNoExt):
     caption: str = ""
     text: str = ""
     image_location: tuple = (0, 0, 0, 0)
+    uploaded_image_url: str = ""
 
 
 class ErrorMetadataSchema(BaseModelNoExt):

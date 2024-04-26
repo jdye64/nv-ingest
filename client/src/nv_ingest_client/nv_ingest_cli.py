@@ -96,6 +96,7 @@ Example:
   --task 'split:{"split_by":"page", "split_length":10}'
   --task 'extract:{"document_type":"pdf", "extract_text":true}'
   --task 'extract:{"document_type":"docx", "extract_text":true, "extract_images":true}'
+  --task 'store:{"content_type":"image", "store_method":"minio", "endpoint":"minio:9000"}'
 
 \b
 Tasks and Options:
@@ -115,6 +116,11 @@ Tasks and Options:
     - extract_text (bool): Enables text extraction. Default: False.
     - extract_images (bool): Enables image extraction. Default: False.
     - extract_tables (bool): Enables table extraction. Default: False.
+\b
+- store: Stores any images extracted from documents.
+    Options:
+    - content_type (str): Content type ('image', ). Required.
+    - store_method (str): Storage type ('minio', ). Required.
 
 \b
 Note: The 'extract_method' automatically selects the optimal method based on 'document_type' if not explicitly stated.

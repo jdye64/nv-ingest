@@ -17,14 +17,11 @@ import typing
 
 from morpheus.config import Config
 from morpheus.config import PipelineModes
-from morpheus.messages import ControlMessage
 from morpheus.pipeline.pipeline import Pipeline
 from morpheus.pipeline.stage_decorator import stage
-from morpheus.stages.general.linear_modules_stage import LinearModulesStage
 from morpheus.stages.general.monitor_stage import MonitorStage
 from morpheus.stages.general.trigger_stage import TriggerStage
 
-from nv_ingest.modules.transforms.associate_nearby_text import AssociateNearbyTextLoaderFactory
 from nv_ingest.stages.pdf_extractor_stage import generate_pdf_extractor_stage
 from nv_ingest.stages.pdf_memory_source_stage import PdfMemoryFileSource
 

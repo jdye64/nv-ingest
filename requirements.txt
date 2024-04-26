@@ -5,6 +5,7 @@ dataclasses
 farm-haystack[ocr,inference,pdf,preprocessing,file-conversion]
 fastparquet==2024.2.0
 fsspec
+minio~=7.2.5
 more_itertools
 onnx==1.15.0
 pandas~=1.5.3

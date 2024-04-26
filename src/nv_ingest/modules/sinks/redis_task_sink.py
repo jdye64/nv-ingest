@@ -22,7 +22,6 @@ from redis import RedisError
 
 from nv_ingest.schemas.redis_task_sink_schema import RedisTaskSinkSchema
 from nv_ingest.util.converters import dftools
-from nv_ingest.util.exception_handlers.decorators import nv_ingest_node_failure_context_manager
 from nv_ingest.util.modules.config_validator import fetch_and_validate_module_config
 from nv_ingest.util.redis import RedisClient
 from nv_ingest.util.tracing import traceable

@@ -27,9 +27,9 @@ from morpheus.stages.general.linear_modules_stage import LinearModulesStage
 from nv_ingest.modules.injectors.metadata_injector import MetadataInjectorLoaderFactory
 from nv_ingest.modules.sinks.redis_task_sink import RedisTaskSinkLoaderFactory
 from nv_ingest.modules.sources.redis_task_source import RedisTaskSourceLoaderFactory
-from nv_ingest.modules.transforms.associate_nearby_text import AssociateNearbyTextLoaderFactory
 from nv_ingest.modules.transforms.nemo_doc_splitter import NemoDocSplitterLoaderFactory
 from nv_ingest.stages.pdf_extractor_stage import generate_pdf_extractor_stage
+from nv_ingest.stages.storages.image_storage_stage import ImageStorageStage
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +140,9 @@ def setup_pdf_ingest_pipeline(pipe: Pipeline, config: Config):
         )
     )
 
+    # Add image-storage stage ("image_storage")
+    image_storage_stage = pipe.add_stage(ImageStorageStage(config))
+
     # Add task-sink stage ("redis_task_sink")
     sink_module_loader = RedisTaskSinkLoaderFactory.get_instance(
         module_name="redis_task_sink",
@@ -165,7 +168,8 @@ def setup_pdf_ingest_pipeline(pipe: Pipeline, config: Config):
     pipe.add_edge(source_stage, metadata_injector_stage)
     pipe.add_edge(metadata_injector_stage, extractor_stage)
     pipe.add_edge(extractor_stage, nemo_splitter_stage)
-    pipe.add_edge(nemo_splitter_stage, sink_stage)
+    pipe.add_edge(nemo_splitter_stage, image_storage_stage)
+    pipe.add_edge(image_storage_stage, sink_stage)
 
     return sink_stage
 
