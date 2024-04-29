@@ -8,7 +8,6 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 import base64
-import json
 import logging
 import traceback
 from io import BytesIO
@@ -69,7 +68,7 @@ def upload_images(df: pd.DataFrame, params: Dict[str, Any]) -> pd.DataFrame:
         logger.debug("Bucket %s already exists", bucket_name)
 
     for idx, row in df.iterrows():
-        if row["document_type"] != json.dumps(content_type):
+        if row["document_type"] != content_type:
             continue
 
         metadata = row["metadata"]
@@ -80,13 +79,13 @@ def upload_images(df: pd.DataFrame, params: Dict[str, Any]) -> pd.DataFrame:
         image_type = metadata["image_metadata"]["image_type"]
 
         destination_file = f"{source_id}/{idx}.{image_type}"
+
         source_file = BytesIO(content)
         client.put_object(
             bucket_name,
             destination_file,
             source_file,
             length=len(content),
-            metadata={k: v for k, v in metadata.items() if k != "content"},
         )
 
         metadata["image_metadata"]["uploaded_image_url"] = f"http://{endpoint}/{bucket_name}/{destination_file}"

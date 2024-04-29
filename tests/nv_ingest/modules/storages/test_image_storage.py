@@ -1,7 +1,7 @@
-import json
-
 import pytest
 from minio import Minio
+from morpheus.messages import ControlMessage
+from morpheus.messages import MessageMeta
 
 from nv_ingest.modules.storages.image_storage import upload_images
 from nv_ingest.schemas.metadata_schema import ContentTypeEnum
@@ -11,6 +11,8 @@ from ....import_checks import MORPHEUS_IMPORT_OK
 
 if CUDA_DRIVER_OK and MORPHEUS_IMPORT_OK:
     import pandas as pd
+
+    from nv_ingest.util.converters import dftools
 
 
 class MockMinioClient:
@@ -49,28 +51,34 @@ def test_upload_images(mock_minio):
     df = pd.DataFrame(
         {
             "document_type": [
-                json.dumps(ContentTypeEnum.TEXT.value),
-                json.dumps(ContentTypeEnum.IMAGE.value),
+                ContentTypeEnum.TEXT.value,
+                ContentTypeEnum.IMAGE.value,
             ],
             "metadata": [
-                json.dumps({"content": "some text"}),
-                json.dumps(
-                    {
-                        "content": "image_content",
-                        "image_metadata": {
-                            "image_type": "png",
-                        },
-                        "source_metadata": {
-                            "source_id": "foo",
-                        },
-                    }
-                ),
+                {"content": "some text"},
+                {
+                    "content": "image_content",
+                    "image_metadata": {
+                        "image_type": "png",
+                    },
+                    "source_metadata": {
+                        "source_id": "foo",
+                    },
+                },
             ],
         }
     )
     params = {
         "content_type": "image",
     }
+
+    gdf = dftools.pandas_to_cudf(df)
+    msg = ControlMessage()
+    meta = MessageMeta(df=gdf)
+    msg.payload(meta)
+
+    with msg.payload().mutable_dataframe() as mdf:
+        df = dftools.cudf_to_pandas(mdf, deserialize_cols=["document_type", "metadata"])
 
     result = upload_images(df, params)
     uploaded_image_url = result.iloc[1]["metadata"]["image_metadata"]["uploaded_image_url"]
