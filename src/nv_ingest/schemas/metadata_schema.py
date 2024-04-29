@@ -197,7 +197,7 @@ class ContentHierarchySchema(BaseModelNoExt):
     Schema for the extracted content hierarchy.
     """
 
-    page_count: int
+    page_count: int = -1
     page: int = -1
     block: int = -1
     line: int = -1
@@ -213,7 +213,7 @@ class ContentMetadataSchema(BaseModelNoExt):
     type: ContentTypeEnum
     description: str = ""
     page_number: int = -1
-    hierarchy: ContentHierarchySchema
+    hierarchy: ContentHierarchySchema = ContentHierarchySchema()
 
 
 class TextMetadataSchema(BaseModelNoExt):

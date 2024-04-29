@@ -36,7 +36,8 @@ MetadataInjectorLoaderFactory = ModuleLoaderFactory(MODULE_NAME, MODULE_NAMESPAC
 
 def on_data(message: ControlMessage):
     with message.payload().mutable_dataframe() as mdf:
-        df = mdf.to_pandas()
+        # Work around until https://github.com/apache/arrow/pull/40412 is resolved
+        df = dftools.cudf_to_pandas(mdf)
 
     update_required = False
     rows = []

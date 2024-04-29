@@ -9,7 +9,6 @@
 # its affiliates is strictly prohibited.
 
 import copy
-import json
 import logging
 import traceback
 import uuid
@@ -27,8 +26,6 @@ from morpheus.utils.control_message_utils import cm_skip_processing_if_failed
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
 from mrc.core import operators as ops
-
-import cudf
 
 from nv_ingest.schemas.metadata_schema import ContentTypeEnum
 from nv_ingest.schemas.nemo_doc_splitter_schema import DocumentSplitterSchema
@@ -157,15 +154,15 @@ def _nemo_document_splitter(builder: mrc.Builder):
 
             # Validate that all 'content' values are not None
             with message.payload().mutable_dataframe() as mdf:
-                df = dftools.cudf_to_pandas(mdf)
+                df = dftools.cudf_to_pandas(mdf, deserialize_cols=["document_type", "metadata"])
 
             # Filter to text only
             # Work around until https://github.com/apache/arrow/pull/40412 is resolved
-            bool_index = df["document_type"] == json.dumps(ContentTypeEnum.TEXT.value)
+            bool_index = df["document_type"] == ContentTypeEnum.TEXT.value
             df_filtered = df.loc[bool_index]
 
             if df_filtered.empty:
-                message_meta = MessageMeta(df=cudf.from_pandas(df))
+                message_meta = MessageMeta(df=dftools.pandas_to_cudf(df))
                 message.payload(message_meta)
 
                 return message
@@ -186,7 +183,7 @@ def _nemo_document_splitter(builder: mrc.Builder):
             split_docs = []
             for _, row in df_filtered.iterrows():
                 # Work around until https://github.com/apache/arrow/pull/40412 is resolved
-                content = json.loads(row["metadata"])["content"]
+                content = row["metadata"]["content"]
 
                 if content is None:
                     raise ValueError(
