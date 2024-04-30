@@ -163,7 +163,7 @@ def _pdf_text_extractor(builder: mrc.Builder):
     def recv_deque(worker_id):
         yield recv_queues[worker_id].get()
 
-    @filter_by_task(["extract"])
+    @filter_by_task([("extract", {"document_type": "pdf"})])
     @traceable(MODULE_NAME)
     @nv_ingest_node_failure_context_manager(
         annotation_id=MODULE_NAME,
@@ -174,7 +174,7 @@ def _pdf_text_extractor(builder: mrc.Builder):
             # Work around until https://github.com/apache/arrow/pull/40412 is resolved
             x_c = dftools.cudf_to_pandas(mdf)
 
-        task_props = ctrl_msg.remove_task("extract")
+        task_props = ctrl_msg.get_tasks().get("extract").pop()
 
         # Put/get from spawned extraction process
         send_queues[port_id].put((x_c, task_props))
