@@ -82,6 +82,8 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_MORPHEUS_TASK_QUEUE=morpheus_task_queue
+      - ECLAIR_TRITON_HOST=triton-eclair
+      - ECLAIR_TRITON_PORT=8001
     deploy:
       resources:
         reservations:
@@ -107,6 +109,8 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_MORPHEUS_TASK_QUEUE=morpheus_task_queue
+      - ECLAIR_TRITON_HOST=triton-eclair
+      - ECLAIR_TRITON_PORT=8001
     deploy:
       resources:
         reservations:

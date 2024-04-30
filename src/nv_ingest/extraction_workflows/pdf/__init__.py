@@ -8,6 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
+from nv_ingest.extraction_workflows.pdf.eclair_helper import eclair
 from nv_ingest.extraction_workflows.pdf.haystack_helper import haystack
 from nv_ingest.extraction_workflows.pdf.llama_parse_helper import llama_parse
 from nv_ingest.extraction_workflows.pdf.pymupdf_helper import pymupdf
@@ -20,4 +21,5 @@ __all__ = [
     "pymupdf",
     "tika",
     "unstructured_io",
+    "eclair",
 ]

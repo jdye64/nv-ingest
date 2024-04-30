@@ -37,6 +37,7 @@ from nv_ingest.util.redis import RedisClient
 
 logger = logging.getLogger(__name__)
 
+ECLAIR_TRITON_URL = os.environ.get("ECLAIR_TRITON_URL", "triton-eclair:8001")
 UNSTRUCTURED_API_KEY = os.environ.get("UNSTRUCTURED_API_KEY", None)
 UNSTRUCTURED_URL = os.environ.get("UNSTRUCTURED_URL", "http://localhost:8003")
 LLAMA_CLOUD_API_KEY = os.environ.get("LLAMA_CLOUD_API_KEY", None)
@@ -125,7 +126,7 @@ def build_extraction_tasks(methods, file_type):
     ----------
     methods : list of str
         The extraction methods to be applied. Possible values include 'pymupdf',
-        'haystack', 'unstructured_local', 'unstructured_service', and 'llama_parse'.
+        'eclair', 'haystack', 'unstructured_local', 'unstructured_service', and 'llama_parse'.
     file_type : str
         The type of the file to be processed (e.g., 'pdf', 'txt').
 
@@ -156,6 +157,11 @@ def build_extraction_tasks(methods, file_type):
         "text_depth": "document",
     }
 
+    # Define default properties for Eclair tasks
+    eclair_properties = {
+        "eclair_triton_url": ECLAIR_TRITON_URL,
+    }
+
     # Define default properties for unstructured tasks
     unstructured_properties = {
         "api_key": UNSTRUCTURED_API_KEY,
@@ -179,7 +185,9 @@ def build_extraction_tasks(methods, file_type):
             },
         }
 
-        if method in ["unstructured-local", "unstructured-service"]:
+        if method in ["eclair"]:
+            task["task_properties"]["params"].update(eclair_properties)
+        elif method in ["unstructured-local", "unstructured-service"]:
             task["task_properties"]["params"].update(unstructured_properties)
         elif method in ["llama_parse"]:
             task["task_properties"]["params"].update(llama_parse_properties)
@@ -1045,6 +1053,7 @@ def main(
     type=click.Choice(
         [
             "pymupdf",
+            "eclair",
             "haystack",
             "tika",
             "unstructured_io",

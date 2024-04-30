@@ -340,7 +340,7 @@ nv-ingest-cli \
 
 Submit a PDF file with splitting and extraction tasks.
 
-**Note: (TODO)** This currently only works for pymupdf; haystack, Adobe, LlamaParse, and Unstructured.io have existing
+**Note: (TODO)** This currently only works for pymupdf and eclair; haystack, Adobe, LlamaParse, and Unstructured.io have existing
 workflows but have not been fully converted to use our unified metadata schema.
 
 ```bash
@@ -575,4 +575,25 @@ curl "http://localhost:1984/v1/collections/${MM_COLLECTION_ID}/search?pretty=tru
     }
   ]
 }
+```
+
+### (Optional) Setting up Triton Inference Server with Eclair model
+
+Using `--extract_method eclair` requires that there is a Triton server running.
+To set up Triton, first build the base image:
+
+```
+docker compose -f third_party/eclair_triton/docker-compose.yaml build triton-trt-llm
+```
+
+Next, run the following to build a TensorRT model:
+
+```
+docker compose -f third_party/eclair_triton/docker-compose.yaml up build-eclair
+```
+
+Then, run the server:
+
+```
+docker compose -f docker-compose.yaml -f third_party/eclair_triton/docker-compose.yaml up triton-eclair
 ```
