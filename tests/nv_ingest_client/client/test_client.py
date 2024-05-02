@@ -547,7 +547,7 @@ def test_fetch_job_result_after_successful_submission(nv_ingest_client_with_jobs
     for job_id in job_ids:
         response_channel = f"response_{job_id}"
         # Double-encode the dictionary
-        double_encoded_json = json.dumps(json.dumps({"result": "success"}))
+        double_encoded_json = json.dumps({"result": "success"})
         nv_ingest_client_with_jobs._message_client.get_client().messages[
             response_channel
         ] = f'{{"data": {double_encoded_json}}}'
@@ -571,7 +571,7 @@ def test_fetch_job_result_async_after_successful_submission(nv_ingest_client_wit
     for job_id in job_ids:
         response_channel = f"response_{job_id}"
         # Double-encode the dictionary
-        double_encoded_json = json.dumps(json.dumps({"result": "success"}))
+        double_encoded_json = json.dumps({"result": "success"})
         nv_ingest_client_with_jobs._message_client.get_client().messages[
             response_channel
         ] = f'{{"data": {double_encoded_json}}}'
@@ -600,7 +600,7 @@ def test_fetch_job_results_async_after_successful_submission(
     for job_id in job_ids:
         response_channel = f"response_{job_id}"
         # Double-encode the dictionary
-        double_encoded_json = json.dumps(json.dumps({"result": "success"}))
+        double_encoded_json = json.dumps({"result": "success"})
         nv_ingest_client_with_jobs._message_client.get_client().messages[
             response_channel
         ] = f'{{"data": {double_encoded_json}}}'
