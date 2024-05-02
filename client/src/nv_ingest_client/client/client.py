@@ -293,7 +293,7 @@ class NvIngestClient:
                     job_state.state = JobStateEnum.PROCESSING
                     response_json = json.loads(response)
                     if data_only:
-                        response_json = json.loads(response_json["data"])
+                        response_json = response_json["data"]
 
                     return response_json, job_id
                 except json.JSONDecodeError as err:
