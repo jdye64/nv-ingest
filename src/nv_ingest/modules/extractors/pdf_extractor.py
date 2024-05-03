@@ -27,9 +27,10 @@ from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
 from mrc.core.node import RoundRobinRouter
 
+import cudf
+
 from nv_ingest.extraction_workflows import pdf
 from nv_ingest.schemas.pdf_extractor_schema import PDFExtractorSchema
-from nv_ingest.util.converters import dftools
 from nv_ingest.util.exception_handlers.decorators import nv_ingest_node_failure_context_manager
 from nv_ingest.util.exception_handlers.pdf import create_exception_tag
 from nv_ingest.util.flow_control import filter_by_task
@@ -171,8 +172,7 @@ def _pdf_text_extractor(builder: mrc.Builder):
     )
     def _worker_fn(ctrl_msg: ControlMessage, port_id: int):
         with ctrl_msg.payload().mutable_dataframe() as mdf:
-            # Work around until https://github.com/apache/arrow/pull/40412 is resolved
-            x_c = dftools.cudf_to_pandas(mdf)
+            x_c = mdf.to_pandas()
 
         task_props = ctrl_msg.get_tasks().get("extract").pop()
 
@@ -181,8 +181,7 @@ def _pdf_text_extractor(builder: mrc.Builder):
         result_df = next(recv_deque(port_id))
 
         # Update control message with new payload
-        # Work around until https://github.com/apache/arrow/pull/40412 is resolved
-        result_gdf = dftools.pandas_to_cudf(result_df)
+        result_gdf = cudf.from_pandas(result_df)
         msg_meta = MessageMeta(df=result_gdf)
 
         ctrl_msg.payload(msg_meta)

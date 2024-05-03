@@ -20,8 +20,9 @@ from morpheus.utils.module_utils import register_module
 from mrc.core import operators as ops
 from redis import RedisError
 
+import cudf
+
 from nv_ingest.schemas.redis_task_sink_schema import RedisTaskSinkSchema
-from nv_ingest.util.converters import dftools
 from nv_ingest.util.modules.config_validator import fetch_and_validate_module_config
 from nv_ingest.util.redis import RedisClient
 from nv_ingest.util.tracing import traceable
@@ -67,9 +68,8 @@ def process_and_forward(message: ControlMessage, redis_client: RedisClient):
 
     with message.payload().mutable_dataframe() as mdf:
         logger.info(f"Received DataFrame with {len(mdf)} rows.")
-        # Work around until https://github.com/apache/arrow/pull/40412 is resolved
         keep_cols = ["document_type", "metadata"]
-        df_json = dftools.cudf_to_json(mdf[keep_cols], deserialize_cols=keep_cols)
+        df_json = mdf[keep_cols].to_dict(orient="records")
 
     ret_val_json = {
         "data": df_json,

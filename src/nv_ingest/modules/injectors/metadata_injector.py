@@ -17,10 +17,11 @@ from morpheus.messages import MessageMeta
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
 
+import cudf
+
 from nv_ingest.schemas import MetadataInjectorSchema
 from nv_ingest.schemas.ingest_job_schema import DocumentTypeEnum
 from nv_ingest.schemas.metadata_schema import ContentTypeEnum
-from nv_ingest.util.converters import dftools
 from nv_ingest.util.converters.type_mappings import doc_type_to_content_type
 from nv_ingest.util.exception_handlers.decorators import nv_ingest_node_failure_context_manager
 from nv_ingest.util.modules.config_validator import fetch_and_validate_module_config
@@ -36,8 +37,7 @@ MetadataInjectorLoaderFactory = ModuleLoaderFactory(MODULE_NAME, MODULE_NAMESPAC
 
 def on_data(message: ControlMessage):
     with message.payload().mutable_dataframe() as mdf:
-        # Work around until https://github.com/apache/arrow/pull/40412 is resolved
-        df = dftools.cudf_to_pandas(mdf)
+        df = mdf.to_pandas()
 
     update_required = False
     rows = []
@@ -66,8 +66,7 @@ def on_data(message: ControlMessage):
 
     if update_required:
         docs = pd.DataFrame(rows)
-        # Work around until https://github.com/apache/arrow/pull/40412 is resolved
-        gdf = dftools.pandas_to_cudf(docs)
+        gdf = cudf.from_pandas(docs)
         message_meta = MessageMeta(df=gdf)
         message.payload(message_meta)
 

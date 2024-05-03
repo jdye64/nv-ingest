@@ -23,9 +23,10 @@ from morpheus.messages import MessageMeta
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
 
+import cudf
+
 from nv_ingest.schemas.image_storage_schema import ImageStorageModuleSchema
 from nv_ingest.schemas.metadata_schema import ContentTypeEnum
-from nv_ingest.util.converters import dftools
 from nv_ingest.util.exception_handlers.decorators import nv_ingest_node_failure_context_manager
 from nv_ingest.util.flow_control import filter_by_task
 from nv_ingest.util.modules.config_validator import fetch_and_validate_module_config
@@ -47,7 +48,7 @@ def upload_images(df: pd.DataFrame, params: Dict[str, Any]) -> pd.DataFrame:
     Identify contents (e.g., images) within a dataframe and uploads the data to MinIO.
     The image metadata in the metadata column is updated with the URL of the uploaded data.
     """
-    content_type = params.get("content_type", ContentTypeEnum.IMAGE.value)
+    content_type = params.get("content_type", ContentTypeEnum.IMAGE)
     endpoint = params.get("endpoint", _DEFAULT_ENDPOINT)
     bucket_name = params.get("bucket_name", _DEFAULT_BUCKET_NAME)
 
@@ -110,10 +111,12 @@ def _storage_images(builder: mrc.Builder):
         try:
             task_props = ctrl_msg.get_tasks().get("store").pop()
             params = task_props.get("params", {})
-            content_type = params.get("content_type", ContentTypeEnum.IMAGE.value)
+            # TODO(Matt) validate this resolves to the right filter criteria....
+            content_type = params.get("content_type", ContentTypeEnum.IMAGE)
 
             with ctrl_msg.payload().mutable_dataframe() as mdf:
-                df = dftools.cudf_to_pandas(mdf, deserialize_cols=["document_type", "metadata"])
+                # df = dftools.cudf_to_pandas(mdf, deserialize_cols=["document_type", "metadata"])
+                df = mdf.to_pandas()
 
             image_mask = df["document_type"] == content_type
             if (~image_mask).all():  # if there are no images, return immediately.
@@ -122,8 +125,7 @@ def _storage_images(builder: mrc.Builder):
             df = upload_images(df, params)
 
             # Update control message with new payload
-            # Work around until https://github.com/apache/arrow/pull/40412 is resolved
-            gdf = dftools.pandas_to_cudf(df)
+            gdf = cudf.from_pandas(df)
             msg_meta = MessageMeta(df=gdf)
             ctrl_msg.payload(msg_meta)
         except Exception as e:

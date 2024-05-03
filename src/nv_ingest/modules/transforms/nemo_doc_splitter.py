@@ -27,9 +27,10 @@ from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
 from mrc.core import operators as ops
 
+import cudf
+
 from nv_ingest.schemas.metadata_schema import ContentTypeEnum
 from nv_ingest.schemas.nemo_doc_splitter_schema import DocumentSplitterSchema
-from nv_ingest.util.converters import dftools
 from nv_ingest.util.flow_control import filter_by_task
 from nv_ingest.util.modules.config_validator import fetch_and_validate_module_config
 from nv_ingest.util.tracing import traceable
@@ -154,15 +155,15 @@ def _nemo_document_splitter(builder: mrc.Builder):
 
             # Validate that all 'content' values are not None
             with message.payload().mutable_dataframe() as mdf:
-                df = dftools.cudf_to_pandas(mdf, deserialize_cols=["document_type", "metadata"])
+                df = mdf.to_pandas()
 
             # Filter to text only
-            # Work around until https://github.com/apache/arrow/pull/40412 is resolved
-            bool_index = df["document_type"] == ContentTypeEnum.TEXT.value
+            bool_index = df["document_type"] == ContentTypeEnum.TEXT
             df_filtered = df.loc[bool_index]
 
             if df_filtered.empty:
-                message_meta = MessageMeta(df=dftools.pandas_to_cudf(df))
+                gdf = cudf.from_pandas(df)
+                message_meta = MessageMeta(df=gdf)
                 message.payload(message_meta)
 
                 return message
@@ -204,8 +205,7 @@ def _nemo_document_splitter(builder: mrc.Builder):
             # Return both processed text and other document types
             split_docs_df = pd.concat([split_docs_df, df[~bool_index]], axis=0).reset_index(drop=True)
             # Update control message with new payload
-            # Work around until https://github.com/apache/arrow/pull/40412 is resolved
-            split_docs_gdf = dftools.pandas_to_cudf(split_docs_df)
+            split_docs_gdf = cudf.from_pandas(split_docs_df)
 
             message_meta = MessageMeta(df=split_docs_gdf)
             message.payload(message_meta)
