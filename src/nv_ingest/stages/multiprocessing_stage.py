@@ -222,7 +222,7 @@ class MultiProcessingBaseStage(SinglePortStage):
             with ctrl_msg.payload().mutable_dataframe() as mdf:
                 df = dftools.cudf_to_pandas(mdf)
 
-            task_props = ctrl_msg.remove_task("extract")
+            task_props = ctrl_msg.get_tasks().get("extract").pop()
             cm_id = uuid.uuid4()
             self._ctrl_msg_ledger[cm_id] = ctrl_msg
             work_package = {}

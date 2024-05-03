@@ -12,8 +12,10 @@
 # pylint: disable=too-many-arguments
 
 import logging
+import os
 from typing import Dict
 from typing import Literal
+from typing import get_args
 
 from pydantic import BaseModel
 from pydantic import root_validator
@@ -22,6 +24,9 @@ from pydantic import validator
 from .task_base import Task
 
 logger = logging.getLogger(__name__)
+
+ECLAIR_TRITON_HOST = os.environ.get("ECLAIR_TRITON_HOST", "localhost")
+ECLAIR_TRITON_PORT = os.environ.get("ECLAIR_TRITON_PORT", "8001")
 
 _DEFAULT_EXTRACTOR_MAP = {
     "pdf": "pymupdf",
@@ -34,6 +39,23 @@ _DEFAULT_EXTRACTOR_MAP = {
     "parquet": "pandas",
 }
 
+_Type_Extract_Method_PDF = Literal[
+    "pymupdf",
+    "eclair",
+    "haystack",
+    "tika",
+    "unstructured_local",
+    "unstructured_service",
+    "llama_parse",
+]
+
+_Type_Extract_Method_DOCX = Literal["python-docx", "haystack", "unstructured_local", "unstructured_service"]
+
+_Type_Extract_Method_Map = {
+    "pdf": get_args(_Type_Extract_Method_PDF),
+    "docx": get_args(_Type_Extract_Method_DOCX),
+}
+
 
 class ExtractTaskSchema(BaseModel):
     document_type: str
@@ -41,6 +63,7 @@ class ExtractTaskSchema(BaseModel):
     extract_text: bool = (True,)
     extract_images: bool = (True,)
     extract_tables: bool = False
+    text_depth: str = "document"
 
     @root_validator(pre=True)
     def set_default_extract_method(cls, values):
@@ -59,7 +82,8 @@ class ExtractTaskSchema(BaseModel):
 
     @validator("extract_method")
     def extract_method_must_be_valid(cls, v, values, **kwargs):
-        valid_methods = set(_DEFAULT_EXTRACTOR_MAP.values())
+        document_type = values.get("document_type", "").lower()  # Ensure case-insensitive comparison
+        valid_methods = set(_Type_Extract_Method_Map[document_type])
         if v not in valid_methods:
             raise ValueError(f"extract_method must be one of {valid_methods}")
         return v
@@ -81,17 +105,6 @@ class ExtractTask(Task):
     Object for document extraction task
     """
 
-    _Type_Extract_Method_PDF = Literal[
-        "pymupdf",
-        "haystack",
-        "tika",
-        "unstructured_local",
-        "unstructured_service",
-        "llama_parse",
-    ]
-
-    _Type_Extract_Method_DOCX = Literal["python-docx", "haystack", "unstructured_local", "unstructured_service"]
-
     def __init__(
         self,
         document_type,
@@ -111,7 +124,7 @@ class ExtractTask(Task):
         self._extract_method = extract_method
         self._extract_tables = extract_tables
         self._extract_text = extract_text
-        self._text_depth = "document"
+        self._text_depth = text_depth
 
     def __str__(self) -> str:
         """
@@ -153,5 +166,11 @@ class ExtractTask(Task):
                 "unstructured_url": "",  # TODO(Devin): Should be an environment variable
             }
             task_properties["params"].update(unstructured_properties)
+        elif self._extract_method == "eclair":
+            eclair_properties = {
+                "eclair_triton_host": os.environ.get("ECLAIR_TRITON_HOST", ECLAIR_TRITON_HOST),
+                "eclair_triton_port": os.environ.get("ECLAIR_TRITON_PORT", ECLAIR_TRITON_PORT),
+            }
+            task_properties["params"].update(eclair_properties)
 
         return {"type": "extract", "task_properties": task_properties}

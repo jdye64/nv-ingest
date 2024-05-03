@@ -39,7 +39,7 @@ from nv_ingest.util.tracing import traceable
 logger = logging.getLogger(__name__)
 
 MODULE_NAME = "pdf_content_extractor"
-MODULE_NAMESPACE = "nv-ingest"
+MODULE_NAMESPACE = "nv_ingest"
 PDFExtractorLoaderFactory = ModuleLoaderFactory(MODULE_NAME, MODULE_NAMESPACE, PDFExtractorSchema)
 
 
