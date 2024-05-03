@@ -85,15 +85,9 @@ variables:
 lint:
   extends: .python-basics
   stage: lint
-  variables:
-    PRE_COMMIT_HOME: ${CI_PROJECT_DIR}/.cache/pre-commit
-  cache:
-    key: pre-commit-$CI_COMMIT_REF_SLUG
-    paths:
-      - ${PRE_COMMIT_HOME}
   script:
     - pip install -r test-requirements.txt
-    - pre-commit run --all-files
+    - IGNORE_GIT_DIFF=1 ./ci/scripts/fix_all.sh
 
 test:
   extends: .python-basics
