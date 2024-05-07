@@ -183,7 +183,6 @@ def _nemo_document_splitter(builder: mrc.Builder):
 
             split_docs = []
             for _, row in df_filtered.iterrows():
-                # Work around until https://github.com/apache/arrow/pull/40412 is resolved
                 content = row["metadata"]["content"]
 
                 if content is None:

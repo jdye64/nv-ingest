@@ -23,10 +23,11 @@ from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
 from mrc.core import operators as ops
 
+import cudf
+
 from nv_ingest.schemas.associate_nearby_text_schema import AssociateNearbyTextSchema
 from nv_ingest.schemas.metadata_schema import TextTypeEnum
 from nv_ingest.schemas.metadata_schema import validate_metadata
-from nv_ingest.util.converters import dftools
 from nv_ingest.util.flow_control import filter_by_task
 from nv_ingest.util.modules.config_validator import fetch_and_validate_module_config
 from nv_ingest.util.tracing import traceable
@@ -143,7 +144,7 @@ def _associate_nearby_text(builder: mrc.Builder):
 
             # Validate that all 'content' values are not None
             with message.payload().mutable_dataframe() as mdf:
-                df = dftools.cudf_to_pandas(mdf)
+                df = mdf.to_pandas()
 
             n_neighbors = task_props.get("n_neighbors", validated_config.n_neighbors)
 
@@ -151,8 +152,7 @@ def _associate_nearby_text(builder: mrc.Builder):
 
             result_df = _associate_nearby_text_blocks(df, n_neighbors)
 
-            # Work around until https://github.com/apache/arrow/pull/40412 is resolved
-            result_gdf = dftools.pandas_to_cudf(result_df)
+            result_gdf = cudf.from_pandas(result_df)
 
             message_meta = MessageMeta(df=result_gdf)
             message.payload(message_meta)

@@ -22,7 +22,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import json
 import logging
 import uuid
 from datetime import datetime
@@ -89,8 +88,7 @@ def eclair(pdf_stream, extract_text: bool, extract_images: bool, extract_tables:
     text_depth = TextTypeEnum[text_depth.upper()]
     # get base metadata
     metadata_col = kwargs.get("metadata_column", "metadata")
-    # Work around until https://github.com/apache/arrow/pull/40412 is resolved
-    base_unified_metadata = json.loads(row_data[metadata_col]) if metadata_col in row_data.index else {}
+    base_unified_metadata = row_data[metadata_col] if metadata_col in row_data.index else {}
 
     # get base source_metadata
     base_source_metadata = base_unified_metadata.get("source_metadata", {})
@@ -277,5 +275,4 @@ def _construct_text_metadata(
 
     validated_unified_metadata = validate_metadata(ext_unified_metadata)
 
-    # Work around until https://github.com/apache/arrow/pull/40412 is resolved
-    return [ContentTypeEnum.TEXT.value, validated_unified_metadata.dict(), str(uuid.uuid4())]
+    return [ContentTypeEnum.TEXT, validated_unified_metadata.dict(), str(uuid.uuid4())]
