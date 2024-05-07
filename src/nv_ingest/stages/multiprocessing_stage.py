@@ -221,7 +221,6 @@ class MultiProcessingBaseStage(SinglePortStage):
                     ctrl_msg.set_metadata(f"trace::exit::{self._task_desc}_channel_in", ts_fetched)
 
             with ctrl_msg.payload().mutable_dataframe() as mdf:
-                # df = dftools.cudf_to_pandas(mdf)
                 df = mdf.to_pandas()
 
             task_props = ctrl_msg.get_tasks().get("extract").pop()
@@ -256,7 +255,6 @@ class MultiProcessingBaseStage(SinglePortStage):
                 raise_on_failure=False,
             )
             def cm_func(ctrl_msg: ControlMessage, work_package: dict):
-                # gdf = dftools.pandas_to_cudf(work_package["payload"])
                 gdf = cudf.from_pandas(work_package["payload"])
                 ctrl_msg.payload(MessageMeta(df=gdf))
 

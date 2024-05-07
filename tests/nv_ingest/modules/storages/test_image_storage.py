@@ -12,7 +12,7 @@ from ....import_checks import MORPHEUS_IMPORT_OK
 if CUDA_DRIVER_OK and MORPHEUS_IMPORT_OK:
     import pandas as pd
 
-    from nv_ingest.util.converters import dftools
+    import cudf
 
 
 class MockMinioClient:
@@ -72,13 +72,13 @@ def test_upload_images(mock_minio):
         "content_type": "image",
     }
 
-    gdf = dftools.pandas_to_cudf(df)
+    gdf = cudf.from_pandas(df)
     msg = ControlMessage()
     meta = MessageMeta(df=gdf)
     msg.payload(meta)
 
     with msg.payload().mutable_dataframe() as mdf:
-        df = dftools.cudf_to_pandas(mdf, deserialize_cols=["document_type", "metadata"])
+        df = mdf.to_pandas()
 
     result = upload_images(df, params)
     uploaded_image_url = result.iloc[1]["metadata"]["image_metadata"]["uploaded_image_url"]

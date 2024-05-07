@@ -26,7 +26,6 @@ if MORPHEUS_IMPORT_OK and CUDA_DRIVER_OK:
     import cudf
 
     from nv_ingest.modules.injectors.metadata_injector import on_data
-    from nv_ingest.util.converters import dftools
 
 
 @pytest.fixture
@@ -61,8 +60,7 @@ def test_on_data_injects_correct_metadata_and_validates_schema(document_df, doc_
 
     updated_message = on_data(message)
     with updated_message.payload().mutable_dataframe() as mdf:
-        # Work around until https://github.com/apache/arrow/pull/40412 is resolved
-        updated_df = dftools.cudf_to_pandas(mdf, deserialize_cols=["metadata"])
+        updated_df = mdf.to_pandas()
 
     for _, row in updated_df.iterrows():
         metadata = row["metadata"]
@@ -93,8 +91,7 @@ def test_on_data_non_image_types_have_no_image_metadata(document_df, doc_type):
 
     updated_message = on_data(message)
     with updated_message.payload().mutable_dataframe() as mdf:
-        # Work around until https://github.com/apache/arrow/pull/40412 is resolved
-        updated_df = dftools.cudf_to_pandas(mdf, deserialize_cols=["metadata"])
+        updated_df = mdf.to_pandas()
 
     for _, row in updated_df.iterrows():
         assert (
@@ -117,8 +114,7 @@ def test_metadata_schema_validation(document_df):
 
     updated_message = on_data(message)
     with updated_message.payload().mutable_dataframe() as mdf:
-        # Work around until https://github.com/apache/arrow/pull/40412 is resolved
-        updated_df = dftools.cudf_to_pandas(mdf, deserialize_cols=["metadata"])
+        updated_df = mdf.to_pandas()
 
     for _, row in updated_df.iterrows():
         metadata = row["metadata"]
@@ -168,5 +164,4 @@ def test_unsupported_document_type(document_df):
     with pytest.raises(ValueError):
         updated_message = on_data(message)
         with updated_message.payload().mutable_dataframe() as mdf:
-            # Work around until https://github.com/apache/arrow/pull/40412 is resolved
-            _ = dftools.cudf_to_pandas(mdf, deserialize_cols=["metadata"])
+            _ = mdf.to_pandas()

@@ -115,7 +115,6 @@ def _storage_images(builder: mrc.Builder):
             content_type = params.get("content_type", ContentTypeEnum.IMAGE)
 
             with ctrl_msg.payload().mutable_dataframe() as mdf:
-                # df = dftools.cudf_to_pandas(mdf, deserialize_cols=["document_type", "metadata"])
                 df = mdf.to_pandas()
 
             image_mask = df["document_type"] == content_type
