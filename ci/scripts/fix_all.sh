@@ -44,10 +44,20 @@ if [[ -z "${SKIP_COPYRIGHT}" ]]; then
    fi
 fi
 
+# If there are no python files that were modified, exit immediately.
+if [[ ${#PY_MODIFIED_FILES[@]} -eq 0 ]]; then
+    echo "No python files were modified. Skipping linting."
+    exit 0
+fi
+
 # Run isort
 if [[ -z "${SKIP_ISORT}" ]]; then
    echo "Running isort..."
-   ISORT_OUTPUT=$(python3 -m isort --settings-file "${PY_CFG}" ${PY_MODIFIED_FILES[@]} 2>&1)
+   ISORT_ARGS="--settings-file ${PY_CFG}"
+   if [[ "${DISABLE_FIX_IN_PLACE}" == "1" ]]; then
+       ISORT_ARGS+=" --check-only --diff"
+   fi
+   ISORT_OUTPUT=$(python3 -m isort ${ISORT_ARGS} ${PY_MODIFIED_FILES[@]} 2>&1)
    if [[ $? -ne 0 ]]; then
        add_error "Isort failed: ${ISORT_OUTPUT}"
    else
@@ -58,7 +68,11 @@ fi
 # Run black
 if [[ -z "${SKIP_BLACK}" ]]; then
    echo "Running black..."
-   BLACK_OUTPUT=$(python3 -m black ${PY_MODIFIED_FILES[@]} 2>&1)
+   BLACK_ARGS=""
+   if [[ "${DISABLE_FIX_IN_PLACE}" == "1" ]]; then
+       BLACK_ARGS+=" --check"
+   fi
+   BLACK_OUTPUT=$(python3 -m black ${BLACK_ARGS} ${PY_MODIFIED_FILES[@]} 2>&1)
    if [[ $? -ne 0 ]]; then
        add_error "Black formatting failed: ${BLACK_OUTPUT}"
    else
@@ -76,7 +90,11 @@ fi
 
 if [[ -z "${SKIP_AUTOFLAKE}" ]]; then
     echo "Running autoflake..."
-    AUTOFLAKE_OUTPUT=$(python3 -m autoflake ${PY_MODIFIED_FILES[@]} --in-place --remove-all-unused-imports --remove-unused-variables --expand-star-imports --recursive 2>&1)
+    AUTOFLAKE_ARGS="--remove-all-unused-imports --remove-unused-variables --expand-star-imports --recursive"
+    if [[ "${DISABLE_FIX_IN_PLACE}" != "1" ]]; then
+        AUTOFLAKE_ARGS+=" --in-place"
+    fi
+    AUTOFLAKE_OUTPUT=$(python3 -m autoflake ${PY_MODIFIED_FILES[@]} ${AUTOFLAKE_ARGS} 2>&1)
     AUTOFLAKE_EXIT_CODE=$?
 
     if [[ $AUTOFLAKE_EXIT_CODE -ne 0 ]]; then
