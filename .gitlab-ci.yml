@@ -52,8 +52,8 @@ variables:
   GIT_SUBMODULE_STRATEGY: recursive
   GIT_SUBMODULE_FORCE_HTTPS: "true"
   GIT_SUBMODULE_DEPTH: 1
-  MORPHEUS_BASE_IMG: gitlab-master.nvidia.com:5005/dl/ai-services/microservices/nv-ingest/morpheus
-  MORPHEUS_TAG: 24.03-runtime
+  MORPHEUS_BASE_IMG: nvcr.io/nvidia/morpheus/morpheus
+  MORPHEUS_TAG: v24.03.02-runtime
   POETRY_VERSION: 1.7.1
   POETRY_CACHE_DIR: "$CI_PROJECT_DIR/.cache/poetry"
   SERVICE_NAME: nv-ingest

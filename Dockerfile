@@ -9,8 +9,8 @@
 # its affiliates is strictly prohibited.
 # syntax=docker/dockerfile:1.3
 
-ARG BASE_IMG=morpheus-ms-base
-ARG TAG=24.03
+ARG BASE_IMG=nvcr.io/nvidia/morpheus/morpheus
+ARG TAG=v24.03.02-runtime
 
 # Use NVIDIA Morpheus as the base image
 FROM $BASE_IMG:$TAG as base
