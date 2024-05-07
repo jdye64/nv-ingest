@@ -87,7 +87,7 @@ lint:
   stage: lint
   script:
     - pip install -r test-requirements.txt
-    - IGNORE_GIT_DIFF=1 ./ci/scripts/fix_all.sh
+    - DISABLE_FIX_IN_PLACE=1 ./ci/scripts/fix_all.sh
 
 test:
   extends: .python-basics
