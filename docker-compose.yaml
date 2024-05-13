@@ -51,9 +51,9 @@ services:
       - "9998:9998"
 
   triton:
-    image: "nvcr.io/nvidia/tritonserver:23.12-py3"
+    image: "nvcr.io/nvidia/tritonserver:24.04-py3"
     command: >
-      bash -c "tritonserver --model-repository=/models/triton-model-repo --exit-on-error=false --model-control-mode=explicit --load-model ${MODEL_NAME}"
+      bash -c "tritonserver --model-repository=/models --exit-on-error=false --model-control-mode=explicit --load-model ${MODEL_NAME}"
     ports:
       - "8000:8000"
       - "8001:8001"

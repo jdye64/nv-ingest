@@ -21,7 +21,6 @@ import pandas as pd
 from more_itertools import windowed
 from morpheus.messages import ControlMessage
 from morpheus.messages import MessageMeta
-from morpheus.utils.control_message_utils import cm_default_failure_context_manager
 from morpheus.utils.control_message_utils import cm_skip_processing_if_failed
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
@@ -31,6 +30,7 @@ import cudf
 
 from nv_ingest.schemas.metadata_schema import ContentTypeEnum
 from nv_ingest.schemas.nemo_doc_splitter_schema import DocumentSplitterSchema
+from nv_ingest.util.exception_handlers.decorators import nv_ingest_node_failure_context_manager
 from nv_ingest.util.flow_control import filter_by_task
 from nv_ingest.util.modules.config_validator import fetch_and_validate_module_config
 from nv_ingest.util.tracing import traceable
@@ -147,7 +147,10 @@ def _nemo_document_splitter(builder: mrc.Builder):
     @filter_by_task(["split"])
     @traceable(MODULE_NAME)
     @cm_skip_processing_if_failed
-    @cm_default_failure_context_manager(raise_on_failure=validated_config.raise_on_failure)
+    @nv_ingest_node_failure_context_manager(
+        annotation_id=MODULE_NAME,
+        raise_on_failure=validated_config.raise_on_failure,
+    )
     def split_and_forward(message: ControlMessage):
         try:
             # Assume that df is going to have a 'content' column

@@ -43,7 +43,6 @@ RUN source activate morpheus \
 FROM base as runtime
 
 COPY src/pipeline.py ./
-COPY src/util/upload_to_ingest_ms.py ./
 COPY pyproject.toml ./
 
 CMD ["python", "/workspace/pipeline.py"]

@@ -11,16 +11,13 @@
 
 import logging
 
-from pydantic import BaseModel
-
 logger = logging.getLogger(__name__)
 
 
-class PDFExtractorSchema(BaseModel):
-    identify_nearby_objects: bool = True
-    max_queue_size: int = 1
-    n_workers: int = 16
-    raise_on_failure: bool = False
-
-    class Config:
-        extra = "forbid"
+def merge_dict(defaults, overrides):
+    for key, value in overrides.items():
+        if isinstance(value, dict) and value:
+            defaults[key] = merge_dict(defaults.get(key, {}), value)
+        else:
+            defaults[key] = overrides[key]
+    return defaults

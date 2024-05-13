@@ -1,3 +1,13 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
 import json
 import logging
 import os
@@ -15,6 +25,7 @@ from click import style
 from nv_ingest_client.client import NvIngestClient
 from nv_ingest_client.primitives import JobSpec
 from nv_ingest_client.util.file_processing.extract import extract_file_content
+from nv_ingest_client.util.util import check_ingest_result
 from nv_ingest_client.util.util import estimate_page_count
 from pydantic import BaseModel
 from pydantic import ValidationError
@@ -230,6 +241,7 @@ def organize_documents_by_type(response_data):
 def save_response_data(response, output_directory):
     if ("data" not in response) or (not response["data"]):
         return
+
     response_data = response["data"]
 
     if not isinstance(response_data, list) or len(response_data) == 0:
@@ -267,7 +279,9 @@ def create_job_specs_for_batch(files_batch: List[str], tasks: Dict, client: NvIn
             extended_options={"tracing_options": {"trace": True, "ts_send": time.time_ns()}},
         )
 
-        logger.debug(f"Task Keys: {tasks.keys()}")
+        logger.debug(f"Tasks: {tasks.keys()}")
+        for task in tasks:
+            logger.debug(f"Task: {task}")
 
         # TODO(Devin): Formalize this later, don't have time right now.
         if "split" in tasks:
@@ -279,6 +293,9 @@ def create_job_specs_for_batch(files_batch: List[str], tasks: Dict, client: NvIn
         if "store" in tasks:
             job_spec.add_task(tasks["store"])
 
+        if "caption" in tasks:
+            job_spec.add_task(tasks["caption"])
+
         job_id = client.add_job(job_spec)
         job_ids.append(job_id)
 
@@ -287,7 +304,7 @@ def create_job_specs_for_batch(files_batch: List[str], tasks: Dict, client: NvIn
 
 # TODO(Devin): Circle back on this, we can refactor to be better at keeping as many jobs in-flight as possible.
 def create_and_process_jobs(
-    files: List[str], client: NvIngestClient, tasks: Dict, output_directory: str, batch_size: int, timeout: int = 2
+    files: List[str], client: NvIngestClient, tasks: Dict, output_directory: str, batch_size: int, timeout: int = 10
 ):
     """
     Processes a list of files, creating and submitting jobs for each file, then fetching results.
@@ -335,6 +352,16 @@ def create_and_process_jobs(
                 job_id = futures_dict[future]
                 try:
                     result, _ = future.result()[0]
+                    if ("annotations" in result) and result["annotations"]:
+                        annotations = result["annotations"]
+                        for key, value in annotations.items():
+                            logger.debug(f"Annotation: {key} -> {json.dumps(value, indent=2)}")
+
+                    valid_result, description = check_ingest_result(result)
+
+                    if valid_result:
+                        raise RuntimeError(f"Failed to process job {job_id}: {description}")
+
                     source_name = job_id_map[job_id]
 
                     if output_directory:
@@ -350,21 +377,27 @@ def create_and_process_jobs(
                     source_name = job_id_map[job_id]
                     retry_counts[source_name] += 1
 
-                    if retry_counts[source_name] > 10:
-                        logger.error(f"Timeout error for job {job_id} after {retry_counts[source_name]} retries.")
-                        failed_jobs.append(f"{job_id}::{source_name}")
-                    else:
-                        retry_job_ids.append(job_id)  # Add job_id back to retry list
-                        total_timeouts += 1
-                        retry = True
+                    # TODO(Devin): not sure if we actually want a retry limit; if we don't get an actual failure
+                    #  condition just assume we should continue waiting.
+                    # if retry_counts[source_name] > 10:
+                    #    logger.error(f"Timeout error for job {job_id} after {retry_counts[source_name]} retries.")
+                    #    failed_jobs.append(f"{job_id}::{source_name}")
+                    # else:
+                    retry_job_ids.append(job_id)  # Add job_id back to retry list
+                    total_timeouts += 1
+                    retry = True
                 except json.JSONDecodeError as e:
-                    logger.error(f"Decoding error for job {job_id}: {e}")
                     source_name = job_id_map[job_id]
+                    logger.error(f"Decoding error for job {job_id}::{source_name} {e}")
                     failed_jobs.append(f"{job_id}::{source_name}")
-                    raise
+                except RuntimeError as e:
+                    source_name = job_id_map[job_id]
+                    logger.error(f"Processing error was reported for {job_id}::{source_name} {e}")
+                    failed_jobs.append(f"{job_id}::{source_name}")
                 except Exception as e:
-                    logger.error(f"Other error for job {job_id}: {e}")
-                    raise
+                    source_name = job_id_map[job_id]
+                    logger.error(f"Unhandled error occurred processing {job_id}:{source_name} {e}")
+                    failed_jobs.append(f"{job_id}::{source_name}")
                 finally:
                     if not retry:
                         pbar.update(1)

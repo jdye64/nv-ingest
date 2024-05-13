@@ -38,7 +38,6 @@ its affiliates is strictly prohibited.
   - A Redis service container, which serves as the message broker for the nv-ingest-ms-runtime container
 - We interact with the ingest service by publishing jobs to the Redis service, and subscribing to an ephemeral
   response channel.
--
 
 ### Submitting documents to an existing ingest-service
 
@@ -212,16 +211,19 @@ docker compose build morpheus-ms-base
 
 ### Create Triton model
 
-By default, the model is `intfloat/e5-small-v2`. You can override the model by editing `MODEL_NAME` in `.env`.
+By default NV-Ingest does not require Triton, but if you are testing ingestion embedding creation (currently disabled),
+image caption extraction, or other tasks that require Triton, you will need to create a Triton container and or model's
+for the tasks you are testing.
 
-```bash
-docker compose run morpheus-ms-base
-```
+### (Optional) Setting up Triton Inference Server with DeBerta caption extraction model.
 
-```
-Created Triton Model at /models/triton-model-repo/intfloat/e5-small-v2
-Total time: 8.81 sec
-```
+Using `'--task="caption:{}"` requires that there is a Triton server running with the [DeBerta Caption Extraction
+Model](./triton_models/README.md#deberta-caption-selection-model) loaded.
+
+### (Optional) Setting up Triton Inference Server with Eclair model
+
+Using `--task="extract:{'document_type': 'pdf', extract_method'='eclair}"` requires that there is a Triton server
+running with the [ECLAIR Document OCR Model](./triton_models/README.md#eclair-document-ocr-model) loaded.
 
 ### Start supporting services
 
@@ -314,19 +316,6 @@ nv-ingest-cli \
   --client_port=6379
 ```
 
-Submit a text file with a splitting task.
-
-```bash
-python ./src/util/upload_to_ingest_ms.py \
-  --file_source ./path_to_document.txt \
-  --output_directory ./processed_docs \
-  --extract \
-  --extract_method=pymupdf \
-  --split \
-  --redis_host=localhost \
-  --redis_port=6379
-```
-
 Submit a PDF file with only a splitting task.
 
 ```bash
@@ -340,7 +329,8 @@ nv-ingest-cli \
 
 Submit a PDF file with splitting and extraction tasks.
 
-**Note: (TODO)** This currently only works for pymupdf and eclair; haystack, Adobe, LlamaParse, and Unstructured.io have existing
+**Note: (TODO)** This currently only works for pymupdf and eclair; haystack, Adobe, LlamaParse, and Unstructured.io have
+existing
 workflows but have not been fully converted to use our unified metadata schema.
 
 ```bash
@@ -575,25 +565,4 @@ curl "http://localhost:1984/v1/collections/${MM_COLLECTION_ID}/search?pretty=tru
     }
   ]
 }
-```
-
-### (Optional) Setting up Triton Inference Server with Eclair model
-
-Using `--extract_method eclair` requires that there is a Triton server running.
-To set up Triton, first build the base image:
-
-```
-docker compose -f third_party/eclair_triton/docker-compose.yaml build triton-trt-llm
-```
-
-Next, run the following to build a TensorRT model:
-
-```
-docker compose -f third_party/eclair_triton/docker-compose.yaml up build-eclair
-```
-
-Then, run the server:
-
-```
-docker compose -f docker-compose.yaml -f third_party/eclair_triton/docker-compose.yaml up triton-eclair
 ```

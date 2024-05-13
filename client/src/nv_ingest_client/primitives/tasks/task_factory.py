@@ -4,8 +4,10 @@ from typing import Dict
 from typing import Type
 from typing import Union
 
+from .caption import CaptionTask
 from .extract import ExtractTask
 from .split import SplitTask
+from .store import StoreTask
 from .task_base import Task
 from .task_base import TaskType
 from .task_base import is_valid_task_type
@@ -23,10 +25,12 @@ class TaskUnimplemented(Task):
 
 # Mapping of TaskType to Task classes, arranged alphabetically by task type
 _TASK_MAP: Dict[TaskType, Callable] = {
+    TaskType.CAPTION: CaptionTask,
     TaskType.EMBED: TaskUnimplemented,
     TaskType.EXTRACT: ExtractTask,
     TaskType.FILTER: TaskUnimplemented,
     TaskType.SPLIT: SplitTask,
+    TaskType.STORE: StoreTask,
     TaskType.TRANSFORM: TaskUnimplemented,
 }
 

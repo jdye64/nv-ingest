@@ -70,6 +70,13 @@ logger = logging.getLogger(__name__)
 @click.option(
     "--concurrency_n", default=10, show_default=True, type=int, help="Number of inflight jobs to maintain at one time."
 )
+@click.option(
+    "--document_processing_timeout",
+    default=10,
+    show_default=True,
+    type=int,
+    help="Timeout when waiting for a document to be processed.",
+)
 @click.option("--dry_run", is_flag=True, help="Perform a dry run without executing actions.")
 @click.option("--output_directory", type=click.Path(), default=None, help="Output directory for results.")
 @click.option(
@@ -98,6 +105,7 @@ Example:
   --task 'extract:{"document_type":"pdf", "extract_method":"eclair"}'
   --task 'extract:{"document_type":"docx", "extract_text":true, "extract_images":true}'
   --task 'store:{"content_type":"image", "store_method":"minio", "endpoint":"minio:9000"}'
+  --task 'caption:{}'
 
 \b
 Tasks and Options:
@@ -122,7 +130,11 @@ Tasks and Options:
     Options:
     - content_type (str): Content type ('image', ). Required.
     - store_method (str): Storage type ('minio', ). Required.
-
+\b
+- caption: Attempts to extract captions for images extracted from documents. Note: this is not generative, but rather a
+    simple extraction.
+    Options:
+      N/A
 \b
 Note: The 'extract_method' automatically selects the optimal method based on 'document_type' if not explicitly stated.
 """,
@@ -131,16 +143,17 @@ Note: The 'extract_method' automatically selects the optimal method based on 'do
 def main(
     ctx,
     batch_size: int,
-    doc: List[str],
-    dataset: str,
-    client: str,
     client_host: str,
-    client_port: int,
     client_kwargs: str,
+    client_port: int,
+    client: str,
     concurrency_n: int,
+    dataset: str,
+    doc: List[str],
+    document_processing_timeout: int,
     dry_run: bool,
-    output_directory: str,
     log_level: str,
+    output_directory: str,
     shuffle_dataset: bool,
     task: [str],
 ):
@@ -185,7 +198,12 @@ def main(
 
             start_time_ns = time.time_ns()
             (total_files, trace_times, pages_processed, total_timeouts) = create_and_process_jobs(
-                docs, ingest_client, task, output_directory, batch_size
+                files=docs,
+                client=ingest_client,
+                tasks=task,
+                output_directory=output_directory,
+                batch_size=batch_size,
+                timeout=document_processing_timeout,
             )
 
             report_statistics(start_time_ns, trace_times, pages_processed, total_files, total_timeouts)

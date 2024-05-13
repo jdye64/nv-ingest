@@ -9,9 +9,9 @@
 # its affiliates is strictly prohibited.
 
 
+import json
 import logging
 import os
-import sys
 import time
 import typing
 
@@ -23,90 +23,56 @@ from morpheus.messages import ControlMessage
 from morpheus.pipeline.pipeline import Pipeline
 from morpheus.stages.general.linear_modules_source import LinearModuleSourceStage
 from morpheus.stages.general.linear_modules_stage import LinearModulesStage
+from pydantic import ValidationError
 
 from nv_ingest.modules.injectors.metadata_injector import MetadataInjectorLoaderFactory
 from nv_ingest.modules.sinks.redis_task_sink import RedisTaskSinkLoaderFactory
 from nv_ingest.modules.sources.redis_task_source import RedisTaskSourceLoaderFactory
+from nv_ingest.modules.transforms.image_caption_extraction import ImageCaptionExtractionLoaderFactory
 from nv_ingest.modules.transforms.nemo_doc_splitter import NemoDocSplitterLoaderFactory
+from nv_ingest.schemas.ingest_pipeline_config_schema import IngestPipelineConfigSchema
 from nv_ingest.stages.pdf_extractor_stage import generate_pdf_extractor_stage
 from nv_ingest.stages.storages.image_storage_stage import ImageStorageStage
+from nv_ingest.util.converters.containers import merge_dict
+from nv_ingest.util.logging.configuration import LogLevel
+from nv_ingest.util.logging.configuration import configure_logging
+from nv_ingest.util.schema.schema_validator import validate_schema
 
 logger = logging.getLogger(__name__)
 
 
-def configure_logging(level_name):
-    """
-    Configures the global logging level based on a string name.
-
-    Parameters:
-    - level_name (str): The name of the logging level (e.g., "DEBUG", "INFO").
-    """
-    global logger
-
-    numeric_level = getattr(logging, level_name, None)
-    if not isinstance(numeric_level, int):
-        raise ValueError(f"Invalid log level: {level_name}")
-
-    logging.StreamHandler(sys.stdout)
-    logging.basicConfig(level=numeric_level, format="%(asctime)s - %(levelname)s - %(message)s")
-    logger.setLevel(numeric_level)
+def validate_positive(ctx, param, value):
+    if value <= 0:
+        raise click.BadParameter("must be a positive integer")
+    return value
 
 
-def validate_source_config(source_info: typing.Dict[str, any]) -> None:
-    """
-    Validates the configuration of a source.
-
-    This function checks whether the given source configuration dictionary
-    contains all required keys: 'type', 'name', and 'config'.
-
-    Parameters
-    ----------
-    source_info : typing.Dict[str, any]
-        The source configuration dictionary to validate.
-
-    Raises
-    ------
-    ValueError
-        If any of the required keys ('type', 'name', 'config') are missing
-        in the source configuration.
-    """
-    if "type" not in source_info or "name" not in source_info or "config" not in source_info:
-        raise ValueError(f"Each source must have 'type', 'name', and 'config':\n {source_info}")
-
-
-def setup_pdf_ingest_pipeline(pipe: Pipeline, config: Config):
+def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, ingest_config):
     # Set proper redis hostname and port
-    redis_host = os.environ.get("REDIS_HOST", "localhost")
-    redis_port = os.environ.get("REDIS_PORT", "6379")
-    logger.info(f"REDIS_HOST: {redis_host}")
-    logger.info(f"REDIS_PORT: {redis_port}")
+    message_provider_host = os.environ.get("MESSAGE_CLIENT_HOST", "localhost")
+    message_provider_port = os.environ.get("MESSAGE_CLIENT_PORT", "6379")
+    logger.info(f"MESSAGE_CLIENT_HOST: {message_provider_host}")
+    logger.info(f"MESSAGE_CLIENT_PORT: {message_provider_port}")
 
     # Add task-source stage ("redis_listener")
     source_module_loader = RedisTaskSourceLoaderFactory.get_instance(
-        module_name="redis_listener",
-        module_config={
-            "redis_client": {
-                "host": redis_host,
-                "port": redis_port,
-            }
-        },
+        module_name="redis_listener", module_config=ingest_config.get("redis_task_source", {})
     )
     source_stage = pipe.add_stage(
         LinearModuleSourceStage(
-            config,
+            morpheus_pipeline_config,
             source_module_loader,
             output_type=ControlMessage,
             output_port_name="output",
         )
     )
 
-    # Add metadata-injection stage ("pdf_extractor")
     metadata_injector_loader = MetadataInjectorLoaderFactory.get_instance(
         module_name="metadata_injection", module_config={}
     )
     metadata_injector_stage = pipe.add_stage(
         LinearModulesStage(
-            config,
+            morpheus_pipeline_config,
             metadata_injector_loader,
             input_type=ControlMessage,
             output_type=ControlMessage,
@@ -115,23 +81,24 @@ def setup_pdf_ingest_pipeline(pipe: Pipeline, config: Config):
         )
     )
 
+    pdf_extractor_config = ingest_config.get("pdf_extractor_module", {})
     extractor_stage = pipe.add_stage(
-        generate_pdf_extractor_stage(config, pe_count=24, task="extract", task_desc="pdf_content_extractor")
+        generate_pdf_extractor_stage(
+            morpheus_pipeline_config,
+            pe_count=pdf_extractor_config.get("n_workers", 24),
+            task="extract",
+            task_desc="pdf_content_extractor",
+        )
     )
 
     # Add doc-splitter stage ("nemo_doc_splitter")
     nemo_splitter_loader = NemoDocSplitterLoaderFactory.get_instance(
         module_name="nemo_doc_splitter",
-        module_config={
-            "split_by": "word",
-            "split_length": 60,
-            "split_overlap": 10,
-            "max_character_length": 450,
-        },
+        module_config=ingest_config.get("text_splitting_module", {}),
     )
     nemo_splitter_stage = pipe.add_stage(
         LinearModulesStage(
-            config,
+            morpheus_pipeline_config,
             nemo_splitter_loader,
             input_type=ControlMessage,
             output_type=ControlMessage,
@@ -140,22 +107,31 @@ def setup_pdf_ingest_pipeline(pipe: Pipeline, config: Config):
         )
     )
 
+    image_caption_loader = ImageCaptionExtractionLoaderFactory.get_instance(
+        module_name="image_caption_extractor", module_config=ingest_config.get("image_caption_extraction_module", {})
+    )
+    image_caption_stage = pipe.add_stage(
+        LinearModulesStage(
+            morpheus_pipeline_config,
+            image_caption_loader,
+            input_type=ControlMessage,
+            output_type=ControlMessage,
+            input_port_name="input",
+            output_port_name="output",
+        )
+    )
+
     # Add image-storage stage ("image_storage")
-    image_storage_stage = pipe.add_stage(ImageStorageStage(config))
+    image_storage_stage = pipe.add_stage(ImageStorageStage(morpheus_pipeline_config))
 
     # Add task-sink stage ("redis_task_sink")
     sink_module_loader = RedisTaskSinkLoaderFactory.get_instance(
         module_name="redis_task_sink",
-        module_config={
-            "redis_client": {
-                "host": redis_host,
-                "port": redis_port,
-            }
-        },
+        module_config=ingest_config.get("redis_task_sink", {}),
     )
     sink_stage = pipe.add_stage(
         LinearModulesStage(
-            config,
+            morpheus_pipeline_config,
             sink_module_loader,
             input_type=typing.Any,
             output_type=ControlMessage,
@@ -168,19 +144,20 @@ def setup_pdf_ingest_pipeline(pipe: Pipeline, config: Config):
     pipe.add_edge(source_stage, metadata_injector_stage)
     pipe.add_edge(metadata_injector_stage, extractor_stage)
     pipe.add_edge(extractor_stage, nemo_splitter_stage)
-    pipe.add_edge(nemo_splitter_stage, image_storage_stage)
+    pipe.add_edge(nemo_splitter_stage, image_caption_stage)
+    pipe.add_edge(image_caption_stage, image_storage_stage)
     pipe.add_edge(image_storage_stage, sink_stage)
 
     return sink_stage
 
 
-def pipeline(config) -> float:
+def pipeline(morpheus_pipeline_config, ingest_config) -> float:
     logging.info("Starting pipeline setup")
 
-    pipe = Pipeline(config)
+    pipe = Pipeline(morpheus_pipeline_config)
     start_abs = time.time_ns()
 
-    setup_pdf_ingest_pipeline(pipe, config)
+    setup_ingestion_pipeline(pipe, morpheus_pipeline_config, ingest_config)
 
     end_setup = start_run = time.time_ns()
     setup_elapsed = (end_setup - start_abs) / 1e9
@@ -200,12 +177,29 @@ def pipeline(config) -> float:
 
 
 @click.command()
+@click.option(
+    "--ingest_config_path", type=str, envvar="NV_INGEST_CONFIG_PATH", help="Path to the JSON configuration file."
+)
 @click.option("--use_cpp", is_flag=True, help="Use C++ backend.")
 @click.option("--pipeline_batch_size", default=256, type=int, help="Batch size for the pipeline.")
 @click.option("--enable_monitor", is_flag=True, help="Enable monitoring.")
 @click.option("--feature_length", default=512, type=int, help="Feature length.")
 @click.option("--num_threads", default=os.cpu_count(), type=int, help="Number of threads.")
 @click.option("--model_max_batch_size", default=256, type=int, help="Model max batch size.")
+@click.option(
+    "--caption_batch_size",
+    default=8,
+    callback=validate_positive,
+    type=int,
+    help="Number of captions to process in a batch. Must be a positive integer.",
+)
+@click.option(
+    "--extract_workers",
+    default=os.cpu_count(),
+    callback=validate_positive,
+    type=int,
+    help="Number of worker processes for extraction.",
+)
 @click.option(
     "--mode",
     type=click.Choice([mode.value for mode in PipelineModes], case_sensitive=False),
@@ -214,14 +208,18 @@ def pipeline(config) -> float:
 )
 @click.option(
     "--log_level",
-    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=True),
+    type=click.Choice([level.value for level in LogLevel], case_sensitive=False),
     default="INFO",
-    help="Sets the logging level.",
+    show_default=True,
+    help="Log level.",
 )
 def cli(
+    ingest_config_path,
+    caption_batch_size,
     use_cpp,
     pipeline_batch_size,
     enable_monitor,
+    extract_workers,
     feature_length,
     num_threads,
     model_max_batch_size,
@@ -232,18 +230,38 @@ def cli(
     Command line interface for configuring and running the pipeline with specified options.
     """
 
-    configure_logging(log_level.upper())
+    configure_logging(logger, log_level.upper())
     CppConfig.set_should_use_cpp(use_cpp)
 
-    config = Config()
-    config.pipeline_batch_size = pipeline_batch_size
-    config.enable_monitor = enable_monitor
-    config.feature_length = feature_length
-    config.num_threads = num_threads
-    config.model_max_batch_size = model_max_batch_size
-    config.mode = PipelineModes[mode.upper()]
+    morpheus_pipeline_config = Config()
+    morpheus_pipeline_config.pipeline_batch_size = pipeline_batch_size
+    morpheus_pipeline_config.enable_monitor = enable_monitor
+    morpheus_pipeline_config.feature_length = feature_length
+    morpheus_pipeline_config.num_threads = num_threads
+    morpheus_pipeline_config.model_max_batch_size = model_max_batch_size
+    morpheus_pipeline_config.mode = PipelineModes[mode.upper()]
 
-    pipeline(config)
+    cli_ingest_config = {}  # TODO(Devin) Create a config for CLI overrides -- not necessary yet.
+
+    if ingest_config_path:
+        ingest_config = validate_schema(ingest_config_path)
+    else:
+        ingest_config = {}
+
+    # Merge command-line options with file configuration
+    final_ingest_config = merge_dict(ingest_config, cli_ingest_config)
+
+    # Validate final configuration using Pydantic
+    try:
+        validated_config = IngestPipelineConfigSchema(**final_ingest_config)
+        click.echo(f"Configuration loaded and validated: {validated_config}")
+    except ValidationError as e:
+        click.echo(f"Validation error: {e}")
+        raise
+
+    logger.debug(f"Ingest Configuration:\n{json.dumps(final_ingest_config, indent=2)}")
+    logger.debug(f"Morpheus configuration:\n{morpheus_pipeline_config}")
+    pipeline(morpheus_pipeline_config, final_ingest_config)
 
 
 if __name__ == "__main__":

@@ -9,17 +9,14 @@
 # its affiliates is strictly prohibited.
 
 
-import logging
-
 from pydantic import BaseModel
 
-logger = logging.getLogger(__name__)
 
-
-class PDFExtractorSchema(BaseModel):
-    identify_nearby_objects: bool = True
-    max_queue_size: int = 1
-    n_workers: int = 16
+# TODO: Update to use Morpheus inference stage or Triton Client
+class ImageCaptionExtractionSchema(BaseModel):
+    batch_size: int = 8
+    endpoint_url: str = "http://triton:8000/v2/models/caption_classification/infer"
+    headers: dict = {"Content-Type": "application/json"}
     raise_on_failure: bool = False
 
     class Config:
