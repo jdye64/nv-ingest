@@ -29,13 +29,15 @@ class ImageStorageStage(PassThruTypeMixin, SinglePortStage):
     def __init__(
         self,
         config: Config,
+        module_config: typing.Dict = None,
         raise_on_failure: bool = False,
     ) -> None:
         super().__init__(config)
 
-        module_config = {
-            "raise_on_failure": raise_on_failure,
-        }
+        if module_config is None:
+            module_config = {
+                "raise_on_failure": raise_on_failure,
+            }
 
         module_name = "image_storage"
 

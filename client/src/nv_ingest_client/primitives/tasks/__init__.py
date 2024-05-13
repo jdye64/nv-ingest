@@ -1,3 +1,4 @@
+from .caption import CaptionTask
 from .extract import ExtractTask
 from .split import SplitTask
 from .store import StoreTask
@@ -7,11 +8,12 @@ from .task_base import is_valid_task_type
 from .task_factory import task_factory
 
 __all__ = [
-    "Task",
+    "CaptionTask",
+    "ExtractTask",
+    "is_valid_task_type",
     "SplitTask",
     "StoreTask",
-    "ExtractTask",
-    "TaskType",
-    "is_valid_task_type",
+    "Task",
     "task_factory",
+    "TaskType",
 ]

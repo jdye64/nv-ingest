@@ -28,7 +28,6 @@ logger = logging.getLogger(f"morpheus.{__name__}")
 
 
 class MultiProcessingBaseStage(SinglePortStage):
-
     """
     A ControlMessage oriented base multiprocessing stage to increase parallelism of stages written in Python.
 
@@ -199,7 +198,7 @@ class MultiProcessingBaseStage(SinglePortStage):
 
             return ctrl_msg
 
-        @filter_by_task(["extract"], forward_func=forward_fn)
+        @filter_by_task([("extract", {"document_type": "pdf"})], forward_func=forward_fn)
         @nv_ingest_node_failure_context_manager(
             annotation_id=self.name,
             raise_on_failure=False,

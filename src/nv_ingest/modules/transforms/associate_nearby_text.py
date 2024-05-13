@@ -17,7 +17,6 @@ import pandas as pd
 import sklearn.neighbors
 from morpheus.messages import ControlMessage
 from morpheus.messages import MessageMeta
-from morpheus.utils.control_message_utils import cm_default_failure_context_manager
 from morpheus.utils.control_message_utils import cm_skip_processing_if_failed
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
@@ -28,12 +27,12 @@ import cudf
 from nv_ingest.schemas.associate_nearby_text_schema import AssociateNearbyTextSchema
 from nv_ingest.schemas.metadata_schema import TextTypeEnum
 from nv_ingest.schemas.metadata_schema import validate_metadata
+from nv_ingest.util.exception_handlers.decorators import nv_ingest_node_failure_context_manager
 from nv_ingest.util.flow_control import filter_by_task
 from nv_ingest.util.modules.config_validator import fetch_and_validate_module_config
 from nv_ingest.util.tracing import traceable
 
 logger = logging.getLogger(__name__)
-
 
 MODULE_NAME = "associate_nearby_text"
 MODULE_NAMESPACE = "nv_ingest"
@@ -48,6 +47,7 @@ def _get_center(bbox: tuple) -> float:
 def _is_nearby_text(row):
     if row.get("text_metadata") is not None:
         return row["text_metadata"].get("text_type") == TextTypeEnum.NEARBY_BLOCK
+
     return False
 
 
@@ -85,13 +85,13 @@ def _associate_nearby_text_blocks(df: pd.DataFrame, n_neighbors):
 
     for page in pages_with_images:
         page_df = filtered_df.loc[filtered_df["page"] == page]
-        page_nearest_text_block_df = page_df.loc[page_df["is_nearby_text"] is True]
+        page_nearest_text_block_df = page_df.loc[page_df["is_nearby_text"] == True]  # noqa: E712
         page_nearest_text_block_centers_df = page_nearest_text_block_df[["bbox_center_x", "bbox_center_y"]]
 
         if page_nearest_text_block_centers_df.empty:
             continue
 
-        page_image_df = page_df.loc[page_df["is_image"] is True]
+        page_image_df = page_df.loc[page_df["is_image"] == True]  # noqa: E712
         page_image_centers_df = page_image_df[["bbox_center_x", "bbox_center_y"]]
 
         knn_model = sklearn.neighbors.NearestNeighbors(n_neighbors=min(page_nearest_text_block_centers_df.shape[0], 5))
@@ -137,7 +137,10 @@ def _associate_nearby_text(builder: mrc.Builder):
     @filter_by_task(["caption"])
     @traceable(MODULE_NAME)
     @cm_skip_processing_if_failed
-    @cm_default_failure_context_manager(raise_on_failure=validated_config.raise_on_failure)
+    @nv_ingest_node_failure_context_manager(
+        annotation_id=MODULE_NAME,
+        raise_on_failure=validated_config.raise_on_failure,
+    )
     def associate_nearby_text_fn(message: ControlMessage):
         try:
             task_props = message.remove_task("caption")
@@ -152,6 +155,7 @@ def _associate_nearby_text(builder: mrc.Builder):
 
             result_df = _associate_nearby_text_blocks(df, n_neighbors)
 
+            # Work around until https://github.com/apache/arrow/pull/40412 is resolved
             result_gdf = cudf.from_pandas(result_df)
 
             message_meta = MessageMeta(df=result_gdf)

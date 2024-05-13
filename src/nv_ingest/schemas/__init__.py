@@ -9,8 +9,11 @@
 # its affiliates is strictly prohibited.
 
 
+from .image_caption_extraction_schema import ImageCaptionExtractionSchema
+from .image_storage_schema import ImageStorageModuleSchema
 from .ingest_job_schema import IngestJobSchema
 from .ingest_job_schema import validate_ingest_job
+from .ingest_pipeline_config_schema import IngestPipelineConfigSchema
 from .metadata_injector_schema import MetadataInjectorSchema
 from .metadata_schema import validate_metadata
 from .nemo_doc_splitter_schema import DocumentSplitterSchema
@@ -22,7 +25,10 @@ from .task_injection_schema import TaskInjectionSchema
 
 __all__ = [
     "DocumentSplitterSchema",
+    "ImageCaptionExtractionSchema",
     "IngestJobSchema",
+    "IngestPipelineConfigSchema",
+    "ImageStorageModuleSchema",
     "MetadataInjectorSchema",
     "PDFExtractorSchema",
     "RedisClientSchema",

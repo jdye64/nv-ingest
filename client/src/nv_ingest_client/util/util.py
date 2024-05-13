@@ -8,13 +8,10 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
-# pylint: disable=invalid-name
-# pylint: disable=missing-class-docstring
-# pylint: disable=logging-fstring-interpolation
-
 import logging
 import os
 import traceback
+import typing
 from io import BytesIO
 from typing import Dict
 
@@ -25,6 +22,10 @@ from nv_ingest_client.util.file_processing.extract import detect_encoding_and_re
 from nv_ingest_client.util.file_processing.extract import extract_file_content
 from nv_ingest_client.util.file_processing.extract import get_or_infer_file_type
 from pptx import Presentation
+
+# pylint: disable=invalid-name
+# pylint: disable=missing-class-docstring
+# pylint: disable=logging-fstring-interpolation
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +179,7 @@ def load_data_from_path(path: str) -> Dict:
 
     if not os.path.exists(path):
         raise FileNotFoundError(f"The path {path} does not exist.")
+
     if not os.path.isfile(path):
         raise ValueError("The provided path is not a file.")
 
@@ -188,3 +190,11 @@ def load_data_from_path(path: str) -> Dict:
     result["source_id"].append(file_data["source_id"])
 
     return result
+
+
+def check_ingest_result(json_payload: Dict) -> typing.Tuple[bool, str]:
+    # Check if the 'data' key exists and if 'status' within 'data' is 'failed'
+    is_failed = json_payload.get("status", "") in "failed"
+    description = json_payload.get("description", "")
+
+    return is_failed, description

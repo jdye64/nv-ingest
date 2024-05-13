@@ -8,9 +8,11 @@ from pprint import pprint
 
 import click
 from nv_ingest_client.cli.util.processing import check_schema
+from nv_ingest_client.primitives.tasks import CaptionTask
 from nv_ingest_client.primitives.tasks import ExtractTask
 from nv_ingest_client.primitives.tasks import SplitTask
 from nv_ingest_client.primitives.tasks import StoreTask
+from nv_ingest_client.primitives.tasks.caption import CaptionTaskSchema
 from nv_ingest_client.primitives.tasks.extract import ExtractTaskSchema
 from nv_ingest_client.primitives.tasks.split import SplitTaskSchema
 from nv_ingest_client.primitives.tasks.store import StoreTaskSchema
@@ -98,6 +100,11 @@ def click_validate_task(ctx, param, value):
                 task_options = check_schema(StoreTaskSchema, options, task_id, json_options)
                 new_task_id = f"{task_id}"
                 new_task = StoreTask(**task_options.dict())
+            elif task_id == "caption":
+                task_options = check_schema(CaptionTaskSchema, options, task_id, json_options)
+                new_task_id = f"{task_id}"
+                new_task = CaptionTask(**task_options.dict())
+
             else:
                 raise ValueError(f"Unsupported task type: {task_id}")
 

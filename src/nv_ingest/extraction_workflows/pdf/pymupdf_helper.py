@@ -76,6 +76,10 @@ def pymupdf(pdf_stream, extract_text: bool, extract_images: bool, extract_tables
     # get text_depth
     text_depth = kwargs.get("text_depth", "page")
     text_depth = TextTypeEnum[text_depth.upper()]
+
+    # TODO(Devin): Not configurable anywhere at the moment; likely don't need to but may be a small perf gain.
+    identify_nearby_objects = kwargs.get("identify_nearby_objects", True)
+
     # get base metadata
     metadata_col = kwargs.get("metadata_column", "metadata")
     base_unified_metadata = row_data[metadata_col] if metadata_col in row_data.index else {}
@@ -156,7 +160,7 @@ def pymupdf(pdf_stream, extract_text: bool, extract_images: bool, extract_tables
                         for span_idx, span in enumerate(line["spans"]):  # spans is a list
                             accumulated_text.append(span["text"])
 
-                            if extract_images:
+                            if extract_images and identify_nearby_objects:
                                 block_text.append(span["text"])
 
                             if text_depth == TextTypeEnum.SPAN:
@@ -219,7 +223,7 @@ def pymupdf(pdf_stream, extract_text: bool, extract_images: bool, extract_tables
 
                         accumulated_text = []
 
-                if (extract_images) and (len(block_text) > 0):
+                if (extract_images and identify_nearby_objects) and (len(block_text) > 0):
                     page_nearby_blocks["text"]["content"].append(" ".join(block_text))
                     page_nearby_blocks["text"]["bbox"].append(block["bbox"])
 
