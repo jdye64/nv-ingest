@@ -231,7 +231,8 @@ class DocxReader:
                     # 1. Locate the inline shape which is stored in the <w:drawing> element.
                     # 2. r:embed in <a.blip> has the relationship id for extracting the file where
                     # the image is stored as bytes.
-                    # Reference: https://python-docx.readthedocs.io/en/latest/dev/analysis/features/shapes/picture.html#specimen-xml
+                    # Reference:
+                    # https://python-docx.readthedocs.io/en/latest/dev/analysis/features/shapes/picture.html#specimen-xml
                     inline_shapes = c._element.xpath(".//w:drawing//a:blip/@r:embed")
                     for r_id in inline_shapes:
                         text += self.image_tag.format(self.image_tag_index)
@@ -398,8 +399,8 @@ class DocxReader:
         Extract all images in a paragraph. These images share the same metadata.
         """
         for image in images:
-            logger.debug(f"image content_type %s para_idx %d", image.content_type, para_idx)
-            logger.debug(f"image caption %s", caption)
+            logger.debug("image content_type %s para_idx %d", image.content_type, para_idx)
+            logger.debug("image caption %s", caption)
             extracted_image = self._construct_image_metadata(image, para_idx, caption, base_unified_metadata)
             extracted_data.append(extracted_image)
 
@@ -561,7 +562,7 @@ class DocxReader:
             self._extract_para_images(
                 self._prev_para_images,
                 self._prev_para_image_idx,
-                paragraph_text,
+                "",
                 base_unified_metadata,
                 self._extracted_data,
             )

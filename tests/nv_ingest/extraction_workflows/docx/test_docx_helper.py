@@ -14,7 +14,6 @@ import pandas as pd
 import pytest
 
 from nv_ingest.extraction_workflows.docx.docx_helper import python_docx
-from nv_ingest.schemas.metadata_schema import TextTypeEnum
 
 
 @pytest.fixture
@@ -49,7 +48,7 @@ def test_docx_all_text(doc_stream, document_df):
     expected_text_cnt = 1
     # data per entry
     expected_col_cnt = 3
-    expected_content = "## Stopping by Woods on a Snowy Evening, By Robert Frost\n <image 1>\n *Figure 1: Snowy Woods*\n Whose woods these are I think I know. His house is in the village though; He will not see me stopping here; To watch his woods fill up with snow.\n \n My little horse must think it queer; To stop without a farmhouse near; Between the woods and frozen lake; The darkest evening of the year.\n \n He gives his harness bells a shake; To ask if there is some mistake.\u00a0The only other sound\u2019s the sweep; Of easy wind and downy flake.\n \n The woods are lovely, dark and deep, But I have promises to keep,\u00a0And miles to go before I sleep,\u00a0\u00a0And miles to go before I sleep.\n \n ## Frost\u2019s Collections\n <image 2>\n *Figure 2: Robert Frost*\n \n \n".splitlines()
+    expected_content = "## Stopping by Woods on a Snowy Evening, By Robert Frost\n <image 1>\n *Figure 1: Snowy Woods*\n Whose woods these are I think I know. His house is in the village though; He will not see me stopping here; To watch his woods fill up with snow.\n \n My little horse must think it queer; To stop without a farmhouse near; Between the woods and frozen lake; The darkest evening of the year.\n \n He gives his harness bells a shake; To ask if there is some mistake.\u00a0The only other sound\u2019s the sweep; Of easy wind and downy flake.\n \n The woods are lovely, dark and deep, But I have promises to keep,\u00a0And miles to go before I sleep,\u00a0\u00a0And miles to go before I sleep.\n \n ## Frost\u2019s Collections\n <image 2>\n *Figure 2: Robert Frost*\n \n \n".splitlines()  # noqa: E501
 
     assert isinstance(extracted_data, list)
     assert len(extracted_data) == expected_text_cnt
@@ -85,7 +84,7 @@ def test_docx_table(doc_stream, document_df):
     expected_text_cnt = 1
     # data per entry
     expected_col_cnt = 3
-    expected_content = "## Stopping by Woods on a Snowy Evening, By Robert Frost\n <image 1>\n *Figure 1: Snowy Woods*\n Whose woods these are I think I know. His house is in the village though; He will not see me stopping here; To watch his woods fill up with snow.\n \n My little horse must think it queer; To stop without a farmhouse near; Between the woods and frozen lake; The darkest evening of the year.\n \n He gives his harness bells a shake; To ask if there is some mistake.\u00a0The only other sound\u2019s the sweep; Of easy wind and downy flake.\n \n The woods are lovely, dark and deep, But I have promises to keep,\u00a0And miles to go before I sleep,\u00a0\u00a0And miles to go before I sleep.\n \n ## Frost\u2019s Collections\n <image 2>\n *Figure 2: Robert Frost*\n \n |   # | Collection         | Year    |\n|----:|:-------------------|:--------|\n|   1 | A Boy's Will       | 1913    |\n|   2 | North of Boston    | 1914    |\n|   3 | Mountain Interval  | 1916    |\n|   4 | New Hampshire      | 1923    |\n|   5 | West Running Brook | 1928    |\n|   6 | A Further Range    | 1937    |\n|   7 | A Witness Tree     | 1942    |\n|   8 | In the Clearing    | 1962    |\n|   9 | Steeple Bush       | 1947    |\n|  10 | An Afterword       | unknown |\n \n".splitlines()
+    expected_content = "## Stopping by Woods on a Snowy Evening, By Robert Frost\n <image 1>\n *Figure 1: Snowy Woods*\n Whose woods these are I think I know. His house is in the village though; He will not see me stopping here; To watch his woods fill up with snow.\n \n My little horse must think it queer; To stop without a farmhouse near; Between the woods and frozen lake; The darkest evening of the year.\n \n He gives his harness bells a shake; To ask if there is some mistake.\u00a0The only other sound\u2019s the sweep; Of easy wind and downy flake.\n \n The woods are lovely, dark and deep, But I have promises to keep,\u00a0And miles to go before I sleep,\u00a0\u00a0And miles to go before I sleep.\n \n ## Frost\u2019s Collections\n <image 2>\n *Figure 2: Robert Frost*\n \n |   # | Collection         | Year    |\n|----:|:-------------------|:--------|\n|   1 | A Boy's Will       | 1913    |\n|   2 | North of Boston    | 1914    |\n|   3 | Mountain Interval  | 1916    |\n|   4 | New Hampshire      | 1923    |\n|   5 | West Running Brook | 1928    |\n|   6 | A Further Range    | 1937    |\n|   7 | A Witness Tree     | 1942    |\n|   8 | In the Clearing    | 1962    |\n|   9 | Steeple Bush       | 1947    |\n|  10 | An Afterword       | unknown |\n \n".splitlines()  # noqa: E501
 
     assert isinstance(extracted_data, list)
     assert len(extracted_data) == expected_text_cnt
