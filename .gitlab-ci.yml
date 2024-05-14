@@ -40,7 +40,7 @@ include:
     file:
       - /templates/docker-utils.gitlab-ci.yml
       #- /templates/ephemeral-utils.gitlab-ci.yml
-      #- /templates/helm-utils.gitlab-ci.yml
+      - /templates/helm-utils.gitlab-ci.yml
   - component: gitlab-master.nvidia.com/dl/ai-services/gitlab-components/nemo-util/vault-init@v0.1.0
   - component: gitlab-master.nvidia.com/dl/ai-services/gitlab-components/nemo-pipeline/security@v0.1.0
     inputs:
@@ -122,32 +122,30 @@ build:docker:
 ### HELM CHART ###
 ##################
 
-# TODO have some chart content
-
 # lint the chart for basic errors
-#lint:helm:
-#  stage: test
-#  extends: .helm-lint
-#
+lint:helm:
+ stage: test
+ extends: .helm-lint
+
 # version check helm charts if there are changes only
-#check:helm:
-#  stage: test
-#  extends: .helm-publish-check
-#  needs:
-#    - job: lint:helm
-#      optional: true
-#    - job: vault-init
-#      optional: false
-#
+check:helm:
+ stage: test
+ extends: .helm-publish-check
+ needs:
+   - job: lint:helm
+     optional: true
+   - job: vault-init
+     optional: false
+
 # publish helm charts only if there are changes
-#publish:helm:
-#  stage: publish
-#  extends: .helm-publish
-#  needs:
-#    - job: check:helm
-#      optional: true
-#    - job: vault-init
-#      optional: true
+publish:helm:
+ stage: publish
+ extends: .helm-publish
+ needs:
+   - job: check:helm
+     optional: true
+   - job: vault-init
+     optional: true
 
 ##################
 ###   PUBLISH  ###

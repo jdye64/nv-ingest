@@ -198,6 +198,7 @@ mlruns/*
 notebooks/output
 triton_models/**/*.engine
 triton_models/**/*.onnx
+models
 viz_frames*
 
 # Explicitly ignore .vscode/. Shared settings should go in morpheus.code-workspace
@@ -213,4 +214,10 @@ examples/digital_fingerprinting/visualization/*-dfp-output/
 # Ignore saved benchmark data
 tests/benchmarks/.benchmarks/
 examples/digital_fingerprinting/production/benchmarks/.benchmarks/
+
+# Examples output
+processed_docs
+
+# Ignore Helm charts subdirectory
+/helm/charts
 /models/
