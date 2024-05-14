@@ -31,6 +31,7 @@ from nv_ingest.modules.sources.redis_task_source import RedisTaskSourceLoaderFac
 from nv_ingest.modules.transforms.image_caption_extraction import ImageCaptionExtractionLoaderFactory
 from nv_ingest.modules.transforms.nemo_doc_splitter import NemoDocSplitterLoaderFactory
 from nv_ingest.schemas.ingest_pipeline_config_schema import IngestPipelineConfigSchema
+from nv_ingest.stages.docx_extractor_stage import generate_docx_extractor_stage
 from nv_ingest.stages.pdf_extractor_stage import generate_pdf_extractor_stage
 from nv_ingest.stages.storages.image_storage_stage import ImageStorageStage
 from nv_ingest.util.converters.containers import merge_dict
@@ -81,14 +82,20 @@ def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, i
         )
     )
 
+    # Add pdf extraction stage
     pdf_extractor_config = ingest_config.get("pdf_extractor_module", {})
-    extractor_stage = pipe.add_stage(
+    pdf_extractor_stage = pipe.add_stage(
         generate_pdf_extractor_stage(
             morpheus_pipeline_config,
             pe_count=pdf_extractor_config.get("n_workers", 24),
             task="extract",
             task_desc="pdf_content_extractor",
         )
+    )
+
+    # Add docx extraction stage
+    docx_extractor_stage = pipe.add_stage(
+        generate_docx_extractor_stage(config, pe_count=24, task="docx-extract", task_desc="docx_content_extractor")
     )
 
     # Add doc-splitter stage ("nemo_doc_splitter")
@@ -142,8 +149,9 @@ def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, i
 
     # Add edges
     pipe.add_edge(source_stage, metadata_injector_stage)
-    pipe.add_edge(metadata_injector_stage, extractor_stage)
-    pipe.add_edge(extractor_stage, nemo_splitter_stage)
+    pipe.add_edge(metadata_injector_stage, pdf_extractor_stage)
+    pipe.add_edge(pdf_extractor_stage, docx_extractor_stage)
+    pipe.add_edge(docx_extractor_stage, nemo_splitter_stage)
     pipe.add_edge(nemo_splitter_stage, image_caption_stage)
     pipe.add_edge(image_caption_stage, image_storage_stage)
     pipe.add_edge(image_storage_stage, sink_stage)

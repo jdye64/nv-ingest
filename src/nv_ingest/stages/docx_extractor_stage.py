@@ -1,3 +1,13 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
 import base64
 import functools
 import io
@@ -7,27 +17,27 @@ import traceback
 import pandas as pd
 from morpheus.config import Config
 
-from nv_ingest.extraction_workflows import pdf
+from nv_ingest.extraction_workflows import docx
 from nv_ingest.stages.multiprocessing_stage import MultiProcessingBaseStage
 from nv_ingest.util.exception_handlers.pdf import create_exception_tag
 
 logger = logging.getLogger(f"morpheus.{__name__}")
 
 
-def _process_pdf_bytes(df, task_props):
+def _process_docx_bytes(df, task_props):
     """
-    Processes a cuDF DataFrame containing PDF files in base64 encoding.
-    Each PDF's content is replaced with its extracted text.
+    Processes a cuDF DataFrame containing docx files in base64 encoding.
+    Each document's content is replaced with its extracted text.
 
     Parameters:
-    - df: pandas DataFrame with columns 'source_id' and 'content' (base64 encoded PDFs).
-    - task_props: dictionary containing instructions for the pdf processing task.
+    - df: pandas DataFrame with columns 'source_id' and 'content' (base64 encoded documents).
+    - task_props: dictionary containing instructions for the document processing task.
 
     Returns:
-    - A pandas DataFrame with the PDF content replaced by the extracted text.
+    - A pandas DataFrame with the docx content replaced by the extracted text.
     """
 
-    def decode_and_extract(base64_row, task_props, default="pymupdf"):
+    def decode_and_extract(base64_row, task_props, default="python_docx"):
         # Base64 content to extract
         base64_content = base64_row["content"]
         # Row data to include in extraction
@@ -37,20 +47,20 @@ def _process_pdf_bytes(df, task_props):
         # Get source_id
         source_id = base64_row["source_id"] if "source_id" in base64_row.index else None
         # Decode the base64 content
-        pdf_bytes = base64.b64decode(base64_content)
+        doc_bytes = base64.b64decode(base64_content)
 
-        # Load the PDF
-        pdf_stream = io.BytesIO(pdf_bytes)
+        # Load the document
+        doc_stream = io.BytesIO(doc_bytes)
 
         # Type of extraction method to use
-        extract_method = task_props.get("method", "pymupdf")
+        extract_method = task_props.get("method", "python_docx")
         extract_params = task_props.get("params", {})
-        if not hasattr(pdf, extract_method):
+        if not hasattr(docx, extract_method):
             extract_method = default
         try:
-            func = getattr(pdf, extract_method, default)
+            func = getattr(docx, extract_method, default)
             logger.info("Running extraction method: %s", extract_method)
-            extracted_data = func(pdf_stream, **extract_params)
+            extracted_data = func(doc_stream, **extract_params)
 
             return extracted_data
 
@@ -77,23 +87,24 @@ def _process_pdf_bytes(df, task_props):
         else:
             extracted_df = pd.DataFrame({"document_type": [], "metadata": [], "uuid": []})
 
+        logger.debug("extracted_df %s", extracted_df)
         return extracted_df
 
     except Exception as e:
         traceback.print_exc()
-        logger.error(f"Failed to extract text from PDF: {e}")
+        logger.error(f"Failed to extract text from document: {e}")
 
     return df
 
 
-def generate_pdf_extractor_stage(
+def generate_docx_extractor_stage(
     c: Config,
-    task: str = "pdf-extract",
-    task_desc: str = "pdf_content_extractor",
+    task: str = "docx-extract",
+    task_desc: str = "docx_content_extractor",
     pe_count: int = 24,
 ):
     """
-    Helper function to generate a multiprocessing stage to perform pdf content extraction.
+    Helper function to generate a multiprocessing stage to perform document content extraction.
 
     Parameters
     ----------
@@ -104,7 +115,7 @@ def generate_pdf_extractor_stage(
     task_desc : str
         A descriptor to be used in latency tracing.
     pe_count : int
-        Integer for how many process engines to use for pdf content extraction.
+        Integer for how many process engines to use for document content extraction.
 
     Returns
     -------
@@ -113,5 +124,5 @@ def generate_pdf_extractor_stage(
     """
 
     return MultiProcessingBaseStage(
-        c=c, pe_count=pe_count, task=task, task_desc=task_desc, process_fn=_process_pdf_bytes, document_type="pdf"
+        c=c, pe_count=pe_count, task=task, task_desc=task_desc, process_fn=_process_docx_bytes, document_type="docx"
     )
