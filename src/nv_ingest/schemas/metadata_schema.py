@@ -127,6 +127,10 @@ class LanguageEnum(str, Enum):
 class ImageTypeEnum(str, Enum):
     JPEG = "jpeg"
     PNG = "png"
+    BMP = "bmp"
+    GIF = "gif"
+    TIFF = "tiff"
+
     image_type_1 = "image_type_1"  # until classifier developed
     image_type_2 = "image_type_2"  # until classifier developed
 

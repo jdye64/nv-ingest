@@ -62,8 +62,10 @@ class MultiProcessingBaseStage(SinglePortStage):
         task_desc: str,
         pe_count: int,
         process_fn: typing.Callable[[pd.DataFrame, dict], pd.DataFrame],
+        document_type: str,
     ):
         super().__init__(c)
+        self._document_type = document_type
         self._task = task
         self._task_desc = task_desc
         self._pe_count = pe_count
@@ -78,6 +80,10 @@ class MultiProcessingBaseStage(SinglePortStage):
     @property
     def name(self) -> str:
         return self._task
+
+    @property
+    def document_type(self) -> str:
+        return self._document_type
 
     def accepted_types(self) -> typing.Tuple:
         return (ControlMessage,)
@@ -198,13 +204,14 @@ class MultiProcessingBaseStage(SinglePortStage):
 
             return ctrl_msg
 
-        @filter_by_task([("extract", {"document_type": "pdf"})], forward_func=forward_fn)
+        @filter_by_task([("extract", {"document_type": self.document_type})], forward_func=forward_fn)
         @nv_ingest_node_failure_context_manager(
             annotation_id=self.name,
             raise_on_failure=False,
         )
         def on_next(ctrl_msg: ControlMessage):
             # TODO extend traceable decorator to include entry/exit options
+            logger.debug(f"base on_next {self.name}")
             ts_fetched = time.time_ns()
 
             do_trace_tagging = (ctrl_msg.has_metadata("config::add_trace_tagging") is True) and (
@@ -294,7 +301,7 @@ class MultiProcessingBaseStage(SinglePortStage):
 
         # create merge node
         merge_node = builder.make_node(
-            "merge",
+            f"{self.name}-merge",
             ops.map(merge_fn),
         )
 

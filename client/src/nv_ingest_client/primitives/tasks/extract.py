@@ -30,8 +30,8 @@ ECLAIR_TRITON_PORT = os.environ.get("ECLAIR_TRITON_PORT", "8001")
 
 _DEFAULT_EXTRACTOR_MAP = {
     "pdf": "pymupdf",
-    "docx": "python-docx",
-    "pptx": "python-pptx",
+    "docx": "python_docx",
+    "pptx": "python_pptx",
     "html": "beautifulsoup",
     "xml": "lxml",
     "excel": "openpyxl",
@@ -49,7 +49,7 @@ _Type_Extract_Method_PDF = Literal[
     "llama_parse",
 ]
 
-_Type_Extract_Method_DOCX = Literal["python-docx", "haystack", "unstructured_local", "unstructured_service"]
+_Type_Extract_Method_DOCX = Literal["python_docx", "haystack", "unstructured_local", "unstructured_service"]
 
 _Type_Extract_Method_Map = {
     "pdf": get_args(_Type_Extract_Method_PDF),
