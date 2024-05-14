@@ -37,14 +37,14 @@ from mrc.core.node import RoundRobinRouter
 import cudf
 
 from nv_ingest.extraction_workflows import docx
-
-# reuse pdf schema and exception handler for now (fixme)
-from nv_ingest.schemas.pdf_extractor_schema import PDFExtractorSchema
 from nv_ingest.util.exception_handlers.decorators import nv_ingest_node_failure_context_manager
 from nv_ingest.util.exception_handlers.pdf import create_exception_tag
 from nv_ingest.util.flow_control import filter_by_task
 from nv_ingest.util.modules.config_validator import fetch_and_validate_module_config
 from nv_ingest.util.tracing import traceable
+
+# reuse pdf schema and exception handler for now (fixme)
+from nv_ingest.schemas.pdf_extractor_schema import PDFExtractorSchema  # isort: skip
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +97,7 @@ def _process_docx_bytes(df, task_props):
             traceback.print_exc()
             log_error_message = f"Error loading extractor:{e}"
             logger.error(log_error_message)
-            logger.error(f"Failed on file:i %s", source_id)
+            logger.error("Failed on file:i %s", source_id)
 
         # Propagate error back and tag message as failed.
         exception_tag = create_exception_tag(error_message=log_error_message, source_id=source_id)
@@ -121,7 +121,7 @@ def _process_docx_bytes(df, task_props):
 
     except Exception as e:
         traceback.print_exc()
-        logger.error(f"Failed to extract text from doc: %s", e)
+        logger.error("Failed to extract text from doc: %s", e)
 
     return df
 

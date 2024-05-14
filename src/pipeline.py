@@ -95,7 +95,9 @@ def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, i
 
     # Add docx extraction stage
     docx_extractor_stage = pipe.add_stage(
-        generate_docx_extractor_stage(config, pe_count=24, task="docx-extract", task_desc="docx_content_extractor")
+        generate_docx_extractor_stage(
+            morpheus_pipeline_config, pe_count=24, task="docx-extract", task_desc="docx_content_extractor"
+        )
     )
 
     # Add doc-splitter stage ("nemo_doc_splitter")
