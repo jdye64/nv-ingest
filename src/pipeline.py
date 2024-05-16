@@ -11,6 +11,7 @@
 
 import json
 import logging
+import math
 import os
 import time
 import typing
@@ -55,6 +56,25 @@ def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, i
     logger.info(f"MESSAGE_CLIENT_HOST: {message_provider_host}")
     logger.info(f"MESSAGE_CLIENT_PORT: {message_provider_port}")
 
+    default_cpu_count = math.floor(os.cpu_count() * 0.8)
+
+    # Guard against the requested num_threads being larger than the physical cpu cores available.
+    if morpheus_pipeline_config.num_threads:
+        # If a configuration value is specified we want to honor it unless it conflicts with available resources
+        if os.cpu_count() < morpheus_pipeline_config.num_threads:
+            logger.warn(
+                "morpheus_pipeline_config.num_threads is set. However, the requested "
+                f"{morpheus_pipeline_config.num_threads} CPU cores are not available. "
+                f"Defaulting to {default_cpu_count} CPU cores"
+            )
+        else:
+            default_cpu_count = morpheus_pipeline_config.num_threads
+    else:
+        logger.warn(
+            f"morpheus_pipeline_config.num_threads not set. Defaulting to 80% of available CPU cores which is: "
+            f"{default_cpu_count}"
+        )
+
     # Add task-source stage ("redis_listener")
     source_module_loader = RedisTaskSourceLoaderFactory.get_instance(
         module_name="redis_listener", module_config=ingest_config.get("redis_task_source", {})
@@ -87,7 +107,7 @@ def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, i
     pdf_extractor_stage = pipe.add_stage(
         generate_pdf_extractor_stage(
             morpheus_pipeline_config,
-            pe_count=pdf_extractor_config.get("n_workers", 24),
+            pe_count=pdf_extractor_config.get("n_workers", default_cpu_count),
             task="extract",
             task_desc="pdf_content_extractor",
         )
@@ -96,7 +116,10 @@ def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, i
     # Add docx extraction stage
     docx_extractor_stage = pipe.add_stage(
         generate_docx_extractor_stage(
-            morpheus_pipeline_config, pe_count=24, task="docx-extract", task_desc="docx_content_extractor"
+            morpheus_pipeline_config,
+            pe_count=default_cpu_count,
+            task="docx-extract",
+            task_desc="docx_content_extractor",
         )
     )
 
