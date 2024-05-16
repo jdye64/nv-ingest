@@ -42,9 +42,9 @@ include:
       #- /templates/ephemeral-utils.gitlab-ci.yml
       - /templates/helm-utils.gitlab-ci.yml
   - component: gitlab-master.nvidia.com/dl/ai-services/gitlab-components/nemo-util/vault-init@v0.1.0
-  - component: gitlab-master.nvidia.com/dl/ai-services/gitlab-components/nemo-pipeline/security@v0.1.0
+  - component: gitlab-master.nvidia.com/dl/ai-services/gitlab-components/nemo-pipeline/security@0.2.0
     inputs:
-      archive_name: ${SERVICE_NAME}.tar
+      container_image: ${CI_REGISTRY_IMAGE}/${SERVICE_NAME}:${CI_COMMIT_SHA}
       nspect_id: NSPECT-4DWD-VFPM
 
 # common variables for the pipeline
@@ -61,6 +61,13 @@ variables:
   HELM_REPO: https://helm.ngc.nvidia.com/nvidian/nemo-llm
   HELM_REPO_NAME: ngc
   HELM_API_TOKEN: $NGC_REGISTRY_PASSWORD
+
+.nemo-pipeline-scripts:
+  iac-scan-matrix:
+    matrix:
+      - TARGET_CONFIG_PATH:
+          - Dockerfile
+          - helm/
 
 ##################
 ###   PYTHON   ###
