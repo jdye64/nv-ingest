@@ -21,7 +21,9 @@ its affiliates is strictly prohibited.
 
 # Table of Contents
 
-- [Big picture Concepts](#big-picture-concepts)
+- [NV-Ingest: what it is and what it is not.](#nv-ingest-what-it-is-and-what-it-is-not)
+  - [What it is not](#what-it-is-not)
+  - [What it is](#what-it-is)
 - [Submitting documents to an existing ingest-service](#submitting-documents-to-an-existing-ingest-service)
 - [Building the nv-ingest-ms-runtime container](#building-the-nv-ingest-ms-runtime-container)
 - [Utilities](#utilities)
@@ -29,17 +31,31 @@ its affiliates is strictly prohibited.
   - [gen_dataset.py](#gen_datasetpy)
   - [image_viewer.py](#image_viewerpy)
 
-## Big Picture Concepts
+## NV-Ingest: what it is and what it is not.
 
-- The nv-ingest service consists two primary components:
-  - The nv-ingest-ms-runtime container, which contains the processing logic for the nv-ingest service
-    - The nv-ingest-ms-runtime container is built on top of the Morpheus:24.03 container (Currently, this a
-      manual build but will be a direct pull from NGC once 24.03 is released).
-  - A Redis service container, which serves as the message broker for the nv-ingest-ms-runtime container
-- We interact with the ingest service by publishing jobs to the Redis service, and subscribing to an ephemeral
-  response channel.
+NV-Ingest is a microservice consisting of a container implementing the document ingest pipeline, a message passing service container (currently Redis), and optionally a Triton inference service container.
 
-### Submitting documents to an existing ingest-service
+NV-Ingest can be deployed as a stand-alone service or as a dependency of a larger deployment, such as the Nemo Retriever cluster.
+
+### What it is not
+
+A service that:
+
+- Runs a static pipeline or fixed set of operations on every submitted document.
+- Acts as a wrapper for any specific document parsing library.
+
+### What it is
+
+A service that:
+
+- Accepts a JSON Job description, containing a document payload, and a set of ingestion tasks to perform on that payload.
+- Allows the results of a Job to be retrieved; the result is a JSON dictionary containing a list of Metadata describing objects extracted from the base document, as well as processing annotations and timing/trace data.
+- Supports PDF, Docx, and images.
+- Is in the process of supporting content extraction from a number of base document types, including pptx and other document types.
+- Supports multiple methods of extraction for each document type in order to balance trade-offs between throughput and accuracy. For example, for PDF documents we support extraction via MuPDF, ECLAIR, and Unstructured.io; additional extraction engines can and will be added as necessary to support downstream consumer requirements.
+- Supports or is in the process of supporting various types of pre and post processing operations, including text splitting and chunking; image captioning, transform, and filtering; embedding generation, and image offloading to storage.
+
+## Submitting documents to an existing ingest-service
 
 If you already have an existing service, you can submit documents to it using the `nv-ingest-cli` tool.
 
@@ -50,13 +66,11 @@ Pre-requisites:
 
 Full reference: [nv-ingest-cli](./client/README.md)
 
-````shell
-
-**Note:** In an upcoming release this will be replaced with a more general nv-ingest client library + and
-command-line tool.
+`Test.pdf` is a simple PDF document with text and images.
 
 ![Simple PDF with Text and Images](./docs/images/test.pdf.png)
 
+````shell
 Submit ./data/test.pdf to the ingest service at localhost:6379, and extract text and images from it using the pymupdf
 method.
 
