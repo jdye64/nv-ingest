@@ -15,6 +15,7 @@ from io import BytesIO
 from typing import List
 
 import click
+import pkg_resources
 from nv_ingest_client.cli.util.click import ClientType
 from nv_ingest_client.cli.util.click import LogLevel
 from nv_ingest_client.cli.util.click import click_match_and_validate_files
@@ -29,6 +30,18 @@ from nv_ingest_client.cli.util.system import configure_logging
 from nv_ingest_client.cli.util.system import ensure_directory_with_permissions
 from nv_ingest_client.client import NvIngestClient
 from nv_ingest_client.message_clients.redis import RedisClient
+from pkg_resources import DistributionNotFound
+from pkg_resources import VersionConflict
+
+try:
+    NV_INGEST_VERSION = pkg_resources.get_distribution("nv_ingest").version
+except (DistributionNotFound, VersionConflict):
+    NV_INGEST_VERSION = "Unknown -- No Distribution found or Version conflict."
+
+try:
+    NV_INGEST_CLIENT_VERSION = pkg_resources.get_distribution("nv_ingest_client").version
+except (DistributionNotFound, VersionConflict):
+    NV_INGEST_CLIENT_VERSION = "Unknown -- No Distribution found or Version conflict."
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +58,7 @@ logger = logging.getLogger(__name__)
 @click.option(
     "--doc",
     multiple=True,
-    default=[],
+    default=None,
     type=click.Path(exists=False),
     help="Add a new document to be processed (supports multiple).",
     callback=click_match_and_validate_files,
@@ -64,8 +77,8 @@ logger = logging.getLogger(__name__)
     show_default=True,
     help="Client type.",
 )
-@click.option("--client_host", required=True, help="DNS name or URL for the endpoint.")
-@click.option("--client_port", required=True, type=int, help="Port for the client endpoint.")
+@click.option("--client_host", default="localhost", help="DNS name or URL for the endpoint.")
+@click.option("--client_port", default=6397, type=int, help="Port for the client endpoint.")
 @click.option("--client_kwargs", help="Additional arguments to pass to the client.", default="{}")
 @click.option(
     "--concurrency_n", default=10, show_default=True, type=int, help="Number of inflight jobs to maintain at one time."
@@ -139,6 +152,7 @@ Tasks and Options:
 Note: The 'extract_method' automatically selects the optimal method based on 'document_type' if not explicitly stated.
 """,
 )
+@click.option("--version", is_flag=True, help="Show version.")
 @click.pass_context
 def main(
     ctx,
@@ -156,7 +170,13 @@ def main(
     output_directory: str,
     shuffle_dataset: bool,
     task: [str],
+    version: [bool],
 ):
+    if version:
+        click.echo(f"nv-ingest     : {NV_INGEST_VERSION}")
+        click.echo(f"nv-ingest-cli : {NV_INGEST_CLIENT_VERSION}")
+        return
+
     try:
         configure_logging(logger, log_level)
         logging.debug(f"nv-ingest-cli:params:\n{json.dumps(ctx.params, indent=2, default=repr)}")

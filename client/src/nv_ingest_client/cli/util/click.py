@@ -1,3 +1,13 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
 import glob
 import json
 import logging
@@ -206,6 +216,9 @@ def click_match_and_validate_files(ctx, param, value):
     list of str or None
         A list of matching file paths if any matches are found; otherwise, None.
     """
+
+    if not value:
+        return []
 
     matching_files = list(_generate_matching_files(value))
     if not matching_files:
