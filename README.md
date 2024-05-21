@@ -12,12 +12,19 @@ its affiliates is strictly prohibited.
 
 # Quickstart
 
+## Important Documents
+
+- [LICENSE](./LICENSE)
+- [CONTRIBUTING.md](./CONTRIBUTING.md)
+- [Continuous Integration](./ci/README.md)
+  - [Building Ingest Service and Client Packages](./ci/README.md#building-and-publishing-packages)
+
 ## Links
 
-- [Morpheus-ms](https://github.com/nv-morpheus/Morpheus)
-- [nv-ingest-ms-runtime](https://gitlab-master.nvidia.com/dl/ai-services/microservices/nv-ingest)
-- [Nemo Retriever](https://gitlab-master.nvidia.com/drobison/devin-nemo-retrieval-microservice-private)
-- [Ryan Angilly's Engineering Overview of Nemo Retriever](https://nvidia-my.sharepoint.com/personal/rangilly_nvidia_com/_layouts/15/stream.aspx?id=%2Fpersonal%2Frangilly%5Fnvidia%5Fcom%2FDocuments%2FRecordings%2FRyan%20Angilly%20presents%20how%20Retriever%20Services%20work%2D20240124%5F120001%2DMeeting%20Recording%2Emp4&referrer=StreamWebApp%2EWeb&referrerScenario=AddressBarCopied%2Eview&ga=1)
+- [NV Ingest Repository](https://gitlab-master.nvidia.com/dl/ai-services/microservices/nv-ingest)
+- [Morpheus Repository](https://github.com/nv-morpheus/Morpheus)
+- [Nemo Retriever Repository](https://gitlab-master.nvidia.com/drobison/devin-nemo-retrieval-microservice-private)
+  - [Ryan Angilly's Engineering Overview of Nemo Retriever](https://nvidia-my.sharepoint.com/personal/rangilly_nvidia_com/_layouts/15/stream.aspx?id=%2Fpersonal%2Frangilly%5Fnvidia%5Fcom%2FDocuments%2FRecordings%2FRyan%20Angilly%20presents%20how%20Retriever%20Services%20work%2D20240124%5F120001%2DMeeting%20Recording%2Emp4&referrer=StreamWebApp%2EWeb&referrerScenario=AddressBarCopied%2Eview&ga=1)
 
 # Table of Contents
 

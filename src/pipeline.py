@@ -62,7 +62,7 @@ def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, i
     if morpheus_pipeline_config.num_threads:
         # If a configuration value is specified we want to honor it unless it conflicts with available resources
         if os.cpu_count() < morpheus_pipeline_config.num_threads:
-            logger.warn(
+            logger.warning(
                 "morpheus_pipeline_config.num_threads is set. However, the requested "
                 f"{morpheus_pipeline_config.num_threads} CPU cores are not available. "
                 f"Defaulting to {default_cpu_count} CPU cores"

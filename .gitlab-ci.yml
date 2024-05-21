@@ -75,7 +75,7 @@ variables:
 .python-basics:
   image: $MORPHEUS_BASE_IMG:$MORPHEUS_TAG
   # DAG approach, does not wait for previous state to finish
-  needs: []
+  needs: [ ]
   # cache for python packages, unique for each branch (not shared across branches)
   cache:
     key: $CI_COMMIT_REF_SLUG
@@ -119,11 +119,57 @@ test:
 build:docker:
   stage: build
   extends: .docker-kaniko-build
-  needs: []
+  needs: [ ]
   variables:
     BUILD_ARGS: "--build-arg BASE_IMG=$MORPHEUS_BASE_IMG --build-arg TAG=$MORPHEUS_TAG"
   rules:
     - when: on_success
+
+######################
+### PACKAGE BUILDS ###
+######################
+build:pip_packages:
+  extends: .python-basics
+  stage: build
+  script:
+    - chmod +x ./ci/scripts/build_pip_packages.sh
+    - ./ci/scripts/build_pip_packages.sh --type release --lib client
+    - ./ci/scripts/build_pip_packages.sh --type release --lib service
+  artifacts:
+    paths:
+      - client/dist/*.whl
+      - dist/*.whl
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_NAME == "publish-nightly"'
+    - if: '$CI_PIPELINE_SOURCE == "web" && $CI_JOB_NAME == "publish-release"'
+
+
+##################
+### PUBLISHING ###
+##################
+
+publish:pip_packages:
+  image: python:3.11
+  stage: publish
+  script:
+    # Debugging step to verify artifacts
+    - echo "Listing artifacts in client/dist/ and dist/"
+    - ls -la client/dist/
+    - ls -la dist/
+    # Install Twine for uploading packages
+    - pip install twine
+    # Ensure the publish script is executable and run it
+    - chmod +x ./ci/scripts/publish_pip_packages.sh
+    - ./ci/scripts/publish_pip_packages.sh --use-gitlab
+  dependencies:
+    - build:pip_packages
+  needs:
+    - job: build:pip_packages
+      artifacts: true
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_NAME == "publish-nightly"'
+    - if: '$CI_PIPELINE_SOURCE == "web" && $CI_JOB_NAME == "publish-release"'
+
 
 ##################
 ### HELM CHART ###
@@ -131,28 +177,28 @@ build:docker:
 
 # lint the chart for basic errors
 lint:helm:
- stage: test
- extends: .helm-lint
+  stage: test
+  extends: .helm-lint
 
 # version check helm charts if there are changes only
 check:helm:
- stage: test
- extends: .helm-publish-check
- needs:
-   - job: lint:helm
-     optional: true
-   - job: vault-init
-     optional: false
+  stage: test
+  extends: .helm-publish-check
+  needs:
+    - job: lint:helm
+      optional: true
+    - job: vault-init
+      optional: false
 
 # publish helm charts only if there are changes
 publish:helm:
- stage: publish
- extends: .helm-publish
- needs:
-   - job: check:helm
-     optional: true
-   - job: vault-init
-     optional: true
+  stage: publish
+  extends: .helm-publish
+  needs:
+    - job: check:helm
+      optional: true
+    - job: vault-init
+      optional: true
 
 ##################
 ###   PUBLISH  ###
