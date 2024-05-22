@@ -12,17 +12,9 @@ SCRIPT_DIR=$(dirname "$(realpath "$0")")
 # Parse options
 while [[ "$#" -gt 0 ]]; do
     case $1 in
-        --type)
-            TYPE="$2"
-            shift
-            ;;
-        --lib)
-            LIBRARY="$2"
-            shift
-            ;;
-        *)
-            usage
-            ;;
+        --type) TYPE="$2"; shift ;;
+        --lib) LIBRARY="$2"; shift  ;;
+        *) usage ;;
     esac
     shift
 done
