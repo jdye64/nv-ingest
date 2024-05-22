@@ -25,6 +25,7 @@
 import logging
 import uuid
 from datetime import datetime
+from typing import List
 
 import fitz
 import numpy as np
@@ -45,7 +46,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_ECLAIR_TRITON_HOST = "localhost"
 DEFAULT_ECLAIR_TRITON_PORT = 8001
 DEFAULT_DPI = 96
-MAX_BATCH_SIZE = 4
+DEFAULT_BATCH_SIZE = 16
 
 
 # Define a helper function to use Eclair to extract text from a base64 encoded bytestram PDF
@@ -78,7 +79,7 @@ def eclair(pdf_stream, extract_text: bool, extract_images: bool, extract_tables:
     eclair_triton_url = f"{eclair_triton_host}:{eclair_triton_port}"
     triton_client = grpcclient.InferenceServerClient(url=eclair_triton_url)
 
-    batch_size = kwargs.get("batch_size", MAX_BATCH_SIZE)
+    batch_size = int(kwargs.get("eclair_batch_size", DEFAULT_BATCH_SIZE))
 
     row_data = kwargs.get("row_data")
     # get source_id
@@ -160,6 +161,7 @@ def eclair(pdf_stream, extract_text: bool, extract_images: bool, extract_tables:
             if extract_tables:
                 pass
 
+        image_arrays = pad_arrays_if_sizes_are_different(image_arrays)
         batches = [
             np.array(image_arrays[i : i + batch_size]) for i in range(0, len(image_arrays), batch_size)  # noqa:  E203
         ]
@@ -276,3 +278,29 @@ def _construct_text_metadata(
     validated_unified_metadata = validate_metadata(ext_unified_metadata)
 
     return [ContentTypeEnum.TEXT, validated_unified_metadata.dict(), str(uuid.uuid4())]
+
+
+def pad_arrays_if_sizes_are_different(arrays: List[np.array]) -> List[np.array]:
+    """
+    In some cases, different pages in a PDF might be of different sizes.
+    If the size of any pixmap is different from the others, we pad the smaller images.
+    Assumes all arrays are 3-D arrays.
+    """
+    if any(len(arr.shape) != 3 for arr in arrays):
+        raise ValueError("One of the arrays is not a 3-D array that represents an image.")
+
+    if all(arr.shape == arrays[0].shape for arr in arrays):
+        # all shapes match, so no need to pad any of the images.
+        return arrays
+
+    max_height = max(arr.shape[0] for arr in arrays)
+    max_width = max(arr.shape[1] for arr in arrays)
+    for idx, arr in enumerate(arrays):
+        if arr.shape[0] == max_height and arr.shape[1] == max_width:
+            continue
+        pad_height = (max_height - arr.shape[0]) // 2
+        pad_width = (max_width - arr.shape[1]) // 2
+        canvas = np.zeros((max_height, max_width, 3), dtype=np.uint8)
+        canvas[pad_height : pad_height + arr.shape[0], pad_width : pad_width + arr.shape[1]] = arr  # noqa: E203
+        arrays[idx] = canvas
+    return arrays

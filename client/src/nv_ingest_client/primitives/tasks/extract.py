@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 ECLAIR_TRITON_HOST = os.environ.get("ECLAIR_TRITON_HOST", "localhost")
 ECLAIR_TRITON_PORT = os.environ.get("ECLAIR_TRITON_PORT", "8001")
+ECLAIR_BATCH_SIZE = os.environ.get("ECLAIR_TRITON_PORT", "16")
 
 _DEFAULT_EXTRACTOR_MAP = {
     "pdf": "pymupdf",
@@ -170,6 +171,7 @@ class ExtractTask(Task):
             eclair_properties = {
                 "eclair_triton_host": os.environ.get("ECLAIR_TRITON_HOST", ECLAIR_TRITON_HOST),
                 "eclair_triton_port": os.environ.get("ECLAIR_TRITON_PORT", ECLAIR_TRITON_PORT),
+                "eclair_batch_size": os.environ.get("ECLAIR_BATCH_SIZE", ECLAIR_BATCH_SIZE),
             }
             task_properties["params"].update(eclair_properties)
 

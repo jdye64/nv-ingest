@@ -141,7 +141,54 @@ instance_group [
 
 ### ECLAIR Document OCR Model
 
-To set up Triton, first build the base image:
+In order to work around the limitations of GitLab CI/CD, relative URLs are used in `.gitmodules`:
+
+```
+[submodule "third_party/eclair_triton"]
+	path = third_party/eclair_triton
+	url = ../../../../edwardk/eclair-triton.git
+	ignore = untracked
+```
+
+However, when you clone the repository locally, Git cannot deduce the URL correctly, so replace
+the relative in `.gitmodules` with an absolute URL:
+
+```
+[submodule "third_party/eclair_triton"]
+	path = third_party/eclair_triton
+	url = ssh://git@gitlab-master.nvidia.com:12051/edwardk/eclair-triton.git
+	ignore = untracked
+```
+
+After replacing `url` with the aboluste URL, checkout out the submodule:
+
+```
+git submodule update --init --recursive
+```
+
+The `eclair_triton` repository also hosts the model checkpoints as Git LFS files, so be sure to
+pull the model weights as well:
+
+```
+git -C third_party/eclair_triton lfs pull
+```
+
+Using `--extract_method eclair` requires that there is a Triton server running.
+To set up Triton, set the following environment variables in `.env`:
+
+```
+ECLAIR_CHECKPOINT_DIR=./third_party/eclair_triton/checkpoints
+ECLAIR_CHECKPOINT_NAME=sweep_0_cooperative-swine_2024.04.20_22.35
+ECLAIR_MODEL_DIR=./third_party/eclair_triton/models
+ECLAIR_BATCH_SIZE=16
+```
+
+You may need to adjust the batch size depending on the GPU type.
+The default batch size of 16 was optimized for A100.
+
+![](../docs/images/eclair_batch_size.png)
+
+First, build the base image:
 
 ```
 docker compose -f third_party/eclair_triton/docker-compose.yaml build triton-trt-llm
