@@ -115,15 +115,23 @@ test:
 ##################
 ###   DOCKER   ###
 ##################
-
-build:docker:
+build_and_publish:docker:
   stage: build
   extends: .docker-kaniko-build
-  needs: [ ]
-  variables:
-    BUILD_ARGS: "--build-arg BASE_IMG=$MORPHEUS_BASE_IMG --build-arg TAG=$MORPHEUS_TAG"
+  dependencies:
+    - build:pip_packages
+  needs:
+    - job: build:pip_packages
+      artifacts: true
+  script:
+    - ls -lah ./
+    - ls -lah ./ci/scripts
+    - chmod +x ./ci/scripts/build_and_publish_container.sh
+    - if [[ "$CI_PIPELINE_SOURCE" == "schedule" && "$SCHEDULE_NAME" == "publish-nightly" ]]; then sh ./ci/scripts/build_and_publish_container.sh --type dev; fi
+    - if [[ "$CI_PIPELINE_SOURCE" == "web" && "$CI_JOB_NAME" == "publish-release" ]]; then sh ./ci/scripts/build_and_publish_container.sh --type release; fi
   rules:
-    - when: on_success
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_NAME == "publish-nightly"'
+    - if: '$CI_PIPELINE_SOURCE == "web" && $CI_JOB_NAME == "publish-release"'
 
 ######################
 ### PACKAGE BUILDS ###
@@ -133,8 +141,8 @@ build:pip_packages:
   stage: build
   script:
     - chmod +x ./ci/scripts/build_pip_packages.sh
-    - ./ci/scripts/build_pip_packages.sh --type release --lib client
-    - ./ci/scripts/build_pip_packages.sh --type release --lib service
+    - if [[ "$CI_PIPELINE_SOURCE" == "schedule" && "$SCHEDULE_NAME" == "publish-nightly" ]]; then ./ci/scripts/build_pip_packages.sh --type dev --lib client; ./ci/scripts/build_pip_packages.sh --type dev --lib service; fi
+    - if [[ "$CI_PIPELINE_SOURCE" == "web" && "$CI_JOB_NAME" == "publish-release" ]]; then ./ci/scripts/build_pip_packages.sh --type release --lib client; ./ci/scripts/build_pip_packages.sh --type release --lib service; fi
   artifacts:
     paths:
       - client/dist/*.whl
