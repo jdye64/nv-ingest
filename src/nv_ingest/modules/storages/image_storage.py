@@ -9,6 +9,7 @@
 # its affiliates is strictly prohibited.
 import base64
 import logging
+import os
 import traceback
 from io import BytesIO
 from typing import Any
@@ -37,7 +38,7 @@ logger = logging.getLogger(__name__)
 MODULE_NAME = "image_storage"
 MODULE_NAMESPACE = "nv_ingest"
 
-_DEFAULT_ENDPOINT = "localhost:9000"
+_DEFAULT_ENDPOINT = os.environ.get("MINIO_ADDRESS", "localhost:9000")
 _DEFAULT_BUCKET_NAME = "nv-ingest"
 
 ImageStorageLoaderFactory = ModuleLoaderFactory(MODULE_NAME, MODULE_NAMESPACE, ImageStorageModuleSchema)
