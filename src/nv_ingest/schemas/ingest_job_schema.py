@@ -43,6 +43,11 @@ class TaskTypeEnum(str, Enum):
     embed = "embed"
     caption = "caption"
     store = "store"
+    filter = "filter"
+
+
+class FilterTypeEnum(str, Enum):
+    image = "image"
 
 
 class ContentTypeEnum(str, Enum):
@@ -107,6 +112,18 @@ class IngestTaskCaptionSchema(BaseModelNoExt):
     n_neighbors: int = 5
 
 
+class IngestTaskFilterParamsSchema(BaseModelNoExt):
+    min_size: int = 128
+    max_aspect_ratio: Union[float, int] = 5.0
+    min_aspect_ratio: Union[float, int] = 0.2
+    filter: bool = False
+
+
+class IngestTaskFilterSchema(BaseModelNoExt):
+    type: FilterTypeEnum
+    params: IngestTaskFilterParamsSchema
+
+
 class IngestTaskSchema(BaseModelNoExt):
     type: TaskTypeEnum
     task_properties: Union[
@@ -115,6 +132,7 @@ class IngestTaskSchema(BaseModelNoExt):
         IngestTaskSplitSchema,
         IngestTaskCaptionSchema,
         IngestTaskStoreSchema,
+        IngestTaskFilterSchema,
     ]
     raise_on_failure: bool = False
 
@@ -127,7 +145,8 @@ class IngestTaskSchema(BaseModelNoExt):
                 TaskTypeEnum.extract: IngestTaskExtractSchema,
                 TaskTypeEnum.store: IngestTaskStoreSchema,
                 TaskTypeEnum.embed: IngestTaskEmbedSchema,
-                TaskTypeEnum.caption: IngestTaskCaptionSchema,  # Extend this mapping as necessary
+                TaskTypeEnum.caption: IngestTaskCaptionSchema,
+                TaskTypeEnum.filter: IngestTaskFilterSchema,  # Extend this mapping as necessary
             }.get(task_type)
 
             # Validate that task_properties is of the expected type

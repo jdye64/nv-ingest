@@ -1,1 +1,3 @@
-__all__ = []
+from .image_filter import ImageFilterLoaderFactory
+
+__all__ = ["ImageFilterLoaderFactory"]

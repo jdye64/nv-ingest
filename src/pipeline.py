@@ -26,6 +26,7 @@ from morpheus.stages.general.linear_modules_source import LinearModuleSourceStag
 from morpheus.stages.general.linear_modules_stage import LinearModulesStage
 from pydantic import ValidationError
 
+from nv_ingest.modules.filters.image_filter import ImageFilterLoaderFactory
 from nv_ingest.modules.injectors.metadata_injector import MetadataInjectorLoaderFactory
 from nv_ingest.modules.sinks.redis_task_sink import RedisTaskSinkLoaderFactory
 from nv_ingest.modules.sources.redis_task_source import RedisTaskSourceLoaderFactory
@@ -123,6 +124,19 @@ def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, i
         )
     )
 
+    image_filter_loader = ImageFilterLoaderFactory.get_instance(module_name="filter_images", module_config={})
+
+    image_filter_stage = pipe.add_stage(
+        LinearModulesStage(
+            morpheus_pipeline_config,
+            image_filter_loader,
+            input_type=ControlMessage,
+            output_type=ControlMessage,
+            input_port_name="input",
+            output_port_name="output",
+        )
+    )
+
     # Add doc-splitter stage ("nemo_doc_splitter")
     nemo_splitter_loader = NemoDocSplitterLoaderFactory.get_instance(
         module_name="nemo_doc_splitter",
@@ -176,7 +190,8 @@ def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, i
     pipe.add_edge(source_stage, metadata_injector_stage)
     pipe.add_edge(metadata_injector_stage, pdf_extractor_stage)
     pipe.add_edge(pdf_extractor_stage, docx_extractor_stage)
-    pipe.add_edge(docx_extractor_stage, nemo_splitter_stage)
+    pipe.add_edge(docx_extractor_stage, image_filter_stage)
+    pipe.add_edge(image_filter_stage, nemo_splitter_stage)
     pipe.add_edge(nemo_splitter_stage, image_caption_stage)
     pipe.add_edge(image_caption_stage, image_storage_stage)
     pipe.add_edge(image_storage_stage, sink_stage)

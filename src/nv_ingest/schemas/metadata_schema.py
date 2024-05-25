@@ -41,6 +41,7 @@ class ContentTypeEnum(str, Enum):
     TEXT = "text"
     IMAGE = "image"
     STRUCTURED = "structured"
+    INFO_MSG = "info_message"
 
 
 class StdContentDescEnum(str, Enum):
@@ -150,6 +151,7 @@ class TaskTypeEnum(str, Enum):
 
 class StatusEnum(str, Enum):
     ERROR: str = "error"
+    SUCCESS: str = "success"
 
 
 # Sub schemas
@@ -235,13 +237,23 @@ class ImageMetadataSchema(BaseModelNoExt):
     text: str = ""
     image_location: tuple = (0, 0, 0, 0)
     uploaded_image_url: str = ""
+    width: int = 0
+    height: int = 0
 
 
+# TODO consider deprecating this in favor of info msg...
 class ErrorMetadataSchema(BaseModelNoExt):
     task: TaskTypeEnum
     status: StatusEnum
     source_id: str = ""
     error_msg: str
+
+
+class InfoMessageMetadataSchema(BaseModelNoExt):
+    task: TaskTypeEnum
+    status: StatusEnum
+    message: str
+    filter: bool
 
 
 # Main metadata schema
@@ -252,6 +264,7 @@ class MetadataSchema(BaseModelNoExt):
     text_metadata: Optional[TextMetadataSchema] = None
     image_metadata: Optional[ImageMetadataSchema] = None
     error_metadata: Optional[ErrorMetadataSchema] = None
+    info_message_metadata: Optional[InfoMessageMetadataSchema] = None
     raise_on_failure: bool = False
 
     @root_validator(pre=True)

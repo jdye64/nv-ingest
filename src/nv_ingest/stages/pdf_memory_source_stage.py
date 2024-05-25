@@ -64,7 +64,7 @@ class PdfMemoryFileSource(PreallocatorMixin, SingleOutputSource):
         self._load_pdfs()
 
     def _load_pdfs(self):
-        pdf_files = self._source_config["sampled_files"][:2]
+        pdf_files = self._source_config["sampled_files"]  # [5:6]#[:1]
         self._jobs = []
 
         for pdf_path in pdf_files[:]:
@@ -106,6 +106,18 @@ class PdfMemoryFileSource(PreallocatorMixin, SingleOutputSource):
                                 "extract_images": True,
                                 "extract_tables": False,
                                 "text_depth": "document",
+                            },
+                        },
+                    },
+                    {
+                        "type": "filter",
+                        "task_properties": {
+                            "type": "image",
+                            "params": {
+                                "min_size": 256,
+                                "max_aspect_ratio": 5.0,
+                                "min_aspect_ratio": 0.2,
+                                "filter": False,
                             },
                         },
                     },

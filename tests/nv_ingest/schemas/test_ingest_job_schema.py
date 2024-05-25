@@ -49,6 +49,15 @@ def valid_task_properties(task_type):
                 "dimensions": 768,
             },
         }
+    elif task_type == TaskTypeEnum.filter:
+        return {
+            "type": "image",
+            "params": {
+                "min_size": 256,
+                "max_aspect_ratio": 5.0,
+                "min_aspect_ratio": 0.2,
+            },
+        }
 
     return {}
 
@@ -168,6 +177,17 @@ def test_multiple_task_types():
                 },
             },
             {"type": "embed", "task_properties": {"model": "bert", "params": {}}},
+            {
+                "type": "filter",
+                "task_properties": {
+                    "type": "image",
+                    "params": {
+                        "min_size": 256,
+                        "max_aspect_ratio": 5.0,
+                        "min_aspect_ratio": 0.2,
+                    },
+                },
+            },
         ],
     }
 
