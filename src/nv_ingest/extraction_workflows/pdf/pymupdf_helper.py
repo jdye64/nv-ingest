@@ -368,6 +368,8 @@ def _extract_image(block, page_idx, page_count, source_metadata, base_unified_me
     base64_img = bytetools.base64frombytes(block["image"])
 
     bbox = block["bbox"]
+    width = block["width"]
+    height = block["height"]
     page_block = block["number"]
 
     content_metadata = {
@@ -390,6 +392,8 @@ def _extract_image(block, page_idx, page_count, source_metadata, base_unified_me
         "caption": "",
         "text": "",
         "image_location": bbox,
+        "width": width,
+        "height": height,
     }
 
     unified_metadata = base_unified_metadata.copy()

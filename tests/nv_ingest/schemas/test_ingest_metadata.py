@@ -15,6 +15,8 @@ from pydantic import ValidationError
 
 from nv_ingest.schemas import validate_metadata
 
+# TODO, add info message
+
 
 # Helper function to generate valid base metadata for modification in tests
 def get_valid_metadata():
