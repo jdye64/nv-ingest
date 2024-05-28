@@ -78,7 +78,16 @@ def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, i
 
     # Add task-source stage ("redis_listener")
     source_module_loader = RedisTaskSourceLoaderFactory.get_instance(
-        module_name="redis_listener", module_config=ingest_config.get("redis_task_source", {})
+        module_name="redis_listener",
+        module_config=ingest_config.get(
+            "redis_task_source",
+            {
+                "redis_client": {
+                    "host": message_provider_host,
+                    "port": message_provider_port,
+                }
+            },
+        ),
     )
     source_stage = pipe.add_stage(
         LinearModuleSourceStage(
@@ -173,7 +182,15 @@ def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, i
     # Add task-sink stage ("redis_task_sink")
     sink_module_loader = RedisTaskSinkLoaderFactory.get_instance(
         module_name="redis_task_sink",
-        module_config=ingest_config.get("redis_task_sink", {}),
+        module_config=ingest_config.get(
+            "redis_task_sink",
+            {
+                "redis_client": {
+                    "host": message_provider_host,
+                    "port": message_provider_port,
+                }
+            },
+        ),
     )
     sink_stage = pipe.add_stage(
         LinearModulesStage(
