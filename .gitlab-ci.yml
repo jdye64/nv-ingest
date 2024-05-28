@@ -207,6 +207,9 @@ publish:helm:
       optional: true
     - job: vault-init
       optional: true
+  script:
+    - helm cm-push -f "${CHART}" "${HELM_REPO_NAME}"
+
 
 ##################
 ###   PUBLISH  ###
