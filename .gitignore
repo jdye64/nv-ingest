@@ -205,6 +205,9 @@ viz_frames*
 # and user settings will go in .vscode/
 .vscode/
 
+# Pycharm settings
+.idea/
+
 # Ignore user-defined clangd settings
 .clangd
 

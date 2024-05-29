@@ -24,9 +24,14 @@
 
 import logging
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
+from typing import Dict
+from typing import List
+from typing import Tuple
 
 import fitz
+import pandas as pd
 
 from nv_ingest.schemas.metadata_schema import AccessLevelEnum
 from nv_ingest.schemas.metadata_schema import ContentTypeEnum
@@ -264,8 +269,12 @@ def pymupdf(pdf_stream, extract_text: bool, extract_images: bool, extract_tables
                 accumulated_text = []
 
             # extract page tables
+            # currently embedded tables will also part of the accumulated_text
             if extract_tables:
-                pass
+                for table in _extract_tables_using_pymupdf(page):
+                    extracted_data.append(
+                        _construct_table_metadata(table, page_idx, page_count, source_metadata, base_unified_metadata)
+                    )
 
         # Extract text - document (c)
         if (extract_text) and (text_depth == TextTypeEnum.DOCUMENT):
@@ -285,8 +294,6 @@ def pymupdf(pdf_stream, extract_text: bool, extract_images: bool, extract_tables
 
             if len(text_extraction) > 0:
                 extracted_data.append(text_extraction)
-
-            accumulated_text = []
 
     return extracted_data
 
@@ -410,3 +417,60 @@ def _extract_image(block, page_idx, page_count, source_metadata, base_unified_me
     validated_unified_metadata = validate_metadata(unified_metadata)
 
     return [ContentTypeEnum.IMAGE, validated_unified_metadata.dict(), str(uuid.uuid4())]
+
+
+@dataclass
+class Table:
+    df: pd.DataFrame
+    bbox: Tuple[int, int, int, int]
+
+
+def _extract_tables_using_pymupdf(page: fitz.Page) -> List[Table]:
+    """
+    Basic table extraction using PyMuPDF. This function extracts embedded tables from a PDF page.
+    """
+    # find tables that are marked by vector lines
+    # note that horizontal_strategy="text" does not work very well
+    tables = page.find_tables(horizontal_strategy="lines", vertical_strategy="lines").tables
+    table_dfs = [table.to_pandas() for table in tables]
+    # As df is eventually converted to markdown,
+    # remove any newlines, tabs, or extra spaces from the column names
+    for df in table_dfs:
+        df.columns = df.columns.str.replace(r"\s+", " ", regex=True)
+    bounding_boxes = [table.bbox for table in tables]
+    return [Table(df, bbox) for df, bbox in zip(table_dfs, bounding_boxes)]
+
+
+@pymupdf_exception_handler(descriptor="pymupdf")
+def _construct_table_metadata(
+    table: Table, page_idx: int, page_count: int, source_metadata: Dict, base_unified_metadata: Dict
+):
+    content_metadata = {
+        "type": ContentTypeEnum.STRUCTURED,
+        "description": StdContentDescEnum.PDF_TABLE,
+        "page_number": page_idx,
+        "hierarchy": {
+            "page_count": page_count,
+            "page": page_idx,
+            "line": -1,
+            "span": -1,
+        },
+    }
+    table_metadata = {
+        "caption": "",
+        "table_location": table.bbox,
+    }
+    ext_unified_metadata = base_unified_metadata.copy()
+
+    ext_unified_metadata.update(
+        {
+            "content": table.df.to_markdown(index=False),
+            "source_metadata": source_metadata,
+            "content_metadata": content_metadata,
+            "table_metadata": table_metadata,
+        }
+    )
+
+    validated_unified_metadata = validate_metadata(ext_unified_metadata)
+
+    return [ContentTypeEnum.STRUCTURED, validated_unified_metadata.dict(), str(uuid.uuid4())]

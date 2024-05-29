@@ -1,4 +1,6 @@
+import re
 from io import BytesIO
+from io import StringIO
 
 import pandas as pd
 import pytest
@@ -18,15 +20,22 @@ def document_df():
 
 
 @pytest.fixture
-def pdf_stream():
+def pdf_stream_test_pdf():
     with open("data/test.pdf", "rb") as f:
         pdf_stream = BytesIO(f.read())
     return pdf_stream
 
 
-def test_pymupdf_basic(pdf_stream, document_df):
+@pytest.fixture
+def pdf_stream_embedded_tables_pdf():
+    with open("data/embedded_table.pdf", "rb") as f:
+        pdf_stream = BytesIO(f.read())
+    return pdf_stream
+
+
+def test_pymupdf_basic(pdf_stream_test_pdf, document_df):
     extracted_data = pymupdf(
-        pdf_stream,
+        pdf_stream_test_pdf,
         extract_text=True,
         extract_images=False,
         extract_tables=False,
@@ -48,9 +57,9 @@ def test_pymupdf_basic(pdf_stream, document_df):
     "text_depth",
     ["span", TextTypeEnum.SPAN, "line", TextTypeEnum.LINE, "block", TextTypeEnum.BLOCK],
 )
-def test_pymupdf_text_depth_line(pdf_stream, document_df, text_depth):
+def test_pymupdf_text_depth_line(pdf_stream_test_pdf, document_df, text_depth):
     extracted_data = pymupdf(
-        pdf_stream,
+        pdf_stream_test_pdf,
         extract_text=True,
         extract_images=False,
         extract_tables=False,
@@ -73,9 +82,9 @@ def test_pymupdf_text_depth_line(pdf_stream, document_df, text_depth):
     "text_depth",
     ["page", TextTypeEnum.PAGE, "document", TextTypeEnum.DOCUMENT],
 )
-def test_pymupdf_text_depth_page(pdf_stream, document_df, text_depth):
+def test_pymupdf_text_depth_page(pdf_stream_test_pdf, document_df, text_depth):
     extracted_data = pymupdf(
-        pdf_stream,
+        pdf_stream_test_pdf,
         extract_text=True,
         extract_images=False,
         extract_tables=False,
@@ -94,9 +103,9 @@ def test_pymupdf_text_depth_page(pdf_stream, document_df, text_depth):
     assert extracted_data[0][1]["source_metadata"]["source_id"] == "source1"
 
 
-def test_pymupdf_extract_image(pdf_stream, document_df):
+def test_pymupdf_extract_image(pdf_stream_test_pdf, document_df):
     extracted_data = pymupdf(
-        pdf_stream,
+        pdf_stream_test_pdf,
         extract_text=True,
         extract_images=True,
         extract_tables=False,
@@ -113,3 +122,83 @@ def test_pymupdf_extract_image(pdf_stream, document_df):
     assert (
         extracted_data[1][1]["content"] == "Here is one line of text. Here is another line of text. Here is an image."
     )
+
+
+def read_markdown_table(table_str: str) -> pd.DataFrame:
+    """Read markdown table from string and return pandas DataFrame."""
+    # Ref: https://stackoverflow.com/a/76184953/
+    cleaned_table_str = re.sub(r"(?<=\|)( *[\S ]*? *)(?=\|)", lambda match: match.group(0).strip(), table_str)
+    df = (
+        pd.read_table(StringIO(cleaned_table_str), sep="|", header=0, skipinitialspace=True)
+        .dropna(axis=1, how="all")
+        .iloc[1:]
+    )
+    df.columns = df.columns.str.strip()
+    return df
+
+
+def test_pymupdf_table_extraction_on_pdf_with_no_tables(pdf_stream_test_pdf, document_df):
+    extracted_data = pymupdf(
+        pdf_stream_test_pdf,
+        extract_text=False,
+        extract_images=False,
+        extract_tables=True,
+        row_data=document_df.iloc[0],
+    )
+
+    assert isinstance(extracted_data, list)
+    assert len(extracted_data) == 0
+
+
+def test_pymupdf_table_extraction_on_pdf_with_tables(pdf_stream_embedded_tables_pdf, document_df):
+    """
+    Test to ensure pymupdf's table extraction is able to extract easy-to-read tables from a PDF.
+    """
+    extracted_data = pymupdf(
+        pdf_stream_embedded_tables_pdf,
+        extract_text=False,
+        extract_images=False,
+        extract_tables=True,
+        row_data=document_df.iloc[0],
+    )
+
+    assert isinstance(extracted_data, list)
+    assert len(extracted_data) == 8
+    assert all(len(x) == 3 for x in extracted_data)
+    assert all(x[0].value == "structured" for x in extracted_data)
+    assert [x[1]["content_metadata"]["page_number"] for x in extracted_data] == [0, 0, 0, 1, 1, 1, 1, 1]
+
+    tables_markdown_format = [x[1]["content"] for x in extracted_data]
+    dfs = [read_markdown_table(table_markdown_format) for table_markdown_format in tables_markdown_format]
+
+    # Computation table
+    assert list(dfs[0].columns) == ["Depen- dency", "Minimum Ver- sion", "Notes"]
+    assert any(["Alternative execution engine for rolling operations" in row for row in dfs[0]["Notes"].values])
+
+    # Excel files table
+    assert list(dfs[1].columns) == ["Dependency", "Minimum Version", "Notes"]
+    assert dfs[1]["Dependency"].to_list() == ["xlrd", "xlwt", "xlsxwriter", "openpyxl", "pyxlsb"]
+
+    # HTML table
+    assert list(dfs[2].columns) == ["Dependency", "Minimum Version", "Notes"]
+    assert dfs[2]["Dependency"].to_list() == ["BeautifulSoup4", "html5lib", "lxml"]
+
+    # XML table
+    assert list(dfs[3].columns) == ["Dependency", "Minimum Version", "Notes"]
+    assert dfs[3]["Dependency"].to_list() == ["lxml"]
+
+    # SQL databases table
+    assert list(dfs[4].columns) == ["Dependency", "Minimum Version", "Notes"]
+    assert dfs[4]["Dependency"].to_list() == ["SQLAlchemy", "psycopg2", "pymysql"]
+
+    # Other data sources table
+    assert list(dfs[5].columns) == ["Dependency", "Minimum Version", "Notes"]
+    assert dfs[5]["Dependency"].to_list() == ["PyTables", "blosc", "zlib", "fastparquet", "pyarrow", "pyreadstat"]
+
+    # Warning table
+    assert list(dfs[6].columns) == ["System", "Conda", "PyPI"]
+    assert dfs[6]["System"].to_list() == ["Linux", "macOS", "Windows"]
+
+    # Access data in the cloud table
+    assert list(dfs[7].columns) == ["Dependency", "Minimum Version", "Notes"]
+    assert dfs[7]["Dependency"].to_list() == ["fsspec", "gcsfs", "pandas-gbq", "s3fs"]
