@@ -57,6 +57,13 @@ def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, i
     logger.info(f"MESSAGE_CLIENT_HOST: {message_provider_host}")
     logger.info(f"MESSAGE_CLIENT_PORT: {message_provider_port}")
 
+    # Set URI to the caption classifier hosted by some Triton service
+    triton_service_caption_classifier = os.environ.get(
+        "CAPTION_CLASSIFIER_URI",
+        "http://triton:8000/v2/models/caption_classification/infer",
+    )
+    logger.info(f"CAPTION_CLASSIFIER_URI: {triton_service_caption_classifier}")
+
     default_cpu_count = math.floor(os.cpu_count() * 0.8)
 
     # Guard against the requested num_threads being larger than the physical cpu cores available.
@@ -163,7 +170,13 @@ def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, i
     )
 
     image_caption_loader = ImageCaptionExtractionLoaderFactory.get_instance(
-        module_name="image_caption_extractor", module_config=ingest_config.get("image_caption_extraction_module", {})
+        module_name="image_caption_extractor",
+        module_config=ingest_config.get(
+            "image_caption_extraction_module",
+            {
+                "endpoint_url": triton_service_caption_classifier,
+            },
+        ),
     )
     image_caption_stage = pipe.add_stage(
         LinearModulesStage(
