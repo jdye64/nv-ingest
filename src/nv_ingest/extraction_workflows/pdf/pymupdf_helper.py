@@ -234,19 +234,11 @@ def pymupdf(pdf_stream, extract_text: bool, extract_images: bool, extract_tables
                     page_nearby_blocks["text"]["bbox"].append(block["bbox"])
 
             if extract_images:
-                for block in blocks:
-                    # Extract images
-                    if (extract_images) and (block["type"] == 1):
-                        image_extraction = _extract_image(
-                            block,
-                            page_idx,
-                            page_count,
-                            source_metadata,
-                            base_unified_metadata,
-                            page_nearby_blocks,
-                        )
+                extracted_image_data = _extract_image_data(
+                    page, base_unified_metadata, page_count, page_idx, page_nearby_blocks, source_metadata
+                )
 
-                        extracted_data.append(image_extraction)
+                extracted_data.extend(extracted_image_data)
 
             # Extract text - page (b)
             if (extract_text) and (text_depth == TextTypeEnum.PAGE):
@@ -366,9 +358,43 @@ def _construct_text_metadata(
     return [ContentTypeEnum.TEXT, validated_unified_metadata.dict(), str(uuid.uuid4())]
 
 
+def _extract_image_data(
+    page: fitz.Page, base_unified_metadata, page_count, page_idx, page_nearby_blocks, source_metadata
+):
+    """
+    Extracts image data from a page.
+
+    There are several pitfalls when using pymupdf:
+    - Using page.get_images() may extract images from other pages,
+      see https://gitlab-master.nvidia.com/dl/ai-services/microservices/nv-ingest/-/issues/47
+    - Using blocks = page.get_text("dict", sort=True)["blocks"] may not extract all images.
+      This is confusing at first, as page.get_image_info() does return all visible images on a page.
+      According to the documentation, https://pymupdf.readthedocs.io/en/latest/page.html#Page.get_image_info
+      "page.get_image_info() is a subset of the dictionary output of page.get_text()".
+
+    Due to the issues mentioned above, it is imported to use clip=fitz.INFINITE_RECT() argument to be able to extract
+    images that may intersect with the pdf page boundaries.
+    """
+    blocks = page.get_text("dict", sort=True, clip=fitz.INFINITE_RECT())["blocks"]
+    image_blocks = [block for block in blocks if block["type"] == 1]
+    return [
+        _extract_image_from_imageblock(
+            block,
+            page_idx,
+            page_count,
+            source_metadata,
+            base_unified_metadata,
+            page_nearby_blocks,
+        )
+        for block in image_blocks
+    ]
+
+
 # need to add block text to hierarchy/nearby_objects, including bbox
 @pymupdf_exception_handler(descriptor="pymupdf")
-def _extract_image(block, page_idx, page_count, source_metadata, base_unified_metadata, page_nearby_blocks):
+def _extract_image_from_imageblock(
+    block, page_idx, page_count, source_metadata, base_unified_metadata, page_nearby_blocks
+):
     image_type = block["ext"]
     if ImageTypeEnum.has_value(image_type):
         image_type = ImageTypeEnum[image_type.upper()]
