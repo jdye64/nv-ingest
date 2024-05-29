@@ -29,6 +29,10 @@ ECLAIR_TRITON_HOST = os.environ.get("ECLAIR_TRITON_HOST", "localhost")
 ECLAIR_TRITON_PORT = os.environ.get("ECLAIR_TRITON_PORT", "8001")
 ECLAIR_BATCH_SIZE = os.environ.get("ECLAIR_TRITON_PORT", "16")
 
+UNSTRUCTURED_API_KEY = os.environ.get("UNSTRUCTURED_API_KEY", None)
+UNSTRUCTURED_URL = os.environ.get("UNSTRUCTURED_URL", "https://api.unstructured.io/general/v0/general")
+UNSTRUCTURED_STRATEGY = os.environ.get("UNSTRUCTURED_STRATEGY", "auto")
+
 _DEFAULT_EXTRACTOR_MAP = {
     "pdf": "pymupdf",
     "docx": "python_docx",
@@ -45,8 +49,7 @@ _Type_Extract_Method_PDF = Literal[
     "eclair",
     "haystack",
     "tika",
-    "unstructured_local",
-    "unstructured_service",
+    "unstructured_io",
     "llama_parse",
 ]
 
@@ -174,5 +177,11 @@ class ExtractTask(Task):
                 "eclair_batch_size": os.environ.get("ECLAIR_BATCH_SIZE", ECLAIR_BATCH_SIZE),
             }
             task_properties["params"].update(eclair_properties)
-
+        elif self._extract_method == "unstructured_io":
+            unstructured_properties = {
+                "unstructured_api_key": os.environ.get("UNSTRUCTURED_API_KEY", UNSTRUCTURED_API_KEY),
+                "unstructured_url": os.environ.get("UNSTRUCTURED_URL", UNSTRUCTURED_URL),
+                "unstructured_strategy": os.environ.get("UNSTRUCTURED_STRATEGY", UNSTRUCTURED_STRATEGY),
+            }
+            task_properties["params"].update(unstructured_properties)
         return {"type": "extract", "task_properties": task_properties}

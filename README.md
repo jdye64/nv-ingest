@@ -350,9 +350,8 @@ nv-ingest-cli \
 
 Submit a PDF file with splitting and extraction tasks.
 
-**Note: (TODO)** This currently only works for pymupdf and eclair; haystack, Adobe, LlamaParse, and Unstructured.io have
-existing
-workflows but have not been fully converted to use our unified metadata schema.
+**Note: (TODO)** This currently only works for pymupdf, eclair, and Unstructured.io; haystack, Adobe, and LlamaParse have
+existing workflows but have not been fully converted to use our unified metadata schema.
 
 ```bash
 nv-ingest-cli \

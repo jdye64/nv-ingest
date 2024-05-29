@@ -8,8 +8,6 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
-from unittest.mock import MagicMock
-from unittest.mock import patch
 
 import pandas as pd
 import pytest
