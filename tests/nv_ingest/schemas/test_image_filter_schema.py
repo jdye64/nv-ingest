@@ -22,7 +22,6 @@ def valid_module_config():
 
 
 def test_task_type_str_bool():
-
     img_filter_module_config = valid_module_config()
     img_filter_module_config["raise_on_failure"] = bool(img_filter_module_config["raise_on_failure"])
     _ = ImageFilterSchema(**img_filter_module_config)
@@ -30,7 +29,6 @@ def test_task_type_str_bool():
 
 @pytest.mark.parametrize("dtype", [int, float, str])
 def test_task_type_str_bool_sensitivity(dtype):
-
     img_filter_module_config = valid_module_config()
     img_filter_module_config["raise_on_failure"] = dtype(img_filter_module_config["raise_on_failure"])
 

@@ -241,6 +241,11 @@ class ImageMetadataSchema(BaseModelNoExt):
     height: int = 0
 
 
+class TableMetadataSchema(BaseModelNoExt):
+    caption: str = ""
+    table_location: tuple = (0, 0, 0, 0)
+
+
 # TODO consider deprecating this in favor of info msg...
 class ErrorMetadataSchema(BaseModelNoExt):
     task: TaskTypeEnum
@@ -263,6 +268,7 @@ class MetadataSchema(BaseModelNoExt):
     content_metadata: Optional[ContentMetadataSchema] = None
     text_metadata: Optional[TextMetadataSchema] = None
     image_metadata: Optional[ImageMetadataSchema] = None
+    table_metadata: Optional[TableMetadataSchema] = None
     error_metadata: Optional[ErrorMetadataSchema] = None
     info_message_metadata: Optional[InfoMessageMetadataSchema] = None
     raise_on_failure: bool = False
@@ -274,6 +280,8 @@ class MetadataSchema(BaseModelNoExt):
             values["text_metadata"] = None
         if content_type != ContentTypeEnum.IMAGE:
             values["image_metadata"] = None
+        if content_type != ContentTypeEnum.STRUCTURED:
+            values["table_metadata"] = None
         return values
 
 
