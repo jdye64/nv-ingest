@@ -68,4 +68,9 @@ else
 fi
 
 # Build and push the Docker image using Kaniko
-/kaniko/executor --context $SCRIPT_DIR/../.. --dockerfile $SCRIPT_DIR/../../Dockerfile --destination $CI_REGISTRY_IMAGE:$TAG --build-arg VERSION=$VERSION --build-arg TYPE=$TYPE
+/kaniko/executor --context $SCRIPT_DIR/../.. \
+  --dockerfile $SCRIPT_DIR/../../Dockerfile \
+  --destination $CI_REGISTRY_IMAGE:$TAG \
+  --build-arg VERSION=$VERSION \
+  --build-arg TYPE=$TYPE \
+  --target runtime
