@@ -38,6 +38,7 @@ from nv_ingest.schemas.metadata_schema import ContentTypeEnum
 from nv_ingest.schemas.metadata_schema import ImageTypeEnum
 from nv_ingest.schemas.metadata_schema import SourceTypeEnum
 from nv_ingest.schemas.metadata_schema import StdContentDescEnum
+from nv_ingest.schemas.metadata_schema import TableFormatEnum
 from nv_ingest.schemas.metadata_schema import TextTypeEnum
 from nv_ingest.schemas.metadata_schema import validate_metadata
 from nv_ingest.util.converters import bytetools
@@ -458,6 +459,7 @@ def _construct_table_metadata(
     }
     table_metadata = {
         "caption": "",
+        "table_format": TableFormatEnum.MARKDOWN,
         "table_location": table.bbox,
     }
     ext_unified_metadata = base_unified_metadata.copy()

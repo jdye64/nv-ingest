@@ -140,6 +140,11 @@ class ImageTypeEnum(str, Enum):
         return value in cls._value2member_map_
 
 
+class TableFormatEnum(str, Enum):
+    HTML = "html"
+    MARKDOWN = "markdown"
+
+
 class TaskTypeEnum(str, Enum):
     CAPTION = "caption"
     EMBED = "embed"
@@ -243,6 +248,7 @@ class ImageMetadataSchema(BaseModelNoExt):
 
 class TableMetadataSchema(BaseModelNoExt):
     caption: str = ""
+    table_format: TableFormatEnum
     table_location: tuple = (0, 0, 0, 0)
 
 

@@ -15,6 +15,6 @@ PyMuPDF==1.23.21 # required for pdf extraction, post 1.23.22 fails parsing some 
 redis~=5.0.1
 sentence_transformers==2.3.1
 setuptools
-unstructured-client==0.18.0
+unstructured-client==0.22.0
 python-Levenshtein==0.25.0
 python-docx
