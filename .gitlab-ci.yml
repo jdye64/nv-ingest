@@ -99,6 +99,9 @@ lint:
 test:
   extends: .python-basics
   stage: test
+  tags:
+    - h100
+
   script:
     - pip install -r test-requirements.txt
     - pytest -rs --cov nv_ingest --cov nv_ingest_client --cov-report term --cov-report xml:coverage.xml tests/nv_ingest tests/nv_ingest_client
