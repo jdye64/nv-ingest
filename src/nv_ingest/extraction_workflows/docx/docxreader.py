@@ -357,7 +357,7 @@ class DocxReader:
 
         content_metadata = {
             "type": ContentTypeEnum.IMAGE,
-            "description": StdContentDescEnum.PDF_IMAGE,
+            "description": StdContentDescEnum.DOCX_IMAGE,
             "page_number": page_idx,
             "hierarchy": {
                 "page_count": page_count,
@@ -418,7 +418,7 @@ class DocxReader:
         page_number = 0 if text_depth == TextTypeEnum.PAGE else -1
         content_metadata = {
             "type": ContentTypeEnum.TEXT,
-            "description": StdContentDescEnum.PDF_TEXT,
+            "description": StdContentDescEnum.DOCX_TEXT,
             "page_number": page_number,
             "hierarchy": {
                 "page_count": 1,

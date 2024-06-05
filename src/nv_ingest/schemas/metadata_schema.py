@@ -27,6 +27,8 @@ from nv_ingest.util.converters import datetools
 # Do we want types and similar items to be enums or just strings?
 class SourceTypeEnum(str, Enum):
     PDF = "pdf"
+    DOCX = "docx"
+    PPTX = "pptx"
     source_type_1 = "source_type_1"
     source_type_2 = "source_type_2"
 
@@ -48,6 +50,12 @@ class StdContentDescEnum(str, Enum):
     PDF_TEXT = "Unstructured text from PDF document."
     PDF_IMAGE = "Image extracted from PDF document."
     PDF_TABLE = "Structured table extracted from PDF document."
+    DOCX_TEXT = "Unstructured text from DOCX document."
+    DOCX_IMAGE = "Image extracted from DOCX document."
+    DOCX_TABLE = "Structured table extracted from DOCX document."
+    PPTX_TEXT = "Unstructured text from PPTX presentation."
+    PPTX_IMAGE = "Image extracted from PPTX presentation."
+    PPTX_TABLE = "Structured table extracted from PPTX presentation."
 
 
 class TextTypeEnum(str, Enum):

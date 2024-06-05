@@ -35,6 +35,7 @@ from nv_ingest.modules.transforms.nemo_doc_splitter import NemoDocSplitterLoader
 from nv_ingest.schemas.ingest_pipeline_config_schema import IngestPipelineConfigSchema
 from nv_ingest.stages.docx_extractor_stage import generate_docx_extractor_stage
 from nv_ingest.stages.pdf_extractor_stage import generate_pdf_extractor_stage
+from nv_ingest.stages.pptx_extractor_stage import generate_pptx_extractor_stage
 from nv_ingest.stages.storages.image_storage_stage import ImageStorageStage
 from nv_ingest.util.converters.containers import merge_dict
 from nv_ingest.util.logging.configuration import LogLevel
@@ -140,6 +141,16 @@ def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, i
         )
     )
 
+    # Add pptx extraction stage
+    pptx_extractor_stage = pipe.add_stage(
+        generate_pptx_extractor_stage(
+            morpheus_pipeline_config,
+            pe_count=default_cpu_count,
+            task="pptx-extract",
+            task_desc="pptx_content_extractor",
+        )
+    )
+
     image_filter_loader = ImageFilterLoaderFactory.get_instance(module_name="filter_images", module_config={})
 
     image_filter_stage = pipe.add_stage(
@@ -220,7 +231,8 @@ def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, i
     pipe.add_edge(source_stage, metadata_injector_stage)
     pipe.add_edge(metadata_injector_stage, pdf_extractor_stage)
     pipe.add_edge(pdf_extractor_stage, docx_extractor_stage)
-    pipe.add_edge(docx_extractor_stage, image_filter_stage)
+    pipe.add_edge(docx_extractor_stage, pptx_extractor_stage)
+    pipe.add_edge(pptx_extractor_stage, image_filter_stage)
     pipe.add_edge(image_filter_stage, nemo_splitter_stage)
     pipe.add_edge(nemo_splitter_stage, image_caption_stage)
     pipe.add_edge(image_caption_stage, image_storage_stage)
