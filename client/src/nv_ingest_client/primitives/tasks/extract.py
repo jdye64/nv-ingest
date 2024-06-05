@@ -55,9 +55,12 @@ _Type_Extract_Method_PDF = Literal[
 
 _Type_Extract_Method_DOCX = Literal["python_docx", "haystack", "unstructured_local", "unstructured_service"]
 
+_Type_Extract_Method_PPTX = Literal["python_pptx", "haystack", "unstructured_local", "unstructured_service"]
+
 _Type_Extract_Method_Map = {
     "pdf": get_args(_Type_Extract_Method_PDF),
     "docx": get_args(_Type_Extract_Method_DOCX),
+    "pptx": get_args(_Type_Extract_Method_PPTX),
 }
 
 

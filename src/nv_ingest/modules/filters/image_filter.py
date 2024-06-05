@@ -2,7 +2,6 @@ import logging
 
 import mrc
 import mrc.core.operators as ops
-import pandas as pd
 from morpheus.messages import ControlMessage
 from morpheus.messages import MessageMeta
 from morpheus.utils.module_utils import ModuleLoaderFactory

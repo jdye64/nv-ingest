@@ -35,6 +35,7 @@ from typing import Union
 
 from nv_ingest.extraction_workflows.docx.docxreader import DocxReader
 from nv_ingest.schemas.metadata_schema import AccessLevelEnum
+from nv_ingest.schemas.metadata_schema import SourceTypeEnum
 from nv_ingest.schemas.metadata_schema import TextTypeEnum
 
 logger = logging.getLogger(__name__)
@@ -99,7 +100,7 @@ def python_docx(docx: Union[str, Path, IO], extract_text: bool, extract_images: 
         "source_name": source_id,
         "source_id": source_id,
         "source_location": source_location,
-        "source_type": "docx",
+        "source_type": SourceTypeEnum.DOCX,
         "collection_id": collection_id,
         "partition_id": partition_id,
         "access_level": access_level,
