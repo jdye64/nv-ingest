@@ -38,7 +38,8 @@ logger = logging.getLogger(__name__)
 MODULE_NAME = "image_storage"
 MODULE_NAMESPACE = "nv_ingest"
 
-_DEFAULT_ENDPOINT = os.environ.get("MINIO_ADDRESS", "localhost:9000")
+_DEFAULT_ENDPOINT = os.environ.get("MINIO_INTERNAL_ADDRESS", "localhost:9000")
+_DEFAULT_READ_ADDRESS = os.environ.get("MINIO_PUBLIC_ADDRESS", "http://localhost:9000")
 _DEFAULT_BUCKET_NAME = "nv-ingest"
 
 ImageStorageLoaderFactory = ModuleLoaderFactory(MODULE_NAME, MODULE_NAMESPACE, ImageStorageModuleSchema)
@@ -90,7 +91,7 @@ def upload_images(df: pd.DataFrame, params: Dict[str, Any]) -> pd.DataFrame:
             length=len(content),
         )
 
-        metadata["image_metadata"]["uploaded_image_url"] = f"http://{endpoint}/{bucket_name}/{destination_file}"
+        metadata["image_metadata"]["uploaded_image_url"] = f"{_DEFAULT_READ_ADDRESS}/{bucket_name}/{destination_file}"
 
         # TODO: validate metadata before putting it back in.
         df.iloc[idx]["metadata"] = metadata
