@@ -150,6 +150,19 @@ Tasks and Options:
     Options:
       N/A
 \b
+- dedup: Idenfities and optionally filters duplicate images in extraction.
+    Options:
+      - content_type (str): Content type to deduplicate ('image')
+      - filter (bool): When set to True, duplicates will be filtered, otherwise, an info message will be added.
+\b
+- filter: Idenfities and optionally filters images above or below scale thresholds.
+    Options:
+      - content_type (str): Content type to deduplicate ('image')
+      - min_size: (Union[float, int]): Minimum allowable size of extracted image.
+      - max_aspect_ratio: (Union[float, int]): Maximum allowable aspect ratio of extracted image.
+      - min_aspect_ratio: (Union[float, int]): Minimum allowable aspect ratio of extracted image.
+      - filter (bool): When set to True, duplicates will be filtered, otherwise, an info message will be added.
+\b
 Note: The 'extract_method' automatically selects the optimal method based on 'document_type' if not explicitly stated.
 """,
 )

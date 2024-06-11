@@ -24,6 +24,7 @@ from morpheus.stages.general.linear_modules_stage import LinearModulesStage
 from morpheus.stages.general.monitor_stage import MonitorStage
 from morpheus.stages.general.trigger_stage import TriggerStage
 
+from nv_ingest.modules.filters.image_dedup import ImageDedupLoaderFactory
 from nv_ingest.modules.filters.image_filter import ImageFilterLoaderFactory
 from nv_ingest.stages.pdf_extractor_stage import generate_pdf_extractor_stage
 from nv_ingest.stages.pdf_memory_source_stage import PdfMemoryFileSource
@@ -68,7 +69,7 @@ def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
     n_pe_workers = 23
     dataset_json = "/workspace/src/.tmp/new_test_output_100MB.json"
     delayed_start = True
-    repeat_count = 10
+    repeat_count = 1
 
     with open(dataset_json, "r") as f:
         source_config = json.load(f)
@@ -86,6 +87,28 @@ def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
         MonitorStage(
             config,
             description="Extractor Throughput",
+            unit="extractions",
+            delayed_start=delayed_start,
+        )
+    )
+
+    image_dedup_loader = ImageDedupLoaderFactory.get_instance(module_name="dedup_images", module_config={})
+
+    image_dedup_stage = pipe.add_stage(
+        LinearModulesStage(
+            config,
+            image_dedup_loader,
+            input_type=ControlMessage,
+            output_type=ControlMessage,
+            input_port_name="input",
+            output_port_name="output",
+        )
+    )
+
+    image_dedup_monitor = pipe.add_stage(
+        MonitorStage(
+            config,
+            description="Image Dedup Throughput",
             unit="extractions",
             delayed_start=delayed_start,
         )
@@ -128,7 +151,9 @@ def setup_pdf_ingest_pipe(pipe: Pipeline, config: Config):
     pipe.add_edge(source_monitor, trigger_stage)
     pipe.add_edge(trigger_stage, extractor_stage)
     pipe.add_edge(extractor_stage, extractor_monitor)
-    pipe.add_edge(extractor_monitor, image_filter_stage)
+    pipe.add_edge(extractor_monitor, image_dedup_stage)
+    pipe.add_edge(image_dedup_stage, image_dedup_monitor)
+    pipe.add_edge(image_dedup_monitor, image_filter_stage)
     pipe.add_edge(image_filter_stage, image_filter_monitor)
     pipe.add_edge(image_filter_monitor, no_op)
     pipe.add_edge(no_op, pipeline_monitor)

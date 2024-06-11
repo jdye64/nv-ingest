@@ -22,6 +22,7 @@ from pydantic import root_validator
 from pydantic import validator
 
 from nv_ingest.schemas.base_model_noext import BaseModelNoExt
+from nv_ingest.schemas.metadata_schema import ContentTypeEnum
 
 
 # Enums
@@ -44,14 +45,7 @@ class TaskTypeEnum(str, Enum):
     caption = "caption"
     store = "store"
     filter = "filter"
-
-
-class FilterTypeEnum(str, Enum):
-    image = "image"
-
-
-class ContentTypeEnum(str, Enum):
-    image = "image"
+    dedup = "dedup"
 
 
 class TracingOptionsSchema(BaseModelNoExt):
@@ -120,18 +114,28 @@ class IngestTaskFilterParamsSchema(BaseModelNoExt):
 
 
 class IngestTaskFilterSchema(BaseModelNoExt):
-    type: FilterTypeEnum
-    params: IngestTaskFilterParamsSchema
+    content_type: ContentTypeEnum = ContentTypeEnum.IMAGE
+    params: IngestTaskFilterParamsSchema = IngestTaskFilterParamsSchema()
+
+
+class IngestTaskDedupParams(BaseModelNoExt):
+    filter: bool = False
+
+
+class IngestTaskDedupSchema(BaseModelNoExt):
+    content_type: ContentTypeEnum = ContentTypeEnum.IMAGE
+    params: IngestTaskDedupParams = IngestTaskDedupParams()
 
 
 class IngestTaskSchema(BaseModelNoExt):
     type: TaskTypeEnum
     task_properties: Union[
-        IngestTaskEmbedSchema,
-        IngestTaskExtractSchema,
         IngestTaskSplitSchema,
-        IngestTaskCaptionSchema,
+        IngestTaskExtractSchema,
         IngestTaskStoreSchema,
+        IngestTaskEmbedSchema,
+        IngestTaskCaptionSchema,
+        IngestTaskDedupSchema,
         IngestTaskFilterSchema,
     ]
     raise_on_failure: bool = False
@@ -146,6 +150,7 @@ class IngestTaskSchema(BaseModelNoExt):
                 TaskTypeEnum.store: IngestTaskStoreSchema,
                 TaskTypeEnum.embed: IngestTaskEmbedSchema,
                 TaskTypeEnum.caption: IngestTaskCaptionSchema,
+                TaskTypeEnum.dedup: IngestTaskDedupSchema,
                 TaskTypeEnum.filter: IngestTaskFilterSchema,  # Extend this mapping as necessary
             }.get(task_type)
 

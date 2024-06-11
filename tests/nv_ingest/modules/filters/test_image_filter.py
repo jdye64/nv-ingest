@@ -13,6 +13,7 @@ import pandas as pd
 import pytest
 
 from nv_ingest.modules.filters.image_filter import _apply_filter
+from nv_ingest.modules.filters.image_filter import _cpu_only_apply_filter
 from nv_ingest.schemas.metadata_schema import ContentTypeEnum
 from nv_ingest.schemas.metadata_schema import ImageTypeEnum
 from nv_ingest.schemas.metadata_schema import SourceTypeEnum
@@ -121,8 +122,35 @@ def test_apply_filter(should_filter, width, height, expected0, expected1):
     msg_meta = MessageMeta(df=extracted_gdf)
     ctrl_msg.payload(msg_meta)
 
-    ctrl_msg = _apply_filter(ctrl_msg, task_params)
+    _apply_filter(ctrl_msg, task_params)
 
     with ctrl_msg.payload().mutable_dataframe() as mdf:
         assert mdf.shape[0] == expected0
         assert (mdf.iloc[0:3]["document_type"] == ContentTypeEnum.INFO_MSG.value).sum() == expected1
+
+
+@pytest.mark.parametrize(
+    "should_filter, width, height, expected0, expected1",
+    [
+        (True, 1, 1, 0, 0),  # filter small image
+        (True, 1, 100, 0, 0),  # filter small aspect ratio
+        (True, 100, 1, 0, 0),  # filter large aspect ratio
+        (False, 1, 1, 3, 3),  # no-filter small image
+        (False, 1, 100, 3, 3),  # no-filter small aspect ratio
+        (False, 100, 1, 3, 3),  # no-filter large aspect ratio
+    ],
+)
+def test_cpu_only_apply_filter(should_filter, width, height, expected0, expected1):
+    task = valid_image_filter_task(should_filter)
+    task_props = task.get("task_properties")
+    task_params = task_props.get("params")
+
+    payload_list = []
+    for _ in range(3):
+        payload_list.append(valid_image_filter_payload(ContentTypeEnum.IMAGE, width, height))
+
+    extracted_df = pd.DataFrame(payload_list, columns=["document_type", "metadata"])
+    result_df = _cpu_only_apply_filter(extracted_df, task_params)
+
+    assert result_df.shape[0] == expected0
+    assert (result_df.iloc[0:3]["document_type"] == ContentTypeEnum.INFO_MSG).sum() == expected1

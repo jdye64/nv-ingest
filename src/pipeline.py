@@ -26,6 +26,7 @@ from morpheus.stages.general.linear_modules_source import LinearModuleSourceStag
 from morpheus.stages.general.linear_modules_stage import LinearModulesStage
 from pydantic import ValidationError
 
+from nv_ingest.modules.filters.image_dedup import ImageDedupLoaderFactory
 from nv_ingest.modules.filters.image_filter import ImageFilterLoaderFactory
 from nv_ingest.modules.injectors.metadata_injector import MetadataInjectorLoaderFactory
 from nv_ingest.modules.sinks.redis_task_sink import RedisTaskSinkLoaderFactory
@@ -151,6 +152,19 @@ def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, i
         )
     )
 
+    image_dedup_loader = ImageDedupLoaderFactory.get_instance(module_name="dedup_images", module_config={})
+
+    image_dedup_stage = pipe.add_stage(
+        LinearModulesStage(
+            morpheus_pipeline_config,
+            image_dedup_loader,
+            input_type=ControlMessage,
+            output_type=ControlMessage,
+            input_port_name="input",
+            output_port_name="output",
+        )
+    )
+
     image_filter_loader = ImageFilterLoaderFactory.get_instance(module_name="filter_images", module_config={})
 
     image_filter_stage = pipe.add_stage(
@@ -232,7 +246,8 @@ def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, i
     pipe.add_edge(metadata_injector_stage, pdf_extractor_stage)
     pipe.add_edge(pdf_extractor_stage, docx_extractor_stage)
     pipe.add_edge(docx_extractor_stage, pptx_extractor_stage)
-    pipe.add_edge(pptx_extractor_stage, image_filter_stage)
+    pipe.add_edge(pptx_extractor_stage, image_dedup_stage)
+    pipe.add_edge(image_dedup_stage, image_filter_stage)
     pipe.add_edge(image_filter_stage, nemo_splitter_stage)
     pipe.add_edge(nemo_splitter_stage, image_caption_stage)
     pipe.add_edge(image_caption_stage, image_storage_stage)

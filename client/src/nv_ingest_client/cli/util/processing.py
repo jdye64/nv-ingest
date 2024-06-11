@@ -296,6 +296,12 @@ def create_job_specs_for_batch(files_batch: List[str], tasks: Dict, client: NvIn
         if "caption" in tasks:
             job_spec.add_task(tasks["caption"])
 
+        if "dedup" in tasks:
+            job_spec.add_task(tasks["dedup"])
+
+        if "filter" in tasks:
+            job_spec.add_task(tasks["filter"])
+
         job_id = client.add_job(job_spec)
         job_ids.append(job_id)
 

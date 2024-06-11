@@ -51,11 +51,19 @@ def valid_task_properties(task_type):
         }
     elif task_type == TaskTypeEnum.filter:
         return {
-            "type": "image",
+            "content_type": "image",
             "params": {
                 "min_size": 256,
                 "max_aspect_ratio": 5.0,
                 "min_aspect_ratio": 0.2,
+                "filter": True,
+            },
+        }
+    elif task_type == TaskTypeEnum.dedup:
+        return {
+            "content_type": "image",
+            "params": {
+                "filter": True,
             },
         }
 
@@ -180,12 +188,19 @@ def test_multiple_task_types():
             {
                 "type": "filter",
                 "task_properties": {
-                    "type": "image",
+                    "content_type": "image",
                     "params": {
                         "min_size": 256,
                         "max_aspect_ratio": 5.0,
                         "min_aspect_ratio": 0.2,
                     },
+                },
+            },
+            {
+                "type": "dedup",
+                "task_properties": {
+                    "content_type": "image",
+                    "params": {"filter": True},
                 },
             },
         ],

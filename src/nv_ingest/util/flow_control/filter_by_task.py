@@ -8,7 +8,10 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
+import typing
 from functools import wraps
+
+from morpheus.messages import ControlMessage
 
 
 def filter_by_task(required_tasks, forward_func=None):
@@ -79,3 +82,42 @@ def _is_subset(superset, subset):
             return all(any(_is_subset(subitem, superitem) for superitem in superset) for subitem in subset)
         case _:
             return subset == superset
+
+
+def remove_task_subset(ctrl_msg: ControlMessage, task_type: typing.List, subset: typing.Dict):
+    """
+    A helper function to extract a task based on subset matching when the task might be out of order wrt the
+    Morpheus pipeline. For example, if a deduplication filter occurs before scale filtering in the pipeline, but
+    the task list includes scale filtering before deduplication.
+
+    Parameters
+    ----------
+    ctrl_msg : ControlMessage
+        A list of task keys to check for in the ControlMessage.
+    task_type : list
+        The name of the ControlMessage task to operate on.
+    subset : dict
+        The subset of the ControlMessage task to match on.
+
+    Returns
+    -------
+    dict
+        A dictionary representing the matched ControlMessage task properties.
+    """
+
+    filter_tasks = []
+    ctrl_msg_tasks = ctrl_msg.get_tasks()
+
+    for task in ctrl_msg_tasks:
+        if task == task_type:
+            for _ in ctrl_msg_tasks[task_type]:
+                task_props = ctrl_msg.remove_task(task_type)
+                if _is_subset(task_props, subset):
+                    break
+                filter_tasks.append(task_props)
+            break
+
+    for filter_task in filter_tasks:
+        ctrl_msg.add_task(task_type, filter_task)
+
+    return task_props

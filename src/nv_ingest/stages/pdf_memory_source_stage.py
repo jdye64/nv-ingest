@@ -15,9 +15,8 @@ import time
 import typing
 import uuid
 
-import mrc
-
 # pylint: disable=morpheus-incorrect-lib-from-import
+import mrc
 from morpheus.cli import register_stage
 from morpheus.config import Config
 from morpheus.config import PipelineModes
@@ -64,7 +63,9 @@ class PdfMemoryFileSource(PreallocatorMixin, SingleOutputSource):
         self._load_pdfs()
 
     def _load_pdfs(self):
-        pdf_files = self._source_config["sampled_files"]  # [5:6]#[:1]
+        pdf_files = [
+            "/workspace/data/LEGO_EBook_US_Fall_2023_Small.pdf"
+        ]  # self._source_config["sampled_files"]  # [5:6]#[:1]
         self._jobs = []
 
         for pdf_path in pdf_files[:]:
@@ -110,9 +111,18 @@ class PdfMemoryFileSource(PreallocatorMixin, SingleOutputSource):
                         },
                     },
                     {
+                        "type": "dedup",
+                        "task_properties": {
+                            "content_type": "image",
+                            "params": {
+                                "filter": True,
+                            },
+                        },
+                    },
+                    {
                         "type": "filter",
                         "task_properties": {
-                            "type": "image",
+                            "content_type": "image",
                             "params": {
                                 "min_size": 256,
                                 "max_aspect_ratio": 5.0,
