@@ -2,6 +2,7 @@ import logging
 
 import mrc
 import mrc.core.operators as ops
+import pandas as pd
 from morpheus.messages import ControlMessage
 from morpheus.messages import MessageMeta
 from morpheus.utils.module_utils import ModuleLoaderFactory
@@ -27,6 +28,65 @@ MODULE_NAMESPACE = "nv-ingest"
 ImageFilterLoaderFactory = ModuleLoaderFactory(MODULE_NAME, MODULE_NAMESPACE, ImageFilterSchema)
 
 
+def add_info_message(x, info_msg):
+    x["info_message_metadata"] = info_msg
+
+    return x
+
+
+def calculate_average_image_size(x):
+    return (x["image_metadata"]["width"] + x["image_metadata"]["height"]) / 2
+
+
+def calculate_aspect_ratio(x):
+    return x["image_metadata"]["width"] / max(x["image_metadata"]["height"], 1e-9)
+
+
+def _cpu_only_apply_filter(df: pd.DataFrame, task_params: dict):
+    min_size = task_params.get("min_size")
+    max_aspect_ratio = task_params.get("max_aspect_ratio")
+    min_aspect_ratio = task_params.get("min_aspect_ratio")
+    filter_images = task_params.get("filter", False)
+
+    # return if no images
+    image_mask = df["document_type"] == ContentTypeEnum.IMAGE
+    if not image_mask.any():
+        return df[image_mask]
+
+    df_image = df.loc[image_mask]
+    avg_size = df_image["metadata"].apply(calculate_average_image_size)
+    avg_size_mask = avg_size > min_size
+    aspect_ratio = df_image["metadata"].apply(calculate_aspect_ratio)
+    min_aspect_ratio_mask = aspect_ratio > min_aspect_ratio
+    max_aspect_ratio_mask = aspect_ratio < max_aspect_ratio
+    image_filter_mask = ~(avg_size_mask & min_aspect_ratio_mask & max_aspect_ratio_mask)
+    filter_bool = image_filter_mask.any()
+
+    if filter_bool:
+        filtered_df = df_image.loc[image_filter_mask].copy()
+
+        if filter_images:
+            df.drop(labels=filtered_df.index, inplace=True)
+            return df
+
+        info_msg = {
+            "task": TaskTypeEnum.FILTER,
+            "status": StatusEnum.SUCCESS,
+            "message": "Filtered due to image size.",
+            "filter": True,
+        }
+
+        validated_info_msg = validate_schema(info_msg, InfoMessageMetadataSchema).dict()
+
+        filtered_df["info_message_metadata"] = [validated_info_msg] * filtered_df.shape[0]
+        filtered_df["metadata"] = filtered_df["metadata"].apply(add_info_message, args=(info_msg,))
+
+        df.loc[filtered_df.index, "metadata"] = filtered_df["metadata"]
+        df.loc[filtered_df.index, "document_type"] = ContentTypeEnum.INFO_MSG
+
+    return df
+
+
 def _apply_filter(ctrl_msg: ControlMessage, task_params: dict):
     min_size = task_params.get("min_size")
     max_aspect_ratio = task_params.get("max_aspect_ratio")
@@ -37,7 +97,7 @@ def _apply_filter(ctrl_msg: ControlMessage, task_params: dict):
         # return if no images
         image_mask = mdf["document_type"] == ContentTypeEnum.IMAGE.value
         if not image_mask.any():
-            return ctrl_msg
+            return
 
         # detect undesirable images
         base_cols = mdf.columns
@@ -63,8 +123,7 @@ def _apply_filter(ctrl_msg: ControlMessage, task_params: dict):
                 result_gdf = cudf.from_pandas(result_gdf.to_pandas())
                 message_meta = MessageMeta(df=result_gdf)
                 ctrl_msg.payload(message_meta)
-
-                return ctrl_msg
+                return
 
             # explode to extract individual metadata structs
             mdf_temp = mdf["metadata"].struct.explode()
@@ -90,8 +149,6 @@ def _apply_filter(ctrl_msg: ControlMessage, task_params: dict):
             mdf["metadata"] = mdf[exploded_metadata_cols + ["info_message_metadata"]].to_struct()
             mdf.drop(labels=mdf.columns.difference(base_cols), inplace=True, axis=1)
 
-    return ctrl_msg
-
 
 @register_module(MODULE_NAME, MODULE_NAMESPACE)
 def _filter_images(builder: mrc.Builder):
@@ -108,13 +165,28 @@ def _filter_images(builder: mrc.Builder):
         # https://gitlab-master.nvidia.com/daustin/govdocs_ingest/-/blob/main/govdocs_ingest.py?ref_type=heads#L258
 
         task_props = ctrl_msg.remove_task("filter")
-        filter_type = task_props.get("type")
-        task_params = task_props.get("params")
+        content_type = task_props.get("content_type")
+        task_params = task_props.get("params", {})
+        filter_flag = task_params.get("filter", True)
 
-        if filter_type != ContentTypeEnum.IMAGE:
+        logger.info(f"Filtering images by scale with filter_flag={filter_flag}")
+
+        if content_type != ContentTypeEnum.IMAGE:
             return ctrl_msg
 
-        ctrl_msg = _apply_filter(ctrl_msg, task_params)
+        if validated_config.cpu_only:
+            with ctrl_msg.payload().mutable_dataframe() as mdf:
+                df = mdf.to_pandas()
+
+            df_result = _cpu_only_apply_filter(df, task_params)
+
+            if not df_result.empty:
+                gdf = cudf.from_pandas(df_result)
+                msg_meta = MessageMeta(df=gdf)
+                ctrl_msg.payload(msg_meta)
+
+        else:
+            _apply_filter(ctrl_msg, task_params)
 
         return ctrl_msg
 

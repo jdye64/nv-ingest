@@ -17,7 +17,7 @@ from pydantic import StrictBool
 logger = logging.getLogger(__name__)
 
 
-class ImageFilterSchema(BaseModel):
+class ImageDedupSchema(BaseModel):
     raise_on_failure: StrictBool = False
     cpu_only: StrictBool = False
 

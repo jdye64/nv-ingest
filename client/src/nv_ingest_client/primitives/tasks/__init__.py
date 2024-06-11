@@ -1,5 +1,7 @@
 from .caption import CaptionTask
+from .dedup import DedupTask
 from .extract import ExtractTask
+from .filter import FilterTask
 from .split import SplitTask
 from .store import StoreTask
 from .task_base import Task
@@ -16,4 +18,6 @@ __all__ = [
     "Task",
     "task_factory",
     "TaskType",
+    "DedupTask",
+    "FilterTask",
 ]
