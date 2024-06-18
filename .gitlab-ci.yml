@@ -41,7 +41,7 @@ include:
       - /templates/docker-utils.gitlab-ci.yml
       #- /templates/ephemeral-utils.gitlab-ci.yml
       - /templates/helm-utils.gitlab-ci.yml
-  - component: gitlab-master.nvidia.com/dl/ai-services/gitlab-components/nemo-util/vault-init@v0.1.0
+  - component: gitlab-master.nvidia.com/dl/ai-services/gitlab-components/nemo-util/vault-init@1.0
   - component: gitlab-master.nvidia.com/dl/ai-services/gitlab-components/nemo-pipeline/security@0.2.0
     inputs:
       container_image: ${CI_REGISTRY_IMAGE}/${SERVICE_NAME}:${CI_COMMIT_SHA}
