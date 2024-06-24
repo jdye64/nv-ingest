@@ -40,15 +40,20 @@ def annotate_cm(control_message, source_id=None, **kwargs):
     if "annotation_timestamp" in kwargs:
         raise ValueError("'annotation_timestamp' is a reserved key and cannot be specified.")
 
-    # Get the current datetime as a string in ISO 8601 format for the annotation.
-    annotation_timestamp = datetime.now().isoformat()
+    message = kwargs.get("message")
+    annotation_key = f"annotation::{message}" if message else f"annotation::{uuid.uuid4()}"
+
+    annotation_timestamp = datetime.now()
+    try:
+        control_message.set_timestamp(annotation_key, annotation_timestamp)
+    except Exception as e:
+        print(f"Failed to set annotation timestamp: {e}")
 
     # Construct the metadata key uniquely identified by a UUID.
     metadata_key = f"annotation::{uuid.uuid4()}"
 
     # Construct the metadata value with reserved 'annotation_timestamp', source_id, and any provided kwargs.
     metadata_value = {
-        "annotation_timestamp": annotation_timestamp,
         "source_id": source_id,
     }
     metadata_value.update(kwargs)

@@ -11,8 +11,8 @@
 
 import json
 import logging
-import time
 import traceback
+from datetime import datetime
 from functools import partial
 
 import mrc
@@ -20,6 +20,7 @@ from morpheus.messages import ControlMessage
 from morpheus.messages import MessageMeta
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
+from opentelemetry.trace.span import format_trace_id
 from redis.exceptions import RedisError
 
 import cudf
@@ -43,7 +44,7 @@ def fetch_and_process_messages(redis_client: RedisClient, validated_config: Redi
     while True:
         try:
             job_payload = redis_client.fetch_message(validated_config.task_queue)
-            ts_fetched = time.time_ns()
+            ts_fetched = datetime.now()
             yield process_message(job_payload, ts_fetched)  # process_message remains unchanged
         except RedisError:
             continue  # Reconnection will be attempted on the next fetch
@@ -52,11 +53,11 @@ def fetch_and_process_messages(redis_client: RedisClient, validated_config: Redi
             traceback.print_exc()
 
 
-def process_message(job_payload: str, ts_fetched: int) -> ControlMessage:
+def process_message(job_payload: str, ts_fetched: datetime) -> ControlMessage:
     """
     Fetch messages from the Redis list (task queue) and yield as ControlMessage.
     """
-    ts_entry = time.time_ns()
+    ts_entry = datetime.now()
 
     job = json.loads(job_payload)
     validate_ingest_job(job)
@@ -67,6 +68,10 @@ def process_message(job_payload: str, ts_fetched: int) -> ControlMessage:
     tracing_options = job.pop("tracing_options", {})
     do_trace_tagging = tracing_options.get("trace", False)
     ts_send = tracing_options.get("ts_send", None)
+    if ts_send is not None:
+        # ts_send is in nanoseconds
+        ts_send = datetime.fromtimestamp(ts_send / 1e9)
+    trace_id = tracing_options.get("trace_id", None)
 
     response_channel = f"response_{job_id}"
 
@@ -85,16 +90,22 @@ def process_message(job_payload: str, ts_fetched: int) -> ControlMessage:
 
     # Debug Tracing
     if do_trace_tagging:
-        ts_exit = time.time_ns()
+        ts_exit = datetime.now()
         control_message.set_metadata("config::add_trace_tagging", do_trace_tagging)
-        control_message.set_metadata(f"trace::entry::{MODULE_NAME}", ts_entry)
-        control_message.set_metadata(f"trace::exit::{MODULE_NAME}", ts_exit)
+        control_message.set_timestamp(f"trace::entry::{MODULE_NAME}", ts_entry)
+        control_message.set_timestamp(f"trace::exit::{MODULE_NAME}", ts_exit)
 
         if ts_send is not None:
-            control_message.set_metadata("trace::entry::redis_source_network_in", ts_send)
-            control_message.set_metadata("trace::exit::redis_source_network_in", ts_fetched)
+            control_message.set_timestamp("trace::entry::redis_source_network_in", ts_send)
+            control_message.set_timestamp("trace::exit::redis_source_network_in", ts_fetched)
 
-        control_message.set_metadata("latency::ts_send", time.time_ns())
+        if trace_id is not None:
+            # C++ layer in set_metadata errors out due to size of trace_id if it's an integer.
+            if isinstance(trace_id, int):
+                trace_id = format_trace_id(trace_id)
+            control_message.set_metadata("trace_id", trace_id)
+
+        control_message.set_timestamp("latency::ts_send", datetime.now())
 
     return control_message
 

@@ -4,9 +4,9 @@ import multiprocessing as mp
 import os
 import queue
 import threading as mt
-import time
 import typing
 import uuid
+from datetime import datetime
 
 import mrc
 import pandas as pd
@@ -181,19 +181,19 @@ class MultiProcessingBaseStage(SinglePortStage):
         )
         def forward_fn(ctrl_msg: ControlMessage):
             # TODO extend traceable decorator to include entry/exit options
-            ts_fetched = time.time_ns()
+            ts_fetched = datetime.now()
 
             do_trace_tagging = (ctrl_msg.has_metadata("config::add_trace_tagging") is True) and (
                 ctrl_msg.get_metadata("config::add_trace_tagging") is True
             )
 
             if do_trace_tagging:
-                ts_send = ctrl_msg.get_metadata("latency::ts_send", None)
-                ts_entry = time.time_ns()
-                ctrl_msg.set_metadata(f"trace::entry::{self._task_desc}", ts_entry)
+                ts_send = ctrl_msg.get_timestamp("latency::ts_send")
+                ts_entry = datetime.now()
+                ctrl_msg.set_timestamp(f"trace::entry::{self._task_desc}", ts_entry)
                 if ts_send:
-                    ctrl_msg.set_metadata(f"trace::entry::{self._task_desc}_channel_in", ts_send)
-                    ctrl_msg.set_metadata(f"trace::exit::{self._task_desc}_channel_in", ts_fetched)
+                    ctrl_msg.set_timestamp(f"trace::entry::{self._task_desc}_channel_in", ts_send)
+                    ctrl_msg.set_timestamp(f"trace::exit::{self._task_desc}_channel_in", ts_fetched)
 
             while True:
                 try:
@@ -212,19 +212,19 @@ class MultiProcessingBaseStage(SinglePortStage):
         def on_next(ctrl_msg: ControlMessage):
             # TODO extend traceable decorator to include entry/exit options
             logger.debug(f"base on_next {self.name}")
-            ts_fetched = time.time_ns()
+            ts_fetched = datetime.now()
 
             do_trace_tagging = (ctrl_msg.has_metadata("config::add_trace_tagging") is True) and (
                 ctrl_msg.get_metadata("config::add_trace_tagging") is True
             )
 
             if do_trace_tagging:
-                ts_send = ctrl_msg.get_metadata("latency::ts_send", None)
-                ts_entry = time.time_ns()
-                ctrl_msg.set_metadata(f"trace::entry::{self._task_desc}", ts_entry)
+                ts_send = ctrl_msg.get_timestamp("latency::ts_send")
+                ts_entry = datetime.now()
+                ctrl_msg.set_timestamp(f"trace::entry::{self._task_desc}", ts_entry)
                 if ts_send:
-                    ctrl_msg.set_metadata(f"trace::entry::{self._task_desc}_channel_in", ts_send)
-                    ctrl_msg.set_metadata(f"trace::exit::{self._task_desc}_channel_in", ts_fetched)
+                    ctrl_msg.set_timestamp(f"trace::entry::{self._task_desc}_channel_in", ts_send)
+                    ctrl_msg.set_timestamp(f"trace::exit::{self._task_desc}_channel_in", ts_fetched)
 
             with ctrl_msg.payload().mutable_dataframe() as mdf:
                 df = mdf.to_pandas()
@@ -288,9 +288,9 @@ class MultiProcessingBaseStage(SinglePortStage):
             )
 
             if do_trace_tagging:
-                ts_exit = time.time_ns()
-                ctrl_msg.set_metadata(f"trace::exit::{self._task_desc}", ts_exit)
-                ctrl_msg.set_metadata("latency::ts_send", ts_exit)
+                ts_exit = datetime.now()
+                ctrl_msg.set_timestamp(f"trace::exit::{self._task_desc}", ts_exit)
+                ctrl_msg.set_timestamp("latency::ts_send", ts_exit)
 
             return ctrl_msg
 

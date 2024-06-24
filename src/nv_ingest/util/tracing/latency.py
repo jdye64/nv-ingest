@@ -10,7 +10,7 @@
 
 
 import logging
-import time
+from datetime import datetime
 from functools import wraps
 
 # Ensure the logging is configured; for example, to log to console at DEBUG level
@@ -45,26 +45,26 @@ def latency_logger(name=None):
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
-            # Ensure there's at least one argument and it has metadata handling capabilities
-            if args and hasattr(args[0], "has_metadata") and hasattr(args[0], "set_metadata"):
+            # Ensure there's at least one argument and it has timestamp handling capabilities
+            if args and hasattr(args[0], "get_timestamp"):
                 message = args[0]
-                start_time_ns = time.time_ns()
+                start_time = datetime.now()
 
                 result = func(*args, **kwargs)
 
-                end_time_ns = time.time_ns()
-                elapsed_time_ms = (end_time_ns - start_time_ns) / 1e6  # Convert ns to ms
+                end_time = datetime.now()
+                elapsed_time = end_time - start_time
 
                 func_name = name if name else func.__name__
 
                 # Log latency from ts_send if available
-                if message.has_metadata("latency::ts_send"):
-                    ts_send_ns = int(message.get_metadata("latency::ts_send"))
-                    latency_ms = (start_time_ns - ts_send_ns) / 1e6  # Convert ns to ms
+                if message.filter_timestamp("latency::ts_send"):
+                    ts_send = message.get_timestamp("latency::ts_send")
+                    latency_ms = (start_time - ts_send).total_seconds() * 1e3
                     logging.debug(f"{func_name} since ts_send: {latency_ms} msec.")
 
-                message.set_metadata("latency::ts_send", str(time.time_ns()))
-                message.set_metadata(f"latency::{func_name}::elapsed_time", str(elapsed_time_ms))
+                message.set_timestamp("latency::ts_send", datetime.now())
+                message.set_timestamp(f"latency::{func_name}::elapsed_time", elapsed_time)
                 return result
             else:
                 raise ValueError("The first argument must be a ControlMessage object with metadata " "capabilities.")

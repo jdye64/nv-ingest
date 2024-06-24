@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 
 import pytest
 
@@ -50,7 +51,7 @@ def job_payload():
 
 @pytest.fixture
 def ts_fetched():
-    return 1625072042123456789
+    return datetime.now()
 
 
 @pytest.mark.skipif(not MORPHEUS_IMPORT_OK, reason="Morpheus modules are not available.")
@@ -59,20 +60,25 @@ def ts_fetched():
     reason="Test environment does not have a compatible CUDA driver.",
 )
 @pytest.mark.parametrize(
-    "add_trace_tagging, ts_send",
+    "add_trace_tagging, ts_send, trace_id",
     [
-        (True, 1625072042123451000),
+        (True, datetime.now(), None),
         (
             False,
-            1625072042123451000,
+            datetime.now(),
+            None,
         ),  # Add case without ts_send when tracing is disabled
+        (True, datetime.now(), "abcdef0123456789abcdef0123456789"),
+        (True, datetime.now(), int("abcdef0123456789abcdef0123456789", 16)),
     ],
 )
-def test_process_message(job_payload, add_trace_tagging, ts_send, ts_fetched):
+def test_process_message(job_payload, add_trace_tagging, trace_id, ts_send, ts_fetched):
     payload = json.loads(job_payload)
 
     # Update tracing options based on parameters
-    payload["tracing_options"] = {"trace": add_trace_tagging, "ts_send": ts_send}
+    payload["tracing_options"] = {"trace": add_trace_tagging, "ts_send": int(ts_send.timestamp() * 1e9)}
+    if trace_id is not None:
+        payload["tracing_options"]["trace_id"] = trace_id
     modified_payload = json.dumps(payload)
     result = process_message(modified_payload, ts_fetched)
 
@@ -84,17 +90,20 @@ def test_process_message(job_payload, add_trace_tagging, ts_send, ts_fetched):
     assert result.get_metadata("job_id") == payload["job_id"]
     if add_trace_tagging:
         assert result.get_metadata("config::add_trace_tagging") is True
-        assert result.get_metadata(f"trace::entry::{MODULE_NAME}") is not None
-        assert result.get_metadata(f"trace::exit::{MODULE_NAME}") is not None
+        assert result.get_timestamp(f"trace::entry::{MODULE_NAME}") is not None
+        assert result.get_timestamp(f"trace::exit::{MODULE_NAME}") is not None
         if ts_send is not None:
-            assert result.get_metadata("trace::entry::redis_source_network_in") == ts_send
-            assert result.get_metadata("trace::exit::redis_source_network_in") == ts_fetched
-        assert result.get_metadata("latency::ts_send") is not None
+            assert result.get_timestamp("trace::entry::redis_source_network_in") == ts_send
+            assert result.get_timestamp("trace::exit::redis_source_network_in") == ts_fetched
+        assert result.get_timestamp("latency::ts_send") is not None
+        if trace_id is not None:
+            assert result.get_metadata("trace_id") == "abcdef0123456789abcdef0123456789"
     else:
         assert result.get_metadata("config::add_trace_tagging") is None
         # Assert that tracing-related metadata are not set if tracing is disabled
-        assert result.get_metadata(f"trace::entry::{MODULE_NAME}") is None
-        assert result.get_metadata(f"trace::exit::{MODULE_NAME}") is None
+        assert result.get_timestamp(f"trace::entry::{MODULE_NAME}") is None
+        assert result.get_timestamp(f"trace::exit::{MODULE_NAME}") is None
+        assert result.get_metadata("trace_id") is None
 
     # Check for the presence of tasks in the ControlMessage
     tasks = ["split", "extract"]

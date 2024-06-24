@@ -10,7 +10,7 @@ def test_dedup_task_initialization():
         filter=True,
     )
     assert task._content_type == "image"
-    assert task._filter == True
+    assert task._filter is True
 
 
 # String Representation Tests

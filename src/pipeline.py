@@ -13,8 +13,8 @@ import json
 import logging
 import math
 import os
-import time
 import typing
+from datetime import datetime
 
 import click
 from morpheus.config import Config
@@ -31,6 +31,9 @@ from nv_ingest.modules.filters.image_filter import ImageFilterLoaderFactory
 from nv_ingest.modules.injectors.metadata_injector import MetadataInjectorLoaderFactory
 from nv_ingest.modules.sinks.redis_task_sink import RedisTaskSinkLoaderFactory
 from nv_ingest.modules.sources.redis_task_source import RedisTaskSourceLoaderFactory
+from nv_ingest.modules.telemetry.job_counter import JobCounterLoaderFactory
+from nv_ingest.modules.telemetry.otel_meter import OpenTelemetryMeterLoaderFactory
+from nv_ingest.modules.telemetry.otel_tracer import OpenTelemetryTracerLoaderFactory
 from nv_ingest.modules.transforms.image_caption_extraction import ImageCaptionExtractionLoaderFactory
 from nv_ingest.modules.transforms.nemo_doc_splitter import NemoDocSplitterLoaderFactory
 from nv_ingest.schemas.ingest_pipeline_config_schema import IngestPipelineConfigSchema
@@ -103,6 +106,27 @@ def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, i
             morpheus_pipeline_config,
             source_module_loader,
             output_type=ControlMessage,
+            output_port_name="output",
+        )
+    )
+
+    # Add submitted-job-counter stage ("submitted_job_counter")
+    submitted_job_counter_loader = JobCounterLoaderFactory.get_instance(
+        module_name="submitted_job_counter",
+        module_config=ingest_config.get(
+            "submitted_job_counter_module",
+            {
+                "name": "submitted_jobs",
+            },
+        ),
+    )
+    submitted_job_counter_stage = pipe.add_stage(
+        LinearModulesStage(
+            morpheus_pipeline_config,
+            submitted_job_counter_loader,
+            input_type=ControlMessage,
+            output_type=ControlMessage,
+            input_port_name="input",
             output_port_name="output",
         )
     )
@@ -240,9 +264,73 @@ def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, i
             output_port_name="output",
         )
     )
+    # Add otel-tracer stage ("otel-tracer")
+    otel_tracer_loader = OpenTelemetryTracerLoaderFactory.get_instance(
+        module_name="otel_tracer",
+        module_config=ingest_config.get(
+            "otel_tracer_module",
+            {},
+        ),
+    )
+    otel_tracer_stage = pipe.add_stage(
+        LinearModulesStage(
+            morpheus_pipeline_config,
+            otel_tracer_loader,
+            input_type=ControlMessage,
+            output_type=ControlMessage,
+            input_port_name="input",
+            output_port_name="output",
+        )
+    )
+
+    # Add otel-meter stage ("otel-meter")
+    otel_meter_loader = OpenTelemetryMeterLoaderFactory.get_instance(
+        module_name="otel_meter",
+        module_config=ingest_config.get(
+            "otel_meter_module",
+            {
+                "redis_client": {
+                    "host": message_provider_host,
+                    "port": message_provider_port,
+                }
+            },
+        ),
+    )
+    otel_meter_stage = pipe.add_stage(
+        LinearModulesStage(
+            morpheus_pipeline_config,
+            otel_meter_loader,
+            input_type=ControlMessage,
+            output_type=ControlMessage,
+            input_port_name="input",
+            output_port_name="output",
+        )
+    )
+
+    # Add completed-job-counter stage ("completed_job_counter")
+    completed_job_counter_loader = JobCounterLoaderFactory.get_instance(
+        module_name="completed_job_counter",
+        module_config=ingest_config.get(
+            "completed_job_counter_module",
+            {
+                "name": "completed_jobs",
+            },
+        ),
+    )
+    completed_job_counter_stage = pipe.add_stage(
+        LinearModulesStage(
+            morpheus_pipeline_config,
+            completed_job_counter_loader,
+            input_type=ControlMessage,
+            output_type=ControlMessage,
+            input_port_name="input",
+            output_port_name="output",
+        )
+    )
 
     # Add edges
-    pipe.add_edge(source_stage, metadata_injector_stage)
+    pipe.add_edge(source_stage, submitted_job_counter_stage)
+    pipe.add_edge(submitted_job_counter_stage, metadata_injector_stage)
     pipe.add_edge(metadata_injector_stage, pdf_extractor_stage)
     pipe.add_edge(pdf_extractor_stage, docx_extractor_stage)
     pipe.add_edge(docx_extractor_stage, pptx_extractor_stage)
@@ -252,6 +340,9 @@ def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, i
     pipe.add_edge(nemo_splitter_stage, image_caption_stage)
     pipe.add_edge(image_caption_stage, image_storage_stage)
     pipe.add_edge(image_storage_stage, sink_stage)
+    pipe.add_edge(sink_stage, otel_meter_stage)
+    pipe.add_edge(otel_meter_stage, otel_tracer_stage)
+    pipe.add_edge(otel_tracer_stage, completed_job_counter_stage)
 
     return sink_stage
 
@@ -260,20 +351,20 @@ def pipeline(morpheus_pipeline_config, ingest_config) -> float:
     logging.info("Starting pipeline setup")
 
     pipe = Pipeline(morpheus_pipeline_config)
-    start_abs = time.time_ns()
+    start_abs = datetime.now()
 
     setup_ingestion_pipeline(pipe, morpheus_pipeline_config, ingest_config)
 
-    end_setup = start_run = time.time_ns()
-    setup_elapsed = (end_setup - start_abs) / 1e9
+    end_setup = start_run = datetime.now()
+    setup_elapsed = (end_setup - start_abs).total_seconds()
     logging.info(f"Pipeline setup completed in {setup_elapsed:.2f} seconds")
 
     logging.info("Running pipeline")
     pipe.run()
 
-    end_run = time.time_ns()
-    run_elapsed = (end_run - start_run) / 1e9
-    total_elapsed = (end_run - start_abs) / 1e9
+    end_run = datetime.now()
+    run_elapsed = (end_run - start_run).total_seconds()
+    total_elapsed = (end_run - start_abs).total_seconds()
 
     logging.info(f"Pipeline run completed in {run_elapsed:.2f} seconds")
     logging.info(f"Total time elapsed: {total_elapsed:.2f} seconds")
