@@ -8,9 +8,8 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
-
 import functools
-import time
+from datetime import datetime
 
 
 def traceable(trace_name=None):
@@ -66,7 +65,7 @@ def traceable(trace_name=None):
         @functools.wraps(func)
         def wrapper_trace_tagging(*args, **kwargs):
             # Assuming the first argument is always the message
-            ts_fetched = time.time_ns()
+            ts_fetched = datetime.now()
             message = args[0]
 
             do_trace_tagging = (message.has_metadata("config::add_trace_tagging") is True) and (
@@ -76,20 +75,20 @@ def traceable(trace_name=None):
             trace_prefix = trace_name if trace_name else func.__name__
 
             if do_trace_tagging:
-                ts_send = message.get_metadata("latency::ts_send", None)
-                ts_entry = time.time_ns()
-                message.set_metadata(f"trace::entry::{trace_prefix}", ts_entry)
+                ts_send = message.get_timestamp("latency::ts_send")
+                ts_entry = datetime.now()
+                message.set_timestamp(f"trace::entry::{trace_prefix}", ts_entry)
                 if ts_send:
-                    message.set_metadata(f"trace::entry::{trace_prefix}_channel_in", ts_send)
-                    message.set_metadata(f"trace::exit::{trace_prefix}_channel_in", ts_fetched)
+                    message.set_timestamp(f"trace::entry::{trace_prefix}_channel_in", ts_send)
+                    message.set_timestamp(f"trace::exit::{trace_prefix}_channel_in", ts_fetched)
 
             # Call the decorated function
             result = func(*args, **kwargs)
 
             if do_trace_tagging:
-                ts_exit = time.time_ns()
-                message.set_metadata(f"trace::exit::{trace_prefix}", ts_exit)
-                message.set_metadata("latency::ts_send", ts_exit)
+                ts_exit = datetime.now()
+                message.set_timestamp(f"trace::exit::{trace_prefix}", ts_exit)
+                message.set_timestamp("latency::ts_send", ts_exit)
 
             return result
 

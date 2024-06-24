@@ -1,4 +1,5 @@
-import time
+from datetime import datetime
+from datetime import timedelta
 from unittest.mock import patch
 
 import pytest
@@ -11,6 +12,7 @@ MODULE_UNDER_TEST = "nv_ingest.util.tracing.latency"
 class MockControlMessage:
     def __init__(self):
         self.metadata = {}
+        self.timestamp = {}
 
     def has_metadata(self, key):
         return key in self.metadata
@@ -20,6 +22,15 @@ class MockControlMessage:
 
     def set_metadata(self, key, value):
         self.metadata[key] = value
+
+    def get_timestamp(self, key, default=None):
+        return self.timestamp.get(key, default)
+
+    def set_timestamp(self, key, value):
+        self.timestamp[key] = value
+
+    def filter_timestamp(self, pattern):
+        return {k: v for k, v in self.timestamp.items() if pattern in k}
 
 
 # Mocked function to be decorated
@@ -42,8 +53,8 @@ def control_message():
 @patch(f"{MODULE_UNDER_TEST}.logging")
 def test_latency_logger_with_existing_metadata(mock_logging, control_message):
     # Simulating existing send timestamp
-    ts_send_ns = time.time_ns() - 100000000  # 100ms ago
-    control_message.set_metadata("latency::ts_send", str(ts_send_ns))
+    ts_send = datetime.now() - timedelta(milliseconds=100)
+    control_message.set_timestamp("latency::ts_send", ts_send)
 
     result = decorated_test_function(control_message)
 
@@ -58,14 +69,14 @@ def test_latency_logger_without_existing_metadata(mock_logging, control_message)
 
     assert result == "Test Function Executed"
     assert not mock_logging.debug.called  # No existing ts_send, no log about "since ts_send"
-    assert "latency::test_function::elapsed_time" in control_message.metadata
+    assert control_message.filter_timestamp("latency::test_function::elapsed_time")
 
 
 def test_latency_logger_with_custom_name(control_message):
     # Custom name test without patching logging to simply test metadata setting
     decorated_test_function_custom_name(control_message)
 
-    assert "latency::CustomName::elapsed_time" in control_message.metadata
+    assert control_message.filter_timestamp("latency::CustomName::elapsed_time")
 
 
 def test_latency_logger_with_invalid_argument():

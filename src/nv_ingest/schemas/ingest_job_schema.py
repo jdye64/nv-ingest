@@ -51,6 +51,7 @@ class TaskTypeEnum(str, Enum):
 class TracingOptionsSchema(BaseModelNoExt):
     trace: bool = False
     ts_send: int
+    trace_id: Optional[str] = None
 
 
 class IngestTaskSplitSchema(BaseModelNoExt):

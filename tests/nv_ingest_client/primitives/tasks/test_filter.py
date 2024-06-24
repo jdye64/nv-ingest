@@ -16,7 +16,7 @@ def test_filter_task_initialization():
     assert task._min_size == 128
     assert task._max_aspect_ratio == 5.0
     assert task._min_aspect_ratio == 0.2
-    assert task._filter == True
+    assert task._filter is True
 
 
 # String Representation Tests

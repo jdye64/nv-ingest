@@ -27,6 +27,7 @@ from nv_ingest.schemas.redis_task_sink_schema import RedisTaskSinkSchema
 from nv_ingest.util.modules.config_validator import fetch_and_validate_module_config
 from nv_ingest.util.redis import RedisClient
 from nv_ingest.util.tracing import traceable
+from nv_ingest.util.tracing.logging import annotate_cm
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +85,7 @@ def create_json_payload(message: ControlMessage, df_json: Dict[str, Any]) -> Dic
 
     if message.get_metadata("add_trace_tagging", True):
         ret_val_json["trace"] = {
-            key: message.get_metadata(key) for key in message.list_metadata() if key.startswith("trace::")
+            key: message.get_timestamp(key).timestamp() * 1e9 for key in message.filter_timestamp("trace::")
         }
         ret_val_json["annotations"] = {
             key: message.get_metadata(key) for key in message.list_metadata() if key.startswith("annotation::")
@@ -179,6 +180,7 @@ def process_and_forward(message: ControlMessage, redis_client: RedisClient) -> C
         mdf, df_json = extract_data_frame(message)
         ret_val_json = create_json_payload(message, df_json)
         json_payload = json.dumps(ret_val_json)
+        annotate_cm(message, message="Pushed")
         response_channel = message.get_metadata("response_channel")
         push_to_redis(redis_client, response_channel, json_payload, mdf)
     except RedisError as e:

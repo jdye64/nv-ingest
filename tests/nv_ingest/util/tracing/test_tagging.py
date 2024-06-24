@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import pytest
 
 from nv_ingest.util.tracing.tagging import traceable
@@ -6,6 +8,7 @@ from nv_ingest.util.tracing.tagging import traceable
 class MockControlMessage:
     def __init__(self):
         self.metadata = {}
+        self.timestamp = {}
 
     def has_metadata(self, key):
         return key in self.metadata
@@ -15,6 +18,15 @@ class MockControlMessage:
 
     def set_metadata(self, key, value):
         self.metadata[key] = value
+
+    def get_timestamp(self, key, default=None):
+        return self.timestamp.get(key, default)
+
+    def set_timestamp(self, key, value):
+        self.timestamp[key] = value
+
+    def filter_timestamp(self, pattern):
+        return {k: v for k, v in self.timestamp.items() if pattern in k}
 
 
 @pytest.fixture
@@ -32,10 +44,10 @@ def test_traceable_with_trace_tagging_enabled_custom_name(mock_control_message):
 
     sample_function(mock_control_message)
 
-    assert "trace::entry::CustomTrace" in mock_control_message.metadata
-    assert "trace::exit::CustomTrace" in mock_control_message.metadata
-    assert isinstance(mock_control_message.metadata["trace::entry::CustomTrace"], int)
-    assert isinstance(mock_control_message.metadata["trace::exit::CustomTrace"], int)
+    assert mock_control_message.filter_timestamp("trace::entry::CustomTrace")
+    assert mock_control_message.filter_timestamp("trace::exit::CustomTrace")
+    assert isinstance(mock_control_message.timestamp["trace::entry::CustomTrace"], datetime)
+    assert isinstance(mock_control_message.timestamp["trace::exit::CustomTrace"], datetime)
 
 
 # Test with trace tagging enabled and no custom trace name
@@ -48,10 +60,10 @@ def test_traceable_with_trace_tagging_enabled_no_custom_name(mock_control_messag
 
     another_function(mock_control_message)
 
-    assert "trace::entry::another_function" in mock_control_message.metadata
-    assert "trace::exit::another_function" in mock_control_message.metadata
-    assert isinstance(mock_control_message.metadata["trace::entry::another_function"], int)
-    assert isinstance(mock_control_message.metadata["trace::exit::another_function"], int)
+    assert mock_control_message.filter_timestamp("trace::entry::another_function")
+    assert mock_control_message.filter_timestamp("trace::exit::another_function")
+    assert isinstance(mock_control_message.timestamp["trace::entry::another_function"], datetime)
+    assert isinstance(mock_control_message.timestamp["trace::exit::another_function"], datetime)
 
 
 # Test with trace tagging disabled
@@ -65,4 +77,4 @@ def test_traceable_with_trace_tagging_disabled(mock_control_message):
     disabled_function(mock_control_message)
 
     # Ensure no trace metadata was added since trace tagging was disabled
-    assert not any(key.startswith("trace::") for key in mock_control_message.metadata)
+    assert not mock_control_message.filter_timestamp("trace::")
