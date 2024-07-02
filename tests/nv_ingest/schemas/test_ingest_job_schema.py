@@ -104,8 +104,8 @@ def test_task_type_enum_case_insensitivity(task_type):
         "job_id": "123",
         "tasks": [task],
     }
-
     validated_data = validate_ingest_job(job_data)
+
     assert validated_data.tasks[0].type == task_type.lower()
 
 
@@ -225,6 +225,7 @@ def test_case_insensitivity():
             }
         ],
     }
+
     validated_data = validate_ingest_job(job_data)
     assert validated_data.tasks[0].type == TaskTypeEnum.extract
     assert validated_data.tasks[0].task_properties.document_type == DocumentTypeEnum.pdf

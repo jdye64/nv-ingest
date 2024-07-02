@@ -10,32 +10,23 @@
 
 import logging
 import traceback
+from functools import partial
 from typing import Any
 from typing import Dict
 from typing import List
 from typing import Tuple
 
-import mrc
 import numpy as np
 import pandas as pd
 import tritonclient.grpc as grpcclient
-from morpheus.messages import ControlMessage
-from morpheus.messages import MessageMeta
-from morpheus.utils.control_message_utils import cm_skip_processing_if_failed
+from morpheus.config import Config
 from morpheus.utils.module_utils import ModuleLoaderFactory
-from morpheus.utils.module_utils import register_module
-from mrc.core import operators as ops
 from sklearn.neighbors import NearestNeighbors
 from transformers import AutoTokenizer
 
-import cudf
-
 from nv_ingest.schemas.image_caption_extraction_schema import ImageCaptionExtractionSchema
 from nv_ingest.schemas.metadata_schema import ContentTypeEnum
-from nv_ingest.util.exception_handlers.decorators import nv_ingest_node_failure_context_manager
-from nv_ingest.util.flow_control import filter_by_task
-from nv_ingest.util.modules.config_validator import fetch_and_validate_module_config
-from nv_ingest.util.tracing import traceable
+from nv_ingest.stages.multiprocessing_stage import MultiProcessingBaseStage
 
 logger = logging.getLogger(__name__)
 
@@ -169,9 +160,7 @@ TOKENIZER_NAME = "microsoft/deberta-large"
 tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_NAME)
 
 
-def _predict_caption(
-    triton_url: str, headers: Dict[str, str], inputs: List[List[str]], n_candidates: int = 5
-) -> List[str]:
+def _predict_caption(triton_url: str, caption_model: str, inputs: List[List[str]], n_candidates: int = 5) -> List[str]:
     """
     Sends a request to a Triton inference server to generate captions based on provided inputs.
 
@@ -222,7 +211,7 @@ def _predict_caption(
             outputs = [grpcclient.InferRequestedOutput("output")]
 
             # Perform inference
-            response = client.infer(model_name="deberta_large", inputs=infer_inputs, outputs=outputs)
+            response = client.infer(model_name=caption_model, inputs=infer_inputs, outputs=outputs)
 
             output_data = response.as_numpy("output")
 
@@ -242,32 +231,6 @@ def _predict_caption(
         logging.error(f"An error occurred: {e}")
 
     return captions
-
-
-def _prepare_dataframes(message) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series]:
-    """
-    Prepares dataframes from the message payload.
-
-    Parameters
-    ----------
-    message : Any
-        The message object containing the payload.
-
-    Returns
-    -------
-    Tuple[pd.DataFrame, pd.DataFrame, pd.Series]
-        The original dataframe, filtered dataframe with only images, and a boolean index indicating image rows.
-    """
-    with message.payload().mutable_dataframe() as mdf:
-        df = mdf.to_pandas()
-
-    if df.empty or "document_type" not in df.columns:
-        return df, pd.DataFrame(), pd.Series(dtype=bool)
-
-    bool_index = df["document_type"] == ContentTypeEnum.IMAGE
-    df_filtered = df.loc[bool_index]
-
-    return df, df_filtered, bool_index
 
 
 def _prepare_dataframes_mod(df) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series]:
@@ -365,7 +328,7 @@ def _generate_captions(neighbor_content: List[List[str]], config: Any) -> List[s
     captions = []
     for i in range(0, len(neighbor_content), config.batch_size):
         batch = neighbor_content[i : i + config.batch_size]  # noqa: E203
-        batch_captions = _predict_caption(config.endpoint_url, config.headers, batch)
+        batch_captions = _predict_caption(config.endpoint_url, config.caption_classifier_model_name, batch)
         captions.extend(batch_captions)
 
     return captions
@@ -405,9 +368,7 @@ def _update_metadata_with_captions(
     return image_docs
 
 
-def _prepare_final_dataframe(
-    df: pd.DataFrame, image_docs: List[Dict[str, Any]], filter_index: pd.Series, message: ControlMessage
-) -> None:
+def _prepare_final_dataframe_mod(df: pd.DataFrame, image_docs: List[Dict[str, Any]], filter_index: pd.Series) -> None:
     """
     Prepares the final dataframe by combining original dataframe with new image document data, converting to GPU
     dataframe, and updating the message with the new dataframe.
@@ -420,8 +381,6 @@ def _prepare_final_dataframe(
         A list of dictionaries containing image document data.
     filter_index : pd.Series
         A boolean series that filters the dataframe.
-    message : ControlMessage
-        The message object to be updated with the new dataframe.
 
     Returns
     -------
@@ -430,65 +389,109 @@ def _prepare_final_dataframe(
 
     image_docs_df = pd.DataFrame(image_docs)
     docs_df = pd.concat([df[~filter_index], image_docs_df], axis=0).reset_index(drop=True)
-    docs_gdf = cudf.from_pandas(docs_df)
-    message_meta = MessageMeta(df=docs_gdf)
-    message.payload(message_meta)
+
+    return docs_df
 
 
-@register_module(MODULE_NAME, MODULE_NAMESPACE)
-def _caption_extraction(builder: mrc.Builder) -> None:
+def caption_extract_stage(df, task_props, validated_config) -> pd.DataFrame:
     """
-    Module for extracting captions from images, integrating various processing stages including data preparation,
-    processing documents, generating captions, and updating metadata with captions.
+    Extracts captions from images within the provided dataframe.
 
     Parameters
     ----------
-    builder : mrc.Builder
-        The module configuration builder.
+    df : pd.DataFrame
+        The dataframe containing image data.
+    task_props : dict
+        Task properties required for processing.
+    validated_config : ImageCaptionExtractionSchema
+        Validated configuration for caption extraction.
 
     Returns
     -------
-    None
+    pd.DataFrame
+        The dataframe with updated image captions.
+
+    Raises
+    ------
+    ValueError
+        If an error occurs during caption extraction.
     """
-    validated_config = fetch_and_validate_module_config(builder, ImageCaptionExtractionSchema)
+    try:
+        logger.debug("Performing caption extraction")
 
-    @filter_by_task(["caption"])
-    @traceable(MODULE_NAME)
-    @cm_skip_processing_if_failed
-    @nv_ingest_node_failure_context_manager(
-        annotation_id=MODULE_NAME,
-        raise_on_failure=validated_config.raise_on_failure,
+        # Data preparation and filtering
+        df, df_filtered, filter_index = _prepare_dataframes_mod(df)
+        if df_filtered.empty:
+            return df
+
+        # Process each image document
+        metadata_list, neighbor_content = _process_documents(df_filtered)
+
+        # Generate captions
+        captions = _generate_captions(neighbor_content, validated_config)
+
+        # Update metadata with captions
+        image_docs = _update_metadata_with_captions(metadata_list, captions, df_filtered)
+
+        logger.debug(f"Extracted captions from {len(image_docs)} images")
+
+        # Final dataframe merge
+        df_final = _prepare_final_dataframe_mod(df, image_docs, filter_index)
+
+        if (df_final is None) or df_final.empty:
+            logger.warning("NO IMAGE DOCUMENTS FOUND IN THE DATAFRAME")
+            return df
+        return df_final
+    except Exception as e:
+        traceback.print_exc()
+        raise ValueError(f"Failed to do caption extraction: {e}")
+
+
+def generate_caption_extraction_stage(
+    c: Config,
+    caption_config: Dict[str, Any],
+    task: str = "caption",
+    task_desc: str = "caption_extraction",
+    pe_count: int = 8,
+):
+    """
+    Generates a caption extraction stage with the specified configuration.
+
+    Parameters
+    ----------
+    c : Config
+        Morpheus global configuration object.
+    caption_config : dict
+        Configuration parameters for caption extraction.
+    task : str, optional
+        The task name to match for the stage worker function, by default "caption".
+    task_desc : str, optional
+        A descriptor to be used in latency tracing, by default "caption_extraction".
+    pe_count : int, optional
+        Number of processing elements to use, by default 8.
+
+    Returns
+    -------
+    MultiProcessingBaseStage
+        The generated caption extraction stage.
+
+    Raises
+    ------
+    ValueError
+        If an error occurs during stage generation.
+    """
+
+    validated_config = ImageCaptionExtractionSchema(**caption_config)
+    _wrapped_caption_extract = partial(caption_extract_stage, validated_config=validated_config)
+
+    logger.debug(
+        f"Generating caption extraction stage with {pe_count} processing elements. task: {task}, document_type: *"
     )
-    def caption_extract(message: ControlMessage) -> ControlMessage:
-        try:
-            # logger.debug("Performing caption extraction")
-
-            # Data preparation and filtering
-            df, df_filtered, filter_index = _prepare_dataframes(message)
-            if df_filtered.empty:
-                return message
-
-            # Process each image document
-            metadata_list, neighbor_content = _process_documents(df_filtered)
-
-            # Generate captions
-            captions = _generate_captions(neighbor_content, validated_config)
-
-            # Update metadata with captions
-            image_docs = _update_metadata_with_captions(metadata_list, captions, df_filtered)
-
-            logger.debug(f"Extracted captions from {len(image_docs)} images")
-
-            # Final dataframe merge
-            _prepare_final_dataframe(df, image_docs, filter_index, message)
-
-            return message
-        except Exception as e:
-            traceback.print_exc()
-            raise ValueError(f"Failed to do caption extraction: {e}")
-
-    split_node = builder.make_node("caption_extract", ops.map(caption_extract))
-
-    # Register the input and output of the module
-    builder.register_module_input("input", split_node)
-    builder.register_module_output("output", split_node)
+    return MultiProcessingBaseStage(
+        c=c,
+        pe_count=pe_count,
+        task=task,
+        task_desc=task_desc,
+        process_fn=_wrapped_caption_extract,
+        filter_properties={"content_type": ContentTypeEnum.IMAGE.value},
+    )

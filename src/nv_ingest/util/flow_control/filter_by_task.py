@@ -8,10 +8,13 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
+import logging
 import typing
 from functools import wraps
 
 from morpheus.messages import ControlMessage
+
+logger = logging.getLogger(__name__)
 
 
 def filter_by_task(required_tasks, forward_func=None):
@@ -46,15 +49,15 @@ def filter_by_task(required_tasks, forward_func=None):
                     if isinstance(required_task, str) and (required_task in tasks):
                         return func(*args, **kwargs)
                     if isinstance(required_task, tuple) or isinstance(required_task, list):
-                        required_task, *required_task_props_list = required_task
-                        if required_task not in tasks:
+                        required_task_name, *required_task_props_list = required_task
+                        if required_task_name not in tasks:
                             continue
-                        task_props = tasks.get(required_task, [None])
-                        if not task_props:
-                            continue
-                        task_props = task_props.pop()
-                        for required_task_props in required_task_props_list:
-                            if _is_subset(task_props, required_task_props):
+                        task_props_list = tasks.get(required_task_name, [])
+                        for task_props in task_props_list:
+                            if all(
+                                _is_subset(task_props, required_task_props)
+                                for required_task_props in required_task_props_list
+                            ):
                                 return func(*args, **kwargs)
                 if forward_func:
                     # If a forward function is provided, call it with the ControlMessage
@@ -63,9 +66,7 @@ def filter_by_task(required_tasks, forward_func=None):
                     # If no forward function is provided, return the message directly
                     return message
             else:
-                raise ValueError(
-                    "The first argument must be a ControlMessage object with task handling " "capabilities."
-                )
+                raise ValueError("The first argument must be a ControlMessage object with task handling capabilities.")
 
         return wrapper
 
@@ -73,15 +74,13 @@ def filter_by_task(required_tasks, forward_func=None):
 
 
 def _is_subset(superset, subset):
-    match subset:
-        case str():
-            return subset in superset
-        case dict():
-            return all(key in superset and _is_subset(val, superset[key]) for key, val in subset.items())
-        case list() | set():
-            return all(any(_is_subset(subitem, superitem) for superitem in superset) for subitem in subset)
-        case _:
-            return subset == superset
+    if subset == "*":
+        return True
+    if isinstance(superset, dict) and isinstance(subset, dict):
+        return all(key in superset and _is_subset(superset[key], val) for key, val in subset.items())
+    if isinstance(superset, list) or isinstance(superset, set):
+        return all(any(_is_subset(sup_item, sub_item) for sup_item in superset) for sub_item in subset)
+    return superset == subset
 
 
 def remove_task_subset(ctrl_msg: ControlMessage, task_type: typing.List, subset: typing.Dict):

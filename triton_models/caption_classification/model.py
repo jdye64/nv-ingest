@@ -187,6 +187,7 @@ class TritonPythonModel:
                 model = torch.nn.DataParallel(model)
             model.eval()
             models.append(model)
+
         return models
 
     def _make_data_loader(self, text_ls: np.ndarray) -> DataLoader:

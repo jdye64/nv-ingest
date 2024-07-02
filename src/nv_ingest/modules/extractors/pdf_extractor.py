@@ -78,7 +78,7 @@ def _process_pdf_bytes(df, task_props):
             extract_method = default
         try:
             func = getattr(pdf, extract_method, default)
-            logger.info("Running extraction method: %s", extract_method)
+            logger.debug("Running extraction method: %s", extract_method)
             extracted_data = func(pdf_stream, **extract_params)
 
             return extracted_data

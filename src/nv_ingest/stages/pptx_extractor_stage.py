@@ -60,7 +60,7 @@ def _process_pptx_bytes(df, task_props):
             extract_method = default
         try:
             func = getattr(pptx, extract_method, default)
-            logger.info("Running extraction method: %s", extract_method)
+            logger.debug("Running extraction method: %s", extract_method)
             extracted_data = func(pptx_stream, **extract_params)
 
             return extracted_data

@@ -43,6 +43,8 @@ class CaptionTask(Task):
         """
         Convert to a dict for submission to redis
         """
-        params = {}
+        task_properties = {
+            "content_type": "image",
+        }
 
-        return {"type": "caption", "task_properties": params}
+        return {"type": "caption", "task_properties": task_properties}

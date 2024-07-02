@@ -8,11 +8,16 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
+
 import logging
+from functools import partial
+from typing import Any
+from typing import Dict
 
 import mrc
 import mrc.core.operators as ops
 import pandas as pd
+from morpheus.config import Config
 from morpheus.messages import ControlMessage
 from morpheus.messages import MessageMeta
 from morpheus.utils.module_utils import ModuleLoaderFactory
@@ -25,6 +30,7 @@ from nv_ingest.schemas.metadata_schema import ContentTypeEnum
 from nv_ingest.schemas.metadata_schema import InfoMessageMetadataSchema
 from nv_ingest.schemas.metadata_schema import StatusEnum
 from nv_ingest.schemas.metadata_schema import TaskTypeEnum
+from nv_ingest.stages.multiprocessing_stage import MultiProcessingBaseStage
 from nv_ingest.util.exception_handlers.decorators import nv_ingest_node_failure_context_manager
 from nv_ingest.util.flow_control import filter_by_task
 from nv_ingest.util.modules.config_validator import fetch_and_validate_module_config
@@ -70,7 +76,7 @@ def _cpu_only_apply_filter(df: pd.DataFrame, task_params: dict):
     min_aspect_ratio_mask = aspect_ratio > min_aspect_ratio
     max_aspect_ratio_mask = aspect_ratio < max_aspect_ratio
     image_filter_mask = ~(avg_size_mask & min_aspect_ratio_mask & max_aspect_ratio_mask)
-    filter_bool = image_filter_mask.any()  # noqa
+    filter_bool = image_filter_mask.any()
 
     if filter_bool:
         filtered_df = df_image.loc[image_filter_mask].copy()
@@ -105,13 +111,13 @@ def _apply_filter(ctrl_msg: ControlMessage, task_params: dict):
 
     with ctrl_msg.payload().mutable_dataframe() as mdf:
         # return if no images
-        image_mask = mdf["document_type"] == ContentTypeEnum.IMAGE.value  # noqa
-        if not image_mask.any():  # noqa
+        image_mask = mdf["document_type"] == ContentTypeEnum.IMAGE.value
+        if not image_mask.any():
             return
 
         # detect undesirable images
-        base_cols = mdf.columns  # noqa
-        gdf_image = mdf.loc[image_mask]  # noqa
+        base_cols = mdf.columns
+        gdf_image = mdf.loc[image_mask]
 
         img_width = gdf_image["metadata"].struct.field("image_metadata").struct.field("width")
 
@@ -124,11 +130,11 @@ def _apply_filter(ctrl_msg: ControlMessage, task_params: dict):
             (avg_size > min_size) & (aspect_ratio < max_aspect_ratio) & (aspect_ratio > min_aspect_ratio)
         )
 
-        if image_filter_mask.any():  # noqa
+        if image_filter_mask.any():
             # if we want do immediately remove undesireable images from payload
             if filter_flag:
                 # Slow first time, jitify is performs a one-time only warm-up to populate the persistent cache.
-                result_gdf = mdf[base_cols].drop(labels=gdf_image.loc[image_filter_mask].index, inplace=False)  # noqa
+                result_gdf = mdf[base_cols].drop(labels=gdf_image.loc[image_filter_mask].index, inplace=False)
                 # Strange segfault if we don't do this...
                 result_gdf = cudf.from_pandas(result_gdf.to_pandas())
                 message_meta = MessageMeta(df=result_gdf)
@@ -136,9 +142,9 @@ def _apply_filter(ctrl_msg: ControlMessage, task_params: dict):
                 return
 
             # explode to extract individual metadata structs
-            mdf_temp = mdf["metadata"].struct.explode()  # noqa
+            mdf_temp = mdf["metadata"].struct.explode()
             exploded_metadata_cols = list(mdf_temp.columns)
-            mdf[exploded_metadata_cols] = mdf_temp  # noqa
+            mdf[exploded_metadata_cols] = mdf_temp
             filtered_images_gdf = gdf_image.loc[image_filter_mask]
 
             # define and validate `info_message_metadata`
@@ -153,13 +159,11 @@ def _apply_filter(ctrl_msg: ControlMessage, task_params: dict):
 
             # update payload with `info_message_metadata` and `document_type`
             filtered_images_gdf["info_message_metadata"] = [validated_info_msg] * filtered_images_gdf.shape[0]
-            mdf.drop(labels=["info_message_metadata", "metadata"], inplace=True, axis=1)  # noqa
-            mdf["info_message_metadata"] = filtered_images_gdf["info_message_metadata"]  # noqa
-            mdf.loc[  # noqa
-                filtered_images_gdf["document_type"].index, "document_type"
-            ] = ContentTypeEnum.INFO_MSG.value
-            mdf["metadata"] = mdf[exploded_metadata_cols + ["info_message_metadata"]].to_struct()  # noqa
-            mdf.drop(labels=mdf.columns.difference(base_cols), inplace=True, axis=1)  # noqa
+            mdf.drop(labels=["info_message_metadata", "metadata"], inplace=True, axis=1)
+            mdf["info_message_metadata"] = filtered_images_gdf["info_message_metadata"]
+            mdf.loc[filtered_images_gdf["document_type"].index, "document_type"] = ContentTypeEnum.INFO_MSG.value
+            mdf["metadata"] = mdf[exploded_metadata_cols + ["info_message_metadata"]].to_struct()
+            mdf.drop(labels=mdf.columns.difference(base_cols), inplace=True, axis=1)
 
 
 @register_module(MODULE_NAME, MODULE_NAMESPACE)
@@ -181,14 +185,14 @@ def _filter_images(builder: mrc.Builder):
         task_params = task_props.get("params", {})
         filter_flag = task_params.get("filter", True)
 
-        logger.info(f"Filtering images by scale with filter_flag={filter_flag}")
+        logger.debug(f"Filtering images by scale with filter_flag={filter_flag}")
 
         if content_type != ContentTypeEnum.IMAGE:
             return ctrl_msg
 
         if validated_config.cpu_only:
             with ctrl_msg.payload().mutable_dataframe() as mdf:
-                df = mdf.to_pandas()  # noqa
+                df = mdf.to_pandas()
 
             df_result = _cpu_only_apply_filter(df, task_params)
 
@@ -205,8 +209,73 @@ def _filter_images(builder: mrc.Builder):
     # Create a node for filtering incoming images
     input_node = builder.make_node(
         "image_filter",
-        ops.map(filter_images_fn),  # noqa
+        ops.map(filter_images_fn),
     )
 
     builder.register_module_input("input", input_node)
     builder.register_module_output("output", input_node)
+
+
+def image_filter_stage(df, task_props, validated_config) -> pd.DataFrame:
+    # based on this reference:
+    # https://gitlab-master.nvidia.com/daustin/govdocs_ingest/-/blob/main/govdocs_ingest.py?ref_type=heads#L258
+
+    task_props.get("content_type")
+    task_params = task_props.get("params", {})
+    filter_flag = task_params.get("filter", True)
+
+    logger.debug(f"Filtering images by scale with filter_flag={filter_flag}")
+
+    df_result = _cpu_only_apply_filter(df, task_params)
+
+    return df_result
+
+
+def generate_image_filter_stage(
+    c: Config,
+    caption_config: Dict[str, Any],
+    task: str = "filter",
+    task_desc: str = "image_filter",
+    pe_count: int = 8,
+):
+    """
+    Generates a caption extraction stage with the specified configuration.
+
+    Parameters
+    ----------
+    c : Config
+        Morpheus global configuration object.
+    caption_config : dict
+        Configuration parameters for caption extraction.
+    task : str, optional
+        The task name to match for the stage worker function, by default "caption".
+    task_desc : str, optional
+        A descriptor to be used in latency tracing, by default "caption_extraction".
+    pe_count : int, optional
+        Number of processing elements to use, by default 8.
+
+    Returns
+    -------
+    MultiProcessingBaseStage
+        The generated caption extraction stage.
+
+    Raises
+    ------
+    ValueError
+        If an error occurs during stage generation.
+    """
+
+    validated_config = ImageFilterSchema(**caption_config)
+    _wrapped_caption_extract = partial(image_filter_stage, validated_config=validated_config)
+
+    logger.debug(
+        f"Generating image filtering stage with {pe_count} processing elements. task: {task}, document_type: *"
+    )
+    return MultiProcessingBaseStage(
+        c=c,
+        pe_count=pe_count,
+        task=task,
+        task_desc=task_desc,
+        process_fn=_wrapped_caption_extract,
+        filter_properties={"content_type": ContentTypeEnum.IMAGE.value},
+    )

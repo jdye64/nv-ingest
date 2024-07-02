@@ -1,13 +1,24 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
 import hashlib
 import logging
+from functools import partial
+from typing import Any
+from typing import Dict
 
-import mrc
-import mrc.core.operators as ops
 import pandas as pd
+from morpheus.config import Config
 from morpheus.messages import ControlMessage
 from morpheus.messages import MessageMeta
 from morpheus.utils.module_utils import ModuleLoaderFactory
-from morpheus.utils.module_utils import register_module
 
 import cudf
 
@@ -17,11 +28,8 @@ from nv_ingest.schemas.metadata_schema import ContentTypeEnum
 from nv_ingest.schemas.metadata_schema import InfoMessageMetadataSchema
 from nv_ingest.schemas.metadata_schema import StatusEnum
 from nv_ingest.schemas.metadata_schema import TaskTypeEnum
-from nv_ingest.util.exception_handlers.decorators import nv_ingest_node_failure_context_manager
-from nv_ingest.util.flow_control import filter_by_task
-from nv_ingest.util.modules.config_validator import fetch_and_validate_module_config
+from nv_ingest.stages.multiprocessing_stage import MultiProcessingBaseStage
 from nv_ingest.util.schema.schema_validator import validate_schema
-from nv_ingest.util.tracing import traceable
 
 logger = logging.getLogger(__name__)
 
@@ -87,8 +95,7 @@ def _apply_dedup_filter(ctrl_msg: ControlMessage, filter_flag):
         image_mask = mdf["document_type"] == ContentTypeEnum.IMAGE.value
         if not image_mask.any():
             return
-
-        gdf = mdf.copy()  # noqa
+        gdf = mdf.copy()
 
     base_cols = gdf.columns
     gdf_images = gdf.loc[image_mask]
@@ -142,48 +149,34 @@ def _apply_dedup_filter(ctrl_msg: ControlMessage, filter_flag):
     return
 
 
-@register_module(MODULE_NAME, MODULE_NAMESPACE)
-def _dedup_images(builder: mrc.Builder):
-    validated_config = fetch_and_validate_module_config(builder, ImageDedupSchema)
+def dedup_image_stage(df, task_props, validated_config) -> pd.DataFrame:
+    task_props.get("content_type")
+    task_params = task_props.get("params", {})
+    filter_flag = task_params.get("filter", True)
 
-    @filter_by_task(["dedup"])
-    @traceable(MODULE_NAME)
-    @nv_ingest_node_failure_context_manager(
-        annotation_id=MODULE_NAME,
-        raise_on_failure=validated_config.raise_on_failure,
+    logger.debug(f"De-duplicating images with filter_flag={filter_flag}")
+
+    df_result = _cpu_only_apply_dedup_filter(df, filter_flag)
+
+    return df_result
+
+
+def generate_dedup_stage(
+    c: Config,
+    dedup_config: Dict[str, Any],
+    task: str = "dedup",
+    task_desc: str = "dedup_images",
+    pe_count: int = 8,
+):
+    validated_config = ImageDedupSchema(**dedup_config)
+    _wrapped_dedup_image_stage = partial(dedup_image_stage, validated_config=validated_config)
+
+    logger.debug(f"Generating deduplication stage with config: {validated_config}")
+    return MultiProcessingBaseStage(
+        c=c,
+        pe_count=pe_count,
+        task=task,
+        task_desc=task_desc,
+        process_fn=_wrapped_dedup_image_stage,
+        filter_properties={"content_type": ContentTypeEnum.IMAGE.value},
     )
-    def dedup_fn(ctrl_msg: ControlMessage):
-        task_props = ctrl_msg.remove_task("dedup")
-        content_type = task_props.get("content_type")
-        task_params = task_props.get("params", {})
-        filter_flag = task_params.get("filter", True)
-
-        logger.info(f"Deduplicating images with filter_flag={filter_flag}")
-
-        if content_type != ContentTypeEnum.IMAGE:
-            return ctrl_msg
-
-        if validated_config.cpu_only:
-            with ctrl_msg.payload().mutable_dataframe() as mdf:
-                df = mdf.to_pandas()  # noqa
-
-            df_result = _cpu_only_apply_dedup_filter(df, filter_flag)
-
-            if not df_result.empty:
-                gdf = cudf.from_pandas(df_result)
-                msg_meta = MessageMeta(df=gdf)
-                ctrl_msg.payload(msg_meta)
-
-        else:
-            _apply_dedup_filter(ctrl_msg, filter_flag)
-
-        return ctrl_msg
-
-    # Create a node for filtering incoming images
-    input_node = builder.make_node(
-        "image_dedup",
-        ops.map(dedup_fn),  # noqa
-    )
-
-    builder.register_module_input("input", input_node)
-    builder.register_module_output("output", input_node)

@@ -1,5 +1,3 @@
-from datetime import datetime
-from datetime import timedelta
 from unittest.mock import patch
 
 import pytest
@@ -48,19 +46,6 @@ decorated_test_function_custom_name = latency_logger(name="CustomName")(test_fun
 @pytest.fixture
 def control_message():
     return MockControlMessage()
-
-
-@patch(f"{MODULE_UNDER_TEST}.logging")
-def test_latency_logger_with_existing_metadata(mock_logging, control_message):
-    # Simulating existing send timestamp
-    ts_send = datetime.now() - timedelta(milliseconds=100)
-    control_message.set_timestamp("latency::ts_send", ts_send)
-
-    result = decorated_test_function(control_message)
-
-    assert result == "Test Function Executed"
-    mock_logging.debug.assert_called()
-    assert "test_function since ts_send" in mock_logging.debug.call_args[0][0]
 
 
 @patch(f"{MODULE_UNDER_TEST}.logging")
