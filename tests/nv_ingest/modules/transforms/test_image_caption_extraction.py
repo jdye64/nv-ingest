@@ -14,8 +14,8 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 import pytest
-import requests
 from sklearn.neighbors import NearestNeighbors
+from tritonclient.utils import InferenceServerException
 
 from nv_ingest.schemas.metadata_schema import ContentTypeEnum
 
@@ -242,24 +242,36 @@ def test_sanitize_inputs_with_special_cases():
     not CUDA_DRIVER_OK,
     reason="Test environment does not have a compatible CUDA driver.",
 )
-@patch(f"{_MODULE_UNDER_TEST}.requests.post")  # Mock the 'post' method in the 'requests' module
-def test_predict_caption_success(mock_post):
-    # Set up the mock response object
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"outputs": [{"data": "Test Caption"}]}
-    mock_post.return_value = mock_response
+@patch(f"{_MODULE_UNDER_TEST}.grpcclient.InferenceServerClient")  # Mock the 'InferenceServerClient' class
+def test_predict_caption_success(mock_client_class):
+    # Create a mock client instance
+    mock_client = MagicMock()
+    mock_client_class.return_value = mock_client
+
+    # Set up the mock response object for the client's infer method
+    mock_infer_result = MagicMock()
+    # Mock the output of the inference
+    # Ensure that the mock output matches the expected dimensions and values
+    mock_infer_result.as_numpy.return_value = np.array(
+        [
+            [0.6],  # First input (first candidate has the highest probability)
+            [0.4],  # Second input (second candidate has the highest probability)
+        ]
+    )
+
+    # Mock the infer method
+    mock_client.infer.return_value = mock_infer_result
 
     # Define test variables
     triton_url = "http://fake-url.com"
-    headers = {"Content-Type": "application/json"}
+    caption_model = "fake_model"
     inputs = [["hello", "world"]]
 
     # Call the function
-    caption = _predict_caption(triton_url, headers, inputs)
+    caption = _predict_caption(triton_url, caption_model, inputs)
 
     # Assert function behavior
-    assert caption == "Test Caption", "Caption should match the mock response data"
+    assert caption == ["hello"], "Caption should match the mock response data"
 
 
 @pytest.mark.skipif(not MORPHEUS_IMPORT_OK, reason="Morpheus modules are not available.")
@@ -267,16 +279,24 @@ def test_predict_caption_success(mock_post):
     not CUDA_DRIVER_OK,
     reason="Test environment does not have a compatible CUDA driver.",
 )
-@patch(f"{_MODULE_UNDER_TEST}.requests.post")
-def test_predict_caption_http_error(mock_post):
-    # Set up the mock response to simulate an HTTP error
-    mock_response = MagicMock()
-    mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError("Mock HTTP Error")
-    mock_post.return_value = mock_response
+@patch(f"{_MODULE_UNDER_TEST}.grpcclient.InferenceServerClient")  # Mock the 'InferenceServerClient' class
+def test_predict_caption_http_error(mock_client_class):
+    # Create a mock client instance
+    mock_client = MagicMock()
+    mock_client_class.return_value = mock_client
+
+    # Simulate an HTTP error
+    mock_client.infer.side_effect = InferenceServerException("Mock HTTP Error")
+
+    # Define test variables
+    triton_url = "http://fake-url.com"
+    caption_model = "fake_model"
+    inputs = [["hello", "world"]]
 
     # Call the function and expect it to handle the HTTP error
-    caption = _predict_caption("http://fake-url.com", {"Content-Type": "application/json"}, [["hello", "world"]])
+    caption = _predict_caption(triton_url, caption_model, inputs)
 
+    # Assert function behavior
     assert caption == [""], "Function should return an empty string for HTTP errors"
 
 
@@ -285,19 +305,25 @@ def test_predict_caption_http_error(mock_post):
     not CUDA_DRIVER_OK,
     reason="Test environment does not have a compatible CUDA driver.",
 )
-@patch(f"{_MODULE_UNDER_TEST}.requests.post")
-def test_predict_caption_bad_request(mock_post):
+@patch(f"{_MODULE_UNDER_TEST}.grpcclient.InferenceServerClient")  # Mock the 'InferenceServerClient' class
+def test_predict_caption_bad_request(mock_client_class):
+    # Create a mock client instance
+    mock_client = MagicMock()
+    mock_client_class.return_value = mock_client
+
     # Simulate a 400 Bad Request error
-    mock_response = MagicMock()
-    mock_response.status_code = 400
-    mock_response.json.return_value = {"error": "Bad request error"}
-    mock_post.return_value = mock_response
+    mock_client.infer.side_effect = InferenceServerException("Bad request error")
+
+    # Define test variables
+    triton_url = "http://fake-url.com"
+    caption_model = "fake_model"
+    inputs = [["hello", "world"]]
 
     # Call the function
-    caption = _predict_caption("http://fake-url.com", {"Content-Type": "application/json"}, [["hello", "world"]])
+    caption = _predict_caption(triton_url, caption_model, inputs)
 
     # Check error handling
-    assert caption == [""], "Function should return error message for bad requests"
+    assert caption == [""], "Function should return an empty string for bad requests"
 
 
 @pytest.mark.skipif(not MORPHEUS_IMPORT_OK, reason="Morpheus modules are not available.")
@@ -305,17 +331,25 @@ def test_predict_caption_bad_request(mock_post):
     not CUDA_DRIVER_OK,
     reason="Test environment does not have a compatible CUDA driver.",
 )
-@patch(f"{_MODULE_UNDER_TEST}.requests.post")
-def test_predict_caption_request_exception(mock_post):
-    mock_response = MagicMock()
-    mock_response.raise_for_status.side_effect = requests.exceptions.RequestException("????")
-    mock_post.return_value = mock_response
+@patch(f"{_MODULE_UNDER_TEST}.grpcclient.InferenceServerClient")  # Mock the 'InferenceServerClient' class
+def test_predict_caption_request_exception(mock_client_class):
+    # Create a mock client instance
+    mock_client = MagicMock()
+    mock_client_class.return_value = mock_client
+
+    # Simulate a general RequestException
+    mock_client.infer.side_effect = InferenceServerException("RequestException")
+
+    # Define test variables
+    triton_url = "http://fake-url.com"
+    caption_model = "fake_model"
+    inputs = [["hello", "world"]]
 
     # Call the function
-    caption = _predict_caption("http://fake-url.com", {"Content-Type": "application/json"}, [["hello", "world"]])
+    caption = _predict_caption(triton_url, caption_model, inputs)
 
     # Check error handling
-    assert caption == [""], "Function should return error message for bad requests"
+    assert caption == [""], "Function should return an empty string for request exceptions"
 
 
 @pytest.mark.skipif(not MORPHEUS_IMPORT_OK, reason="Morpheus modules are not available.")
@@ -323,17 +357,25 @@ def test_predict_caption_request_exception(mock_post):
     not CUDA_DRIVER_OK,
     reason="Test environment does not have a compatible CUDA driver.",
 )
-@patch(f"{_MODULE_UNDER_TEST}.requests.post")
-def test_predict_caption_generic_exception(mock_post):
-    mock_response = MagicMock()
-    mock_response.raise_for_status.side_effect = RuntimeError("????")
-    mock_post.return_value = mock_response
+@patch(f"{_MODULE_UNDER_TEST}.grpcclient.InferenceServerClient")  # Mock the 'InferenceServerClient' class
+def test_predict_caption_generic_exception(mock_client_class):
+    # Create a mock client instance
+    mock_client = MagicMock()
+    mock_client_class.return_value = mock_client
+
+    # Simulate a general exception
+    mock_client.infer.side_effect = RuntimeError("Generic Exception")
+
+    # Define test variables
+    triton_url = "http://fake-url.com"
+    caption_model = "fake_model"
+    inputs = [["hello", "world"]]
 
     # Call the function
-    caption = _predict_caption("http://fake-url.com", {"Content-Type": "application/json"}, [["hello", "world"]])
+    caption = _predict_caption(triton_url, caption_model, inputs)
 
     # Check error handling
-    assert caption == [""], "Function should return error message for bad requests"
+    assert caption == [""], "Function should return an empty string for generic exceptions"
 
 
 @pytest.mark.skipif(not MORPHEUS_IMPORT_OK, reason="Morpheus modules are not available.")
@@ -341,19 +383,25 @@ def test_predict_caption_generic_exception(mock_post):
     not CUDA_DRIVER_OK,
     reason="Test environment does not have a compatible CUDA driver.",
 )
-@patch(f"{_MODULE_UNDER_TEST}.requests.post")
-def test_predict_caption_server_error(mock_post):
+@patch(f"{_MODULE_UNDER_TEST}.grpcclient.InferenceServerClient")  # Mock the 'InferenceServerClient' class
+def test_predict_caption_server_error(mock_client_class):
+    # Create a mock client instance
+    mock_client = MagicMock()
+    mock_client_class.return_value = mock_client
+
     # Simulate a 500 Server Error
-    mock_response = MagicMock()
-    mock_response.status_code = 500
-    mock_response.json.return_value = {"error": "Server error"}
-    mock_post.return_value = mock_response
+    mock_client.infer.side_effect = InferenceServerException("Server error")
+
+    # Define test variables
+    triton_url = "http://fake-url.com"
+    caption_model = "fake_model"
+    inputs = [["hello", "world"]]
 
     # Call the function
-    caption = _predict_caption("http://fake-url.com", {"Content-Type": "application/json"}, [["hello", "world"]])
+    caption = _predict_caption(triton_url, caption_model, inputs)
 
     # Check error handling
-    assert caption == [""], "Function should return error message for server errors"
+    assert caption == [""], "Function should return an empty string for server errors"
 
 
 @pytest.mark.skipif(not MORPHEUS_IMPORT_OK, reason="Morpheus modules are not available.")

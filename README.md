@@ -31,6 +31,9 @@ its affiliates is strictly prohibited.
 - [NV-Ingest: what it is and what it is not.](#nv-ingest-what-it-is-and-what-it-is-not)
   - [What it is not](#what-it-is-not)
   - [What it is](#what-it-is)
+- [Quickstart](#quickstart)
+  - [Downloading nightly containers and pip packages](#downloading-nightly-containers-and-pip-packages)
+  - [Submitting documents to an existing ingest-service via CLI tool.](#submitting-documents-to-an-existing-ingest-service-via-cli-tool)
 - [Submitting documents to an existing ingest-service](#submitting-documents-to-an-existing-ingest-service)
 - [Building the nv-ingest-ms-runtime container](#building-the-nv-ingest-ms-runtime-container)
 - [Utilities](#utilities)
@@ -40,9 +43,11 @@ its affiliates is strictly prohibited.
 
 ## NV-Ingest: what it is and what it is not.
 
-NV-Ingest is a microservice consisting of a container implementing the document ingest pipeline, a message passing service container (currently Redis), and optionally a Triton inference service container.
+NV-Ingest is a microservice consisting of a container implementing the document ingest pipeline, a message passing
+service container (currently Redis), and optionally a Triton inference service container.
 
-NV-Ingest can be deployed as a stand-alone service or as a dependency of a larger deployment, such as the Nemo Retriever cluster.
+NV-Ingest can be deployed as a stand-alone service or as a dependency of a larger deployment, such as the Nemo Retriever
+cluster.
 
 ### What it is not
 
@@ -55,39 +60,213 @@ A service that:
 
 A service that:
 
-- Accepts a JSON Job description, containing a document payload, and a set of ingestion tasks to perform on that payload.
-- Allows the results of a Job to be retrieved; the result is a JSON dictionary containing a list of Metadata describing objects extracted from the base document, as well as processing annotations and timing/trace data.
+- Accepts a JSON Job description, containing a document payload, and a set of ingestion tasks to perform on that
+  payload.
+- Allows the results of a Job to be retrieved; the result is a JSON dictionary containing a list of Metadata describing
+  objects extracted from the base document, as well as processing annotations and timing/trace data.
 - Supports PDF, Docx, and images.
-- Is in the process of supporting content extraction from a number of base document types, including pptx and other document types.
-- Supports multiple methods of extraction for each document type in order to balance trade-offs between throughput and accuracy. For example, for PDF documents we support extraction via MuPDF, ECLAIR, and Unstructured.io; additional extraction engines can and will be added as necessary to support downstream consumer requirements.
-- Supports or is in the process of supporting various types of pre and post processing operations, including text splitting and chunking; image captioning, transform, and filtering; embedding generation, and image offloading to storage.
+- Is in the process of supporting content extraction from a number of base document types, including pptx and other
+  document types.
+- Supports multiple methods of extraction for each document type in order to balance trade-offs between throughput and
+  accuracy. For example, for PDF documents we support extraction via MuPDF, ECLAIR, and Unstructured.io; additional
+  extraction engines can and will be added as necessary to support downstream consumer requirements.
+- Supports or is in the process of supporting various types of pre and post processing operations, including text
+  splitting and chunking; image captioning, transform, and filtering; embedding generation, and image offloading to
+  storage.
 
-## Submitting documents to an existing ingest-service
+## Quickstart
 
-If you already have an existing service, you can submit documents to it using the `nv-ingest-cli` tool.
+### Downloading nightly containers and pip packages
 
-Pre-requisites:
+Download the latest nightly container: `nv-ingest:[YEAR].[MONTH].[DAY].dev0`
 
-- Install nv-ingest package dev: `pip install -e .` full-install: `pip install .`
-- Install nv-ingest-client package: `pip install ./client/`
+You will need a personl access token to pull containers and packages,
+see [here](https://gitlab-master.nvidia.com/help/user/profile/personal_access_tokens)
 
-Full reference: [nv-ingest-cli](./client/README.md)
+[Download container](https://gitlab-master.nvidia.com/dl/ai-services/microservices/nv-ingest/container_registry/60799)
 
-`Test.pdf` is a simple PDF document with text and images.
+[Install pip package](https://gitlab-master.nvidia.com/dl/ai-services/microservices/nv-ingest/-/packages)
+
+### **Environment Configuration Variables**
+
+- **`MESSAGE_CLIENT_HOST`**:
+
+  - **Description**: Specifies the hostname or IP address of the message broker used for communication between
+    services.
+  - **Example**: `localhost`, `192.168.1.10`
+
+- **`MESSAGE_CLIENT_PORT`**:
+
+  - **Description**: Specifies the port number on which the message broker is listening.
+  - **Example**: `6379`, `5672`
+
+- **`CAPTION_CLASSIFIER_GRPC_TRITON`**:
+
+  - **Description**: The endpoint where the caption classifier model is hosted using gRPC for communication. This is
+    used to send requests for caption classification.
+  - **Example**: `triton:8001`
+
+- **`CAPTION_CLASSIFIER_MODEL_NAME`**:
+
+  - **Description**: The name of the caption classifier model.
+  - **Example**: `deberta_large`
+
+- **`REDIS_MORPHEUS_TASK_QUEUE`**:
+
+  - **Description**: The name of the task queue in Redis where tasks are stored and processed.
+  - **Example**: `morpheus_task_queue`
+
+- **`ECLAIR_TRITON_HOST`**:
+
+  - **Description**: The hostname or IP address of the ECLAIR model service.
+  - **Example**: `triton-eclair`
+
+- **`ECLAIR_TRITON_PORT`**:
+
+  - **Description**: The port number on which the ECLAIR model service is listening.
+  - **Example**: `8001`
+
+- **`OTEL_EXPORTER_OTLP_ENDPOINT`**:
+
+  - **Description**: The endpoint for the OpenTelemetry exporter, used for sending telemetry data.
+  - **Example**: `http://otel-collector:4317`
+
+- **`INGEST_LOG_LEVEL`**:
+  - **Description**: The log level for the ingest service, which controls the verbosity of the logging output.
+  - **Example**: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`
+
+### Launch nv-ingest micro-service(s)
+
+```bash
+# Redis is our message broker for the ingest service, always required.
+docker compose up -d redis
+
+# Optional (Telemetry services)
+# TODO: Add examples for telemetry services
+docker compose up -d otel-collector prometheus grafana zipkin
+
+# Optional (Triton) See below for Triton setup we need Triton for any model inference
+# This is only needed for captioning or ECLAIR based extraction.
+docker compose up -d triton
+
+# Ingest service
+docker compose up -d nv-ingest-ms-runtime
+```
+
+You should see something like this:
+
+```bash
+CONTAINER ID   IMAGE                                        COMMAND                 CREATED        STATUS                PORTS                              NAMES
+6065c12d6034   .../nv-ingest:2024.6.3.dev0                 "/opt/conda/bin/tini…"   6 hours ago    Up 6 hours                                               nv-ingest-ms-runtime-1
+c1f1f6b9cc8c   nvcr.io/nvidia/tritonserver:24.05-py3       "/opt/nvidia/nvidia_…"   5 days ago     Up 8 hours            0.0.0.0:8000-8002->8000-8002/tcp   devin-nv-ingest-triton-1
+d277cf2c2703   redis/redis-stack                           "/entrypoint.sh"         2 weeks ago    Up 8 hours            0.0.0.0:6379->6379/tcp, 8001/tcp   devin-nv-ingest-redis-1
+```
+
+### Submitting documents to an existing ingest-service via CLI tool.
+
+If you have installed the nv-ingest client package, you will have the nv-ingest-cli tool available in your environment.
+
+```bash
+nv-ingest-cli --help
+Usage: nv-ingest-cli [OPTIONS]
+
+Options:
+  --batch_size INTEGER            Batch size (must be >= 1).  [default: 10]
+  --doc PATH                      Add a new document to be processed (supports
+                                  multiple).
+  --dataset PATH                  Path to a dataset definition file.
+  --client [REST|REDIS|KAFKA]     Client type.  [default: REDIS]
+  --client_host TEXT              DNS name or URL for the endpoint.
+  --client_port INTEGER           Port for the client endpoint.
+  --client_kwargs TEXT            Additional arguments to pass to the client.
+  --concurrency_n INTEGER         Number of inflight jobs to maintain at one
+                                  time.  [default: 10]
+  --document_processing_timeout INTEGER
+                                  Timeout when waiting for a document to be
+                                  processed.  [default: 10]
+  --dry_run                       Perform a dry run without executing actions.
+  --output_directory PATH         Output directory for results.
+  --log_level [DEBUG|INFO|WARNING|ERROR|CRITICAL]
+                                  Log level.  [default: INFO]
+  --shuffle_dataset               Shuffle the dataset before processing.
+                                  [default: True]
+  --task TEXT                     Task definitions in JSON format, allowing multiple tasks to be configured by repeating this option.
+                                  Each task must be specified with its type and corresponding options in the '[task_id]:{json_options}' format.
+
+                                  Example:
+                                    --task 'split:{"split_by":"page", "split_length":10}'
+                                    --task 'extract:{"document_type":"pdf", "extract_text":true}'
+                                    --task 'extract:{"document_type":"pdf", "extract_method":"eclair"}'
+                                    --task 'extract:{"document_type":"pdf", "extract_method":"unstructured_io"}'
+                                    --task 'extract:{"document_type":"docx", "extract_text":true, "extract_images":true}'
+                                    --task 'store:{"content_type":"image", "store_method":"minio", "endpoint":"minio:9000"}'
+                                    --task 'caption:{}'
+
+                                  Tasks and Options:
+                                  - split: Divides documents according to specified criteria.
+                                      Options:
+                                      - split_by (str): Criteria ('page', 'size', 'word', 'sentence'). No default.
+                                      - split_length (int): Segment length. No default.
+                                      - split_overlap (int): Segment overlap. No default.
+                                      - max_character_length (int): Maximum segment character count. No default.
+                                      - sentence_window_size (int): Sentence window size. No default.
+
+                                  - extract: Extracts content from documents, customizable per document type.
+                                      Can be specified multiple times for different 'document_type' values.
+                                      Options:
+                                      - document_type (str): Document format ('pdf', 'docx', 'pptx', 'html', 'xml', 'excel', 'csv', 'parquet'). Required.
+                                      - extract_method (str): Extraction technique. Defaults are smartly chosen based on 'document_type'.
+                                      - extract_text (bool): Enables text extraction. Default: False.
+                                      - extract_images (bool): Enables image extraction. Default: False.
+                                      - extract_tables (bool): Enables table extraction. Default: False.
+
+                                  - store: Stores any images extracted from documents.
+                                      Options:
+                                      - content_type (str): Content type ('image', ). Required.
+                                      - store_method (str): Storage type ('minio', ). Required.
+
+                                  - caption: Attempts to extract captions for images extracted from documents. Note: this is not generative, but rather a
+                                      simple extraction.
+                                      Options:
+                                        N/A
+
+                                  - dedup: Idenfities and optionally filters duplicate images in extraction.
+                                      Options:
+                                        - content_type (str): Content type to deduplicate ('image')
+                                        - filter (bool): When set to True, duplicates will be filtered, otherwise, an info message will be added.
+
+                                  - filter: Idenfities and optionally filters images above or below scale thresholds.
+                                      Options:
+                                        - content_type (str): Content type to deduplicate ('image')
+                                        - min_size: (Union[float, int]): Minimum allowable size of extracted image.
+                                        - max_aspect_ratio: (Union[float, int]): Maximum allowable aspect ratio of extracted image.
+                                        - min_aspect_ratio: (Union[float, int]): Minimum allowable aspect ratio of extracted image.
+                                        - filter (bool): When set to True, duplicates will be filtered, otherwise, an info message will be added.
+
+                                  Note: The 'extract_method' automatically selects the optimal method based on 'document_type' if not explicitly stated.
+  --version                       Show version.
+  --help                          Show this message and exit.
+
+```
+
+`test.pdf` is a simple PDF document with text and images.
 
 ![Simple PDF with Text and Images](./docs/images/test.pdf.png)
 
-````shell
-Submit ./data/test.pdf to the ingest service at localhost:6379, and extract text and images from it using the pymupdf
-method.
-
 ```shell
+Submit ./data/test.pdf to the ingest service, and extract text and images from it using the pymupdf method.
+=====================================================================================================================
+
 nv-ingest-cli \
   --doc ./data/test.pdf \
   --output_directory ./processed_docs \
   --task='extract:{"document_type": "pdf", "extract_method": "pymupdf"}' \
   --client_host=localhost \
   --client_port=6379
+
+
+Check to see that your document has been processed.
+===================================================
 
 ls ./processed_docs/*
 processed_docs/image:
@@ -96,15 +275,9 @@ test.pdf.metadata.json
 processed_docs/text:
 test.pdf.metadata.json
 
-````
-
-View images; see: [image_viewer.py](#image_viewerpy)
-
-```shell
-python src/util/image_viewer.py --file_path ./processed_docs/image/test.pdf.metadata.json
 ```
 
-![Simple image viewer utility](./docs/images/image_viewer_example.png)
+Example of a processed document dataset
 
 ```shell
 cat ./processed_docs/text/test.pdf.metadata.json
@@ -194,45 +367,17 @@ $ cat ./processed_docs/image/test.pdf.metadata.json
 }]
 ```
 
-## Building the nv-ingest-ms-runtime container
+Check extracted images: [image_viewer.py](#image_viewerpy)
 
-### Clone the Morpheus repository and checkout the 24.03 release tag.
-
-```bash
-git clone https://github.com/nv-morpheus/Morpheus.git
-git checkout branch-24.03
-git submodule update --init --recursive
-
-./scripts/fetch_data.py fetch all # pull down all the LFS artifacts for Morpheus, including pre-built models
+```shell
+python src/util/image_viewer.py --file_path ./processed_docs/image/test.pdf.metadata.json
 ```
 
-Note the path to the Morpheus repository; we will need it in the next step.
-
-Go to the `nv-ingest` directory and open `.env` with your favorite editor, we will add some envrionment
-variables.
-
-`.env`
-
-```bash
-NV_INGEST_ROOT=[PATH TO NV INGEST ROOT]
-MORPHEUS_ROOT=[PATH TO MORPHEUS ROOT]
-MODEL_NAME=intfloat/e5-small-v2
-DATASET_ROOT=./data
-```
-
-```bash
-git clone https://gitlab-master.nvidia.com/dl/ai-services/microservices/nv-ingest
-```
-
-### Build Morpheus 24.03 (morpheus-ms-base:24.03) release container
-
-```bash
-docker compose build morpheus-ms-base
-```
+![Simple image viewer utility](./docs/images/image_viewer_example.png)
 
 ### Create Triton model
 
-By default NV-Ingest does not require Triton, but if you are testing ingestion embedding creation (currently disabled),
+By default, NV-Ingest does not require Triton, but if you are testing ingestion embedding creation (currently disabled),
 image caption extraction, or other tasks that require Triton, you will need to create a Triton container and or model's
 for the tasks you are testing.
 
@@ -245,76 +390,6 @@ Model](./triton_models/README.md#deberta-caption-selection-model) loaded.
 
 Using `--task="extract:{'document_type': 'pdf', extract_method'='eclair}"` requires that there is a Triton server
 running with the [ECLAIR Document OCR Model](./triton_models/README.md#eclair-document-ocr-model) loaded.
-
-### Start supporting services
-
-You can start Redis and Apache Tika services using the provided docker-compose file. Use `docker compose up` to
-start one or both of them. Triton is optional at the moment -- unless you are testing ingestion embedding creation.
-
-```bash
-docker compose up -d redis tika
-```
-
-The `-d` option will start the containers in "detached" mode in the background.
-
-Make sure the triton server is running and the models are loaded with no errors reported.
-
-```bash
-CONTAINER ID   IMAGE                COMMAND                  CREATED        STATUS        PORTS                                                 NAMES
-bd740d31d753   redis/redis-stack    "/entrypoint.sh"         30 hours ago   Up 14 hours   0.0.0.0:6379->6379/tcp, :::6379->6379/tcp, 8001/tcp   devin-nv-ingest-redis-1
-f8869d0dff68   apache/tika:latest   "/bin/sh -c 'exec ja…"   30 hours ago   Up 14 hours   0.0.0.0:9998->9998/tcp, :::9998->9998/tcp             devin-nv-ingest-tika-1
-```
-
-### Build the nv-ingest-ms-runtime container (nv-ingest-ms-runtime:24.03)
-
-```bash
-docker compose build nv-ingest-ms-runtime
-$ docker compose run -d nv-ingest-ms-runtime
-```
-
-Verify `ingest service` is working as expected.
-
-```bash
-docker logs devin-nv-ingest-nv-ingest-ms-runtime-1
- ✔ Container devin-nv-ingest-nv-ingest-ms-runtime-1  Created                                                                                                                                                    0.0s
-Attaching to nv-ingest-ms-runtime-1
-nv-ingest-ms-runtime-1  | DEBUG:morpheus.utils.module_utils:Module 'nemo_document_splitter' was successfully registered with 'nv_ingest' namespace.
-nv-ingest-ms-runtime-1  | DEBUG:morpheus.utils.module_utils:Module 'pdf_content_extractor' was successfully registered with 'nv-ingest' namespace.
-nv-ingest-ms-runtime-1  | DEBUG:morpheus.utils.module_utils:Module 'redis_task_sink' was successfully registered with 'nv_ingest' namespace.
-nv-ingest-ms-runtime-1  | DEBUG:morpheus.utils.module_utils:Module 'redis_task_source' was successfully registered with 'nv_ingest' namespace.
-nv-ingest-ms-runtime-1  | INFO:root:Starting pipeline setup
-nv-ingest-ms-runtime-1  | INFO:__main__:REDIS_HOST: redis
-nv-ingest-ms-runtime-1  | INFO:__main__:REDIS_PORT: 6379
-nv-ingest-ms-runtime-1  | INFO:root:Pipeline setup completed in 0.00 seconds
-nv-ingest-ms-runtime-1  | INFO:root:Running pipeline
-nv-ingest-ms-runtime-1  | DEBUG:asyncio:Using selector: EpollSelector
-nv-ingest-ms-runtime-1  | INFO:morpheus.pipeline.pipeline:====Pipeline Pre-build====
-nv-ingest-ms-runtime-1  | INFO:morpheus.pipeline.pipeline:====Pre-Building Segment: main====
-nv-ingest-ms-runtime-1  | INFO:morpheus.pipeline.pipeline:====Pre-Building Segment Complete!====
-nv-ingest-ms-runtime-1  | INFO:morpheus.pipeline.pipeline:====Pipeline Pre-build Complete!====
-nv-ingest-ms-runtime-1  | INFO:morpheus.pipeline.pipeline:====Registering Pipeline====
-nv-ingest-ms-runtime-1  | WARNING: Logging before InitGoogleLogging() is written to STDERR
-nv-ingest-ms-runtime-1  | W20240312 06:46:27.592626    29 thread.cpp:137] unable to set memory policy - if using docker use: --cap-add=sys_nice to allow membind
-nv-ingest-ms-runtime-1  | INFO:morpheus.pipeline.pipeline:====Building Pipeline====
-nv-ingest-ms-runtime-1  | INFO:morpheus.pipeline.pipeline:====Building Pipeline Complete!====
-nv-ingest-ms-runtime-1  | INFO:morpheus.pipeline.pipeline:====Registering Pipeline Complete!====
-nv-ingest-ms-runtime-1  | INFO:morpheus.pipeline.pipeline:====Starting Pipeline====
-nv-ingest-ms-runtime-1  | INFO:morpheus.pipeline.pipeline:====Pipeline Started====
-nv-ingest-ms-runtime-1  | INFO:morpheus.pipeline.pipeline:====Building Segment: main====
-nv-ingest-ms-runtime-1  | DEBUG:morpheus.utils.module_utils:Module 'redis_task_source' with namespace 'nv_ingest' is successfully loaded.
-nv-ingest-ms-runtime-1  | INFO:morpheus.pipeline.single_output_source:Added source: <redis_listener-0; LinearModuleSourceStage(module_config=<morpheus.utils.module_utils.ModuleLoader object at 0x7f663a420760>, output_port_name=output, output_type=<class 'morpheus._lib.messages.ControlMessage'>)>
-nv-ingest-ms-runtime-1  |   └─> morpheus.ControlMessage
-nv-ingest-ms-runtime-1  | DEBUG:morpheus.utils.module_utils:Module 'pdf_content_extractor' with namespace 'nv-ingest' is successfully loaded.
-nv-ingest-ms-runtime-1  | INFO:morpheus.pipeline.single_port_stage:Added stage: <pdf_extractor-1; LinearModulesStage(module_config=<morpheus.utils.module_utils.ModuleLoader object at 0x7f663a420bb0>, input_port_name=input, output_port_name=output, input_type=<class 'morpheus._lib.messages.ControlMessage'>, output_type=<class 'morpheus._lib.messages.ControlMessage'>)>
-nv-ingest-ms-runtime-1  |   └─ morpheus.ControlMessage -> morpheus.ControlMessage
-nv-ingest-ms-runtime-1  | DEBUG:morpheus.utils.module_utils:Module 'nemo_document_splitter' with namespace 'nv_ingest' is successfully loaded.
-nv-ingest-ms-runtime-1  | INFO:morpheus.pipeline.single_port_stage:Added stage: <nemo_doc_splitter-2; LinearModulesStage(module_config=<morpheus.utils.module_utils.ModuleLoader object at 0x7f663a420ca0>, input_port_name=input, output_port_name=output, input_type=<class 'morpheus._lib.messages.ControlMessage'>, output_type=<class 'morpheus._lib.messages.ControlMessage'>)>
-nv-ingest-ms-runtime-1  |   └─ morpheus.ControlMessage -> morpheus.ControlMessage
-nv-ingest-ms-runtime-1  | DEBUG:morpheus.utils.module_utils:Module 'redis_task_sink' with namespace 'nv_ingest' is successfully loaded.
-nv-ingest-ms-runtime-1  | INFO:morpheus.pipeline.single_port_stage:Added stage: <redis_task_sink-3; LinearModulesStage(module_config=<morpheus.utils.module_utils.ModuleLoader object at 0x7f663a420dc0>, input_port_name=input, output_port_name=output, input_type=typing.Any, output_type=<class 'morpheus._lib.messages.ControlMessage'>)>
-nv-ingest-ms-runtime-1  |   └─ morpheus.ControlMessage -> morpheus.ControlMessage
-nv-ingest-ms-runtime-1  | INFO:morpheus.pipeline.pipeline:====Building Segment Complete!====
-```
 
 ## Utilities
 
@@ -350,8 +425,8 @@ nv-ingest-cli \
 
 Submit a PDF file with splitting and extraction tasks.
 
-**Note: (TODO)** This currently only works for pymupdf, eclair, and Unstructured.io; haystack, Adobe, and LlamaParse have
-existing workflows but have not been fully converted to use our unified metadata schema.
+**Note: (TODO)** This currently only works for pymupdf, eclair, and Unstructured.io; haystack, Adobe, and LlamaParse
+have existing workflows but have not been fully converted to use our unified metadata schema.
 
 ```bash
 nv-ingest-cli \
@@ -471,118 +546,3 @@ buttons.
     ```
     --file_path "/path/to/your/images.json"
     ```
-
-## Launch the Nemo Retriever pipeline with the nv-ingest-ms-runtime service
-
-**Note:** if you have deployed nv-ingest-ms-runtime, redis, tika, or triton services, you will need to stop them before
-starting the Nemo Retriever pipeline.
-
-**Note:** Integration is experimental. As of 12 March, 2024 you will need to pull the Devin's experimental Nemo
-Retrieval pipeline branch.
-
-### Clone the experimental Nemo Retrieval pipeline branch
-
-```bash
-git clone https://gitlab-master.nvidia.com/drobison/devin-nemo-retrieval-microservice-private
-git checkout devin_nv_ingest_integration
-```
-
-### Create a Nemo Retriever pipeline with the nv-ingest-ms-runtime service
-
-You should see three new services `morpheus_ms`, `redis`, and `triton` in the docker compose ps output.
-
-```bash
-docker compose -f docker-compose.yaml -f docker-compose.override.gpu.yaml --build up
-
-docker compose ps
-Every 2.0s: docker compose ps                                                                                                                                                                                                                                              drobison-mint: Fri Feb  9 14:39:34 2024
-
-NAME                                                         IMAGE                                                                            COMMAND                  SERVICE          CREATED        STATUS                    PORTS
-devin-nemo-retrieval-microservice-private-elasticsearch-1    docker.elastic.co/elasticsearch/elasticsearch:8.12.0                             "/bin/tini -- /usr/l…"   elasticsearch    4 days ago     Up 2 days (healthy)       0.0.0.0:9200->9200/tcp, :::9200->9200/tcp, 9300/tcp
-devin-nemo-retrieval-microservice-private-embedding-ms-1     nvcr.io/nvidian/nemo-llm/embedding-ms:f0cfd7168aac4cccd605e95355c895a158fee2b3   "/opt/docker_entrypo…"   embedding-ms     16 hours ago   Up 13 hours (healthy)     0.0.0.0:8080->8080/tcp, :::8080->8080/tcp
-devin-nemo-retrieval-microservice-private-etcd-1             quay.io/coreos/etcd:v3.5.11                                                      "etcd -advertise-cli…"   etcd             4 days ago     Up 38 hours (healthy)     2379-2380/tcp
-devin-nemo-retrieval-microservice-private-milvus-1           milvusdb/milvus:v2.3.5                                                           "/tini -- milvus run…"   milvus           4 days ago     Up 38 hours (healthy)
-devin-nemo-retrieval-microservice-private-minio-1            minio/minio:RELEASE.2023-03-20T20-16-18Z                                         "/usr/bin/docker-ent…"   minio            4 days ago     Up 38 hours (healthy)     9000/tcp
-devin-nemo-retrieval-microservice-private-nv-ingest-ms-runtime-1      nv-ingest-ms-runtime:24.03                                                                "/opt/conda/bin/tini…"   nv-ingest-ms-runtime      13 hours ago   Up 13 hours
-devin-nemo-retrieval-microservice-private-otel-collector-1   otel/opentelemetry-collector-contrib:0.91.0                                      "/otelcol-contrib --…"   otel-collector   4 days ago     Up 38 hours               0.0.0.0:4317->4317/tcp, :::4317->4317/tcp, 0.0.0.0:13133->13133/tcp, :::13133->13
-133/tcp, 0.0.0.0:55679->55679/tcp, :::55679->55679/tcp, 55678/tcp
-devin-nemo-retrieval-microservice-private-pgvector-1         ankane/pgvector                                                                  "docker-entrypoint.s…"   pgvector         4 days ago     Up 2 days                 0.0.0.0:5433->5432/tcp, :::5433->5432/tcp
-devin-nemo-retrieval-microservice-private-postgres-1         postgres:16.1                                                                    "docker-entrypoint.s…"   postgres         4 days ago     Up 2 days                 0.0.0.0:5432->5432/tcp, :::5432->5432/tcp
-devin-nemo-retrieval-microservice-private-redis-1            redis:latest                                                                     "docker-entrypoint.s…"   redis            4 days ago     Up 38 hours               0.0.0.0:6379->6379/tcp, :::6379->6379/tcp
-devin-nemo-retrieval-microservice-private-retrieval-ms-1     devin-nemo-retrieval-microservice-private-retrieval-ms                           "/bin/sh -c 'opentel…"   retrieval-ms     16 hours ago   Up 16 hours (unhealthy)   0.0.0.0:1984->8000/tcp, :::1984->8000/tcp
-devin-nemo-retrieval-microservice-private-tika-1             apache/tika:latest                                                               "/bin/sh -c 'exec ja…"   tika             4 days ago     Up 16 hours               0.0.0.0:9998->9998/tcp, :::9998->9998/tcp
-devin-nemo-retrieval-microservice-private-triton-1           nvcr.io/nvidia/tritonserver:23.12-py3                                            "/opt/nvidia/nvidia_…"   triton           18 hours ago   Up 16 hours               0.0.0.0:8000-8002->8000-8002/tcp, :::8000-8002->8000-8002/tcp
-devin-nemo-retrieval-microservice-private-zipkin-1           openzipkin/zipkin                                                                "start-zipkin"           zipkin           4 days ago     Up 38 hours (healthy)     9410/tcp, 0.0.0.0:9411->9411/tcp, :::9411->9411/tcp
-```
-
-### Create collections for performance comparison, and export the collection ID's
-
-Note: the collection ID will be associated with the pipeline specified in the request, and subsequent index and
-query calls will use the associated pipeline.
-
-The nv_ingest service hooks will run the pipeline defined in `[nemo_retriever]/pipelines/morpheus_extract_split.
-mustache`, this will call out to the nv-ingest-ms-runtime to do pdf text extraction, and chunking, then
-return the results to the Haystack pipeline for embeddings, and DocumentWriter component for upload.
-
-See: `[nemo_retriever]/src/v1/document_indexing.py` for ingest API modifications.
-
-```bash
-curl http://localhost:1984/v1/collections?pretty=true \
-> -H 'Content-Type: application/json' \
-> -d '{"name": "my_collection", "pipeline": "nv_ingest_multimodal_extract_split"}'
-
-{
-  "collection": {
-    "pipeline": "nv_ingest_multimodal_extract_split",
-    "name": "test_collection",
-    "id": "33e0b745-585d-44c6-8db0-b03b841ea50b"
-  }
-}
-
-export MM_COLLECTION_ID=33e0b745-585d-44c6-8db0-b03b841ea50b
-
-python ./retrieval/script/quickstart/upload.py \
- -c ${MM_COLLECTION_ID} \
- --metadata ingest::extract_method=pymupdf \
- --metadata ingest::extract=true \
- --metadata ingest::extract_text=true \
- --metadata ingest::extract_image=true \
- --metadata ingest::split=true \
- ./data/test.pdf
-
-200 {'documents': [
-{'id': 'de95ad1ecc4635ecb74f6cf16a0597428a1ff81cc31bd90273a83fa83da401d0', 'content': 'Here is one line of text. Here is another line of text. Here is an image.', 'format': 'pdf', 'metadata': {'_indexed_at': '2024-03-10T20:38:57.133789', 'document_type': 'text'}, 'indexed_at': '2024-03-10T20:38:57.133789'},
-{'id': 'fca467dd085e833949c5c704cd08e76aa483f08078207b89861eca837084b27b', 'content': '<content>', 'format': 'image', 'metadata': {'_indexed_at': '2024-03-10T20:38:57.133789', 'document_type': 'image'}, 'indexed_at': '2024-03-10T20:38:57.133789'}
-]}
-
-curl "http://localhost:1984/v1/collections/${MM_COLLECTION_ID}/search?pretty=true"   -H 'Content-Type: application/json'   -d '{"query": "Give me the documents"}'
-
-{
-  "chunks": [
-    {
-      "id": "7702fa8083977416922d592f49a02694155d1b06498324d5ed9c959c2dc8ef2b",
-      "content": "Here is one line of text. Here is another line of text. Here is an image.",
-      "format": "text",
-      "metadata": {
-        "_indexed_at": "2024-03-10T20:32:03.883826",
-        "document_type": "text",
-        "empty": 0
-      },
-      "score": 0.35280707478523254
-    },
-    {
-      "id": "fca467dd085e833949c5c704cd08e76aa483f08078207b89861eca837084b27b",
-      "content": "A golden retriever puppy sits in the snow, looking at the camera.",
-      "format": "image",
-      "metadata": {
-        "_indexed_at": "2024-03-10T20:38:57.133789",
-        "document_type": "image",
-        "kosmos2_prompt": "Describe the image:",
-        "kosmos2_response": "{\"role\": \"assistant\", \"content\": \"<phrase>A golden retriever puppy</phrase> sits in <phrase>the snow</phrase>, looking at the camera.\", \"entities\": [{\"phrase\": \"A golden retriever puppy\", \"bboxes\": [[0.046875, 0.015625, 0.953125, 0.984375]]}, {\"phrase\": \"the snow\", \"bboxes\": [[0.015625, 0.015625, 0.984375, 0.984375]]}]}",
-        "empty": 0
-      },
-      "score": 0.2679625153541565
-    }
-  ]
-}
-```

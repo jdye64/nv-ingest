@@ -34,6 +34,6 @@ service:
       processors: [batch]
       exporters: [prometheus, logging]
     logs:
-      receivers: [ otlp ]
-      processors: [ batch ]
-      exporters: [ logging ]
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [logging]

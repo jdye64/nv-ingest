@@ -51,10 +51,13 @@ def extract_data_frame(message: ControlMessage) -> Tuple[Any, Dict[str, Any]]:
     Tuple[Any, Dict[str, Any]]
         A tuple containing the mutable DataFrame and a dictionary of selected columns.
     """
-    with message.payload().mutable_dataframe() as mdf:
-        logger.info(f"Received DataFrame with {len(mdf)} rows.")
-        keep_cols = ["document_type", "metadata"]
-        return mdf, mdf[keep_cols].to_dict(orient="records")
+    try:
+        with message.payload().mutable_dataframe() as mdf:
+            logger.debug(f"Redis Sink Received DataFrame with {len(mdf)} rows.")
+            keep_cols = ["document_type", "metadata"]
+            return mdf, mdf[keep_cols].to_dict(orient="records")
+    except Exception:
+        return None, None
 
 
 def create_json_payload(message: ControlMessage, df_json: Dict[str, Any]) -> Dict[str, Any]:
@@ -94,9 +97,7 @@ def create_json_payload(message: ControlMessage, df_json: Dict[str, Any]) -> Dic
     return ret_val_json
 
 
-def push_to_redis(
-    redis_client: RedisClient, response_channel: str, json_payload: str, mdf: Any, retry_count: int = 2
-) -> None:
+def push_to_redis(redis_client: RedisClient, response_channel: str, json_payload: str, retry_count: int = 2) -> None:
     """
     Attempts to push a JSON payload to a Redis channel, retrying on failure up to a specified number of attempts.
 
@@ -108,8 +109,6 @@ def push_to_redis(
         The Redis channel to which the data is pushed.
     json_payload : str
         The JSON string payload to be pushed.
-    mdf : Any
-        The DataFrame from which payload data was extracted (used for logging).
     retry_count : int, optional
         The number of attempts to retry on failure (default is 2).
 
@@ -130,7 +129,7 @@ def push_to_redis(
     for attempt in range(retry_count):
         try:
             redis_client.get_client().rpush(response_channel, json_payload)
-            logger.info(f"Forwarded message to Redis channel '{response_channel}'.")
+            logger.debug(f"Redis Sink Forwarded message to Redis channel '{response_channel}'.")
             return
         except RedisError as e:
             logger.warning(f"Attempt {attempt + 1} failed: {e}")
@@ -138,10 +137,10 @@ def push_to_redis(
                 raise
 
 
-def handle_failure(redis_client, response_channel, ret_val_json, e, mdf):
+def handle_failure(redis_client, response_channel, ret_val_json, e, mdf_size):
     error_description = (
         f"Failed to forward message to Redis after retries: {e}. "
-        f"Payload size: {sys.getsizeof(json.dumps(ret_val_json)) / 1e6} MB, Rows: {len(mdf)}"
+        f"Payload size: {sys.getsizeof(json.dumps(ret_val_json)) / 1e6} MB, Rows: {mdf_size}"
     )
     logger.error(error_description)
 
@@ -177,14 +176,20 @@ def process_and_forward(message: ControlMessage, redis_client: RedisClient) -> C
         If a critical error occurs during processing.
     """
     try:
-        mdf, df_json = extract_data_frame(message)
-        ret_val_json = create_json_payload(message, df_json)
+        cm_failed = message.get_metadata("cm_failed", False)
+        if not cm_failed:
+            mdf, df_json = extract_data_frame(message)
+            ret_val_json = create_json_payload(message, df_json)
+        else:
+            ret_val_json = create_json_payload(message, None)
+
         json_payload = json.dumps(ret_val_json)
         annotate_cm(message, message="Pushed")
         response_channel = message.get_metadata("response_channel")
-        push_to_redis(redis_client, response_channel, json_payload, mdf)
+        push_to_redis(redis_client, response_channel, json_payload)
     except RedisError as e:
-        handle_failure(redis_client, response_channel, ret_val_json, e, mdf)
+        mdf_size = len(mdf) if mdf else 0
+        handle_failure(redis_client, response_channel, ret_val_json, e, mdf_size)
     except Exception as e:
         logger.error(f"Critical error processing message: {e}")
 

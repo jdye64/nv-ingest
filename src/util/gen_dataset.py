@@ -18,6 +18,8 @@ from collections import defaultdict
 import click
 from tqdm import tqdm
 
+logger = logging.getLogger(__name__)
+
 
 def format_size(size_in_bytes):
     """
@@ -185,13 +187,13 @@ def validate_output_file(output_file_path):
             sampled_files = data["sampled_files"]
             metadata = data["metadata"]
     except FileNotFoundError:
-        logging.error(f"Output file '{output_file_path}' not found.")
+        logger.error(f"Output file '{output_file_path}' not found.")
         return
     except json.JSONDecodeError:
-        logging.error(f"Failed to decode JSON from '{output_file_path}'.")
+        logger.error(f"Failed to decode JSON from '{output_file_path}'.")
         return
     except KeyError:
-        logging.error("Missing 'sampled_files' or 'metadata' in the output file.")
+        logger.error("Missing 'sampled_files' or 'metadata' in the output file.")
         return
 
     total_bytes_by_type = defaultdict(int)
@@ -211,16 +213,16 @@ def validate_output_file(output_file_path):
         actual_size = total_bytes_by_type.get(file_type, 0)
         actual_prop = (actual_size / total_sampled_size) * 100 if total_sampled_size else 0
         if not (expected_prop * 0.95 <= actual_prop <= expected_prop * 1.05):
-            logging.warning(
+            logger.warning(
                 f"Proportion of {file_type} files is off by more than 5%: "
                 f"Expected {expected_prop}%, got {actual_prop:.2f}%."
             )
 
     # Log total sizes
     for file_type, total_size in total_bytes_by_type.items():
-        logging.info(f"Total size for {file_type}: {format_size(total_size)}")
-    logging.info(f"Total size of all sampled files: {format_size(total_sampled_size)}")
-    logging.info(f"Sampling method used: {sampling_method}")
+        logger.info(f"Total size for {file_type}: {format_size(total_size)}")
+    logger.info(f"Total size of all sampled files: {format_size(total_sampled_size)}")
+    logger.info(f"Sampling method used: {sampling_method}")
 
 
 @click.command()
@@ -323,7 +325,7 @@ def main(
         if output_file:
             validate_output_file(output_file)
         else:
-            logging.warning("No output file specified for validation.")
+            logger.warning("No output file specified for validation.")
     return
 
 

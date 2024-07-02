@@ -24,29 +24,30 @@ from morpheus.messages import ControlMessage
 from morpheus.pipeline.pipeline import Pipeline
 from morpheus.stages.general.linear_modules_source import LinearModuleSourceStage
 from morpheus.stages.general.linear_modules_stage import LinearModulesStage
+from morpheus.utils.logger import configure_logging
 from pydantic import ValidationError
 
-from nv_ingest.modules.filters.image_dedup import ImageDedupLoaderFactory
-from nv_ingest.modules.filters.image_filter import ImageFilterLoaderFactory
 from nv_ingest.modules.injectors.metadata_injector import MetadataInjectorLoaderFactory
 from nv_ingest.modules.sinks.redis_task_sink import RedisTaskSinkLoaderFactory
 from nv_ingest.modules.sources.redis_task_source import RedisTaskSourceLoaderFactory
 from nv_ingest.modules.telemetry.job_counter import JobCounterLoaderFactory
 from nv_ingest.modules.telemetry.otel_meter import OpenTelemetryMeterLoaderFactory
 from nv_ingest.modules.telemetry.otel_tracer import OpenTelemetryTracerLoaderFactory
-from nv_ingest.modules.transforms.image_caption_extraction import ImageCaptionExtractionLoaderFactory
 from nv_ingest.modules.transforms.nemo_doc_splitter import NemoDocSplitterLoaderFactory
 from nv_ingest.schemas.ingest_pipeline_config_schema import IngestPipelineConfigSchema
 from nv_ingest.stages.docx_extractor_stage import generate_docx_extractor_stage
+from nv_ingest.stages.filters import generate_dedup_stage
+from nv_ingest.stages.filters import generate_image_filter_stage
 from nv_ingest.stages.pdf_extractor_stage import generate_pdf_extractor_stage
 from nv_ingest.stages.pptx_extractor_stage import generate_pptx_extractor_stage
 from nv_ingest.stages.storages.image_storage_stage import ImageStorageStage
+from nv_ingest.stages.transforms.image_caption_extraction import generate_caption_extraction_stage
 from nv_ingest.util.converters.containers import merge_dict
 from nv_ingest.util.logging.configuration import LogLevel
-from nv_ingest.util.logging.configuration import configure_logging
 from nv_ingest.util.schema.schema_validator import validate_schema
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 def validate_positive(ctx, param, value):
@@ -55,25 +56,33 @@ def validate_positive(ctx, param, value):
     return value
 
 
-def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, ingest_config):
-    # Set proper redis hostname and port
+def get_message_provider_config():
     message_provider_host = os.environ.get("MESSAGE_CLIENT_HOST", "localhost")
     message_provider_port = os.environ.get("MESSAGE_CLIENT_PORT", "6379")
+
     logger.info(f"MESSAGE_CLIENT_HOST: {message_provider_host}")
     logger.info(f"MESSAGE_CLIENT_PORT: {message_provider_port}")
 
-    # Set URI to the caption classifier hosted by some Triton service
+    return message_provider_host, message_provider_port
+
+
+def get_triton_service_caption_classifier():
     triton_service_caption_classifier = os.environ.get(
-        "CAPTION_CLASSIFIER_URI",
-        "http://triton:8000/v2/models/caption_classification/infer",
+        "CAPTION_CLASSIFIER_GRPC_TRITON",
+        "triton:8001",
     )
-    logger.info(f"CAPTION_CLASSIFIER_URI: {triton_service_caption_classifier}")
+    triton_service_caption_classifier_name = os.environ.get(
+        "CAPTION_CLASSIFIER_MODEL_NAME",
+        "deberta_large",
+    )
+    logger.info(f"CAPTION_CLASSIFIER_GRPC_TRITON: {triton_service_caption_classifier}")
 
-    default_cpu_count = math.floor(os.cpu_count() * 0.8)
+    return triton_service_caption_classifier, triton_service_caption_classifier_name
 
-    # Guard against the requested num_threads being larger than the physical cpu cores available.
+
+def get_default_cpu_count(morpheus_pipeline_config):
+    default_cpu_count = int(max(1, math.floor(os.cpu_count() * 0.8)))
     if morpheus_pipeline_config.num_threads:
-        # If a configuration value is specified we want to honor it unless it conflicts with available resources
         if os.cpu_count() < morpheus_pipeline_config.num_threads:
             logger.warning(
                 "morpheus_pipeline_config.num_threads is set. However, the requested "
@@ -83,12 +92,15 @@ def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, i
         else:
             default_cpu_count = morpheus_pipeline_config.num_threads
     else:
-        logger.warn(
+        logger.warning(
             f"morpheus_pipeline_config.num_threads not set. Defaulting to 80% of available CPU cores which is: "
             f"{default_cpu_count}"
         )
 
-    # Add task-source stage ("redis_listener")
+    return default_cpu_count
+
+
+def add_source_stage(pipe, morpheus_pipeline_config, ingest_config, message_provider_host, message_provider_port):
     source_module_loader = RedisTaskSourceLoaderFactory.get_instance(
         module_name="redis_listener",
         module_config=ingest_config.get(
@@ -110,7 +122,10 @@ def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, i
         )
     )
 
-    # Add submitted-job-counter stage ("submitted_job_counter")
+    return source_stage
+
+
+def add_submitted_job_counter_stage(pipe, morpheus_pipeline_config, ingest_config):
     submitted_job_counter_loader = JobCounterLoaderFactory.get_instance(
         module_name="submitted_job_counter",
         module_config=ingest_config.get(
@@ -131,6 +146,10 @@ def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, i
         )
     )
 
+    return submitted_job_counter_stage
+
+
+def add_metadata_injector_stage(pipe, morpheus_pipeline_config):
     metadata_injector_loader = MetadataInjectorLoaderFactory.get_instance(
         module_name="metadata_injection", module_config={}
     )
@@ -145,64 +164,75 @@ def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, i
         )
     )
 
-    # Add pdf extraction stage
-    pdf_extractor_config = ingest_config.get("pdf_extractor_module", {})
+    return metadata_injector_stage
+
+
+def add_pdf_extractor_stage(pipe, morpheus_pipeline_config, default_cpu_count):
     pdf_extractor_stage = pipe.add_stage(
         generate_pdf_extractor_stage(
             morpheus_pipeline_config,
-            pe_count=pdf_extractor_config.get("n_workers", default_cpu_count),
+            pe_count=default_cpu_count,
             task="extract",
             task_desc="pdf_content_extractor",
         )
     )
 
-    # Add docx extraction stage
+    return pdf_extractor_stage
+
+
+def add_docx_extractor_stage(pipe, morpheus_pipeline_config, default_cpu_count):
     docx_extractor_stage = pipe.add_stage(
         generate_docx_extractor_stage(
             morpheus_pipeline_config,
-            pe_count=default_cpu_count,
-            task="docx-extract",
+            pe_count=int(max(1, default_cpu_count * 0.5)),
+            task="extract",
             task_desc="docx_content_extractor",
         )
     )
+    return docx_extractor_stage
 
-    # Add pptx extraction stage
+
+def add_pptx_extractor_stage(pipe, morpheus_pipeline_config, default_cpu_count):
     pptx_extractor_stage = pipe.add_stage(
         generate_pptx_extractor_stage(
             morpheus_pipeline_config,
-            pe_count=default_cpu_count,
+            pe_count=int(max(1, default_cpu_count * 0.5)),
             task="pptx-extract",
             task_desc="pptx_content_extractor",
         )
     )
+    return pptx_extractor_stage
 
-    image_dedup_loader = ImageDedupLoaderFactory.get_instance(module_name="dedup_images", module_config={})
 
+def add_image_dedup_stage(pipe, morpheus_pipeline_config, ingest_config, default_cpu_count):
+    image_dedup_config = ingest_config.get("dedup_module", {})
     image_dedup_stage = pipe.add_stage(
-        LinearModulesStage(
+        generate_dedup_stage(
             morpheus_pipeline_config,
-            image_dedup_loader,
-            input_type=ControlMessage,
-            output_type=ControlMessage,
-            input_port_name="input",
-            output_port_name="output",
+            image_dedup_config,
+            pe_count=int(max(1, math.floor(default_cpu_count * 0.25))),
+            task="dedup",
+            task_desc="dedup_images",
         )
     )
+    return image_dedup_stage
 
-    image_filter_loader = ImageFilterLoaderFactory.get_instance(module_name="filter_images", module_config={})
 
+def add_image_filter_stage(pipe, morpheus_pipeline_config, ingest_config, default_cpu_count):
+    image_filter_config = ingest_config.get("image_filter", {})
     image_filter_stage = pipe.add_stage(
-        LinearModulesStage(
+        generate_image_filter_stage(
             morpheus_pipeline_config,
-            image_filter_loader,
-            input_type=ControlMessage,
-            output_type=ControlMessage,
-            input_port_name="input",
-            output_port_name="output",
+            image_filter_config,
+            pe_count=int(max(1, math.floor(os.cpu_count() * 0.25))),
+            task="filter",
+            task_desc="filter_images",
         )
     )
+    return image_filter_stage
 
-    # Add doc-splitter stage ("nemo_doc_splitter")
+
+def add_nemo_splitter_stage(pipe, morpheus_pipeline_config, ingest_config):
     nemo_splitter_loader = NemoDocSplitterLoaderFactory.get_instance(
         module_name="nemo_doc_splitter",
         module_config=ingest_config.get("text_splitting_module", {}),
@@ -218,30 +248,38 @@ def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, i
         )
     )
 
-    image_caption_loader = ImageCaptionExtractionLoaderFactory.get_instance(
-        module_name="image_caption_extractor",
-        module_config=ingest_config.get(
-            "image_caption_extraction_module",
-            {
-                "endpoint_url": triton_service_caption_classifier,
-            },
-        ),
+    return nemo_splitter_stage
+
+
+def add_image_caption_stage(pipe, morpheus_pipeline_config, ingest_config, default_cpu_count):
+    endpoint_url, model_name = get_triton_service_caption_classifier()
+    image_caption_config = ingest_config.get(
+        "image_caption_extraction_module",
+        {
+            "caption_classifier_model_name": model_name,
+            "endpoint_url": endpoint_url,
+        },
     )
     image_caption_stage = pipe.add_stage(
-        LinearModulesStage(
+        generate_caption_extraction_stage(
             morpheus_pipeline_config,
-            image_caption_loader,
-            input_type=ControlMessage,
-            output_type=ControlMessage,
-            input_port_name="input",
-            output_port_name="output",
+            image_caption_config,
+            pe_count=int(max(1, math.floor(default_cpu_count * 0.25))),
+            task="caption",
+            task_desc="caption_ext",
         )
     )
 
-    # Add image-storage stage ("image_storage")
+    return image_caption_stage
+
+
+def add_image_storage_stage(pipe, morpheus_pipeline_config):
     image_storage_stage = pipe.add_stage(ImageStorageStage(morpheus_pipeline_config))
 
-    # Add task-sink stage ("redis_task_sink")
+    return image_storage_stage
+
+
+def add_sink_stage(pipe, morpheus_pipeline_config, ingest_config, message_provider_host, message_provider_port):
     sink_module_loader = RedisTaskSinkLoaderFactory.get_instance(
         module_name="redis_task_sink",
         module_config=ingest_config.get(
@@ -264,7 +302,11 @@ def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, i
             output_port_name="output",
         )
     )
-    # Add otel-tracer stage ("otel-tracer")
+
+    return sink_stage
+
+
+def add_otel_tracer_stage(pipe, morpheus_pipeline_config, ingest_config):
     otel_tracer_loader = OpenTelemetryTracerLoaderFactory.get_instance(
         module_name="otel_tracer",
         module_config=ingest_config.get(
@@ -282,8 +324,12 @@ def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, i
             output_port_name="output",
         )
     )
+    return otel_tracer_stage
 
-    # Add otel-meter stage ("otel-meter")
+
+def add_otel_meter_stage(pipe, morpheus_pipeline_config, ingest_config, message_provider_host, message_provider_port):
+    endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
+
     otel_meter_loader = OpenTelemetryMeterLoaderFactory.get_instance(
         module_name="otel_meter",
         module_config=ingest_config.get(
@@ -292,7 +338,8 @@ def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, i
                 "redis_client": {
                     "host": message_provider_host,
                     "port": message_provider_port,
-                }
+                },
+                "otel_endpoint": endpoint,
             },
         ),
     )
@@ -307,7 +354,10 @@ def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, i
         )
     )
 
-    # Add completed-job-counter stage ("completed_job_counter")
+    return otel_meter_stage
+
+
+def add_completed_job_counter_stage(pipe, morpheus_pipeline_config, ingest_config):
     completed_job_counter_loader = JobCounterLoaderFactory.get_instance(
         module_name="completed_job_counter",
         module_config=ingest_config.get(
@@ -327,6 +377,48 @@ def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, i
             output_port_name="output",
         )
     )
+    return completed_job_counter_stage
+
+
+def setup_ingestion_pipeline(
+    pipe: Pipeline, morpheus_pipeline_config: Config, ingest_config: typing.Dict[str, typing.Any]
+):
+    message_provider_host, message_provider_port = get_message_provider_config()
+
+    default_cpu_count = get_default_cpu_count(morpheus_pipeline_config)
+
+    # Pre-processing stages
+    source_stage = add_source_stage(
+        pipe, morpheus_pipeline_config, ingest_config, message_provider_host, message_provider_port
+    )
+    submitted_job_counter_stage = add_submitted_job_counter_stage(pipe, morpheus_pipeline_config, ingest_config)
+    metadata_injector_stage = add_metadata_injector_stage(pipe, morpheus_pipeline_config)
+
+    # Primitive extraction
+    pdf_extractor_stage = add_pdf_extractor_stage(pipe, morpheus_pipeline_config, default_cpu_count)
+    docx_extractor_stage = add_docx_extractor_stage(pipe, morpheus_pipeline_config, default_cpu_count)
+    pptx_extractor_stage = add_pptx_extractor_stage(pipe, morpheus_pipeline_config, default_cpu_count)
+
+    # Post-processing
+    image_dedup_stage = add_image_dedup_stage(pipe, morpheus_pipeline_config, ingest_config, default_cpu_count)
+    image_filter_stage = add_image_filter_stage(pipe, morpheus_pipeline_config, ingest_config, default_cpu_count)
+
+    # Transforms and data synthesis
+    nemo_splitter_stage = add_nemo_splitter_stage(pipe, morpheus_pipeline_config, ingest_config)
+    image_caption_stage = add_image_caption_stage(pipe, morpheus_pipeline_config, ingest_config, default_cpu_count)
+
+    # Storage and output
+    image_storage_stage = add_image_storage_stage(pipe, morpheus_pipeline_config)
+    sink_stage = add_sink_stage(
+        pipe, morpheus_pipeline_config, ingest_config, message_provider_host, message_provider_port
+    )
+
+    # Telemetry (Note: everything after the sync stage is out of the hot path, please keep it that way)
+    otel_tracer_stage = add_otel_tracer_stage(pipe, morpheus_pipeline_config, ingest_config)
+    otel_meter_stage = add_otel_meter_stage(
+        pipe, morpheus_pipeline_config, ingest_config, message_provider_host, message_provider_port
+    )
+    completed_job_counter_stage = add_completed_job_counter_stage(pipe, morpheus_pipeline_config, ingest_config)
 
     # Add edges
     pipe.add_edge(source_stage, submitted_job_counter_stage)
@@ -348,7 +440,7 @@ def setup_ingestion_pipeline(pipe: Pipeline, morpheus_pipeline_config: Config, i
 
 
 def pipeline(morpheus_pipeline_config, ingest_config) -> float:
-    logging.info("Starting pipeline setup")
+    logger.info("Starting pipeline setup")
 
     pipe = Pipeline(morpheus_pipeline_config)
     start_abs = datetime.now()
@@ -357,17 +449,17 @@ def pipeline(morpheus_pipeline_config, ingest_config) -> float:
 
     end_setup = start_run = datetime.now()
     setup_elapsed = (end_setup - start_abs).total_seconds()
-    logging.info(f"Pipeline setup completed in {setup_elapsed:.2f} seconds")
+    logger.info(f"Pipeline setup completed in {setup_elapsed:.2f} seconds")
 
-    logging.info("Running pipeline")
+    logger.info("Running pipeline")
     pipe.run()
 
     end_run = datetime.now()
     run_elapsed = (end_run - start_run).total_seconds()
     total_elapsed = (end_run - start_abs).total_seconds()
 
-    logging.info(f"Pipeline run completed in {run_elapsed:.2f} seconds")
-    logging.info(f"Total time elapsed: {total_elapsed:.2f} seconds")
+    logger.info(f"Pipeline run completed in {run_elapsed:.2f} seconds")
+    logger.info(f"Total time elapsed: {total_elapsed:.2f} seconds")
 
     return total_elapsed
 
@@ -425,11 +517,29 @@ def cli(
     """
     Command line interface for configuring and running the pipeline with specified options.
     """
+    # Convert log level from string to logging level
+    log_level_mapping = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR,
+        "CRITICAL": logging.CRITICAL,
+    }
 
-    configure_logging(logger, log_level.upper())
+    # Check for INGEST_LOG_LEVEL environment variable
+    env_log_level = os.getenv("INGEST_LOG_LEVEL")
+    if env_log_level:
+        log_level = env_log_level
+
+    log_level = log_level_mapping.get(log_level.upper(), logging.INFO)
+    logging.basicConfig(level=log_level)
+    configure_logging(log_level=log_level)
+
     CppConfig.set_should_use_cpp(use_cpp)
 
     morpheus_pipeline_config = Config()
+    morpheus_pipeline_config.debug = False
+    morpheus_pipeline_config.log_level = log_level
     morpheus_pipeline_config.pipeline_batch_size = pipeline_batch_size
     morpheus_pipeline_config.enable_monitor = enable_monitor
     morpheus_pipeline_config.feature_length = feature_length
@@ -437,7 +547,7 @@ def cli(
     morpheus_pipeline_config.model_max_batch_size = model_max_batch_size
     morpheus_pipeline_config.mode = PipelineModes[mode.upper()]
 
-    cli_ingest_config = {}  # TODO(Devin) Create a config for CLI overrides -- not necessary yet.
+    cli_ingest_config = {}  # TODO: Create a config for CLI overrides -- not necessary yet.
 
     if ingest_config_path:
         ingest_config = validate_schema(ingest_config_path)

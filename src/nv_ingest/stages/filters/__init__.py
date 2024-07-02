@@ -9,14 +9,7 @@
 # its affiliates is strictly prohibited.
 
 
-from pydantic import BaseModel
+from .image_dedup import generate_dedup_stage
+from .image_filter import generate_image_filter_stage
 
-
-class ImageCaptionExtractionSchema(BaseModel):
-    batch_size: int = 8
-    caption_classifier_model_name: str = "deberta_large"
-    endpoint_url: str = "triton:8001"
-    raise_on_failure: bool = False
-
-    class Config:
-        extra = "forbid"
+__all__ = ["generate_dedup_stage", "generate_image_filter_stage"]

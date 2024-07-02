@@ -9,6 +9,7 @@
 # its affiliates is strictly prohibited.
 
 
+import logging
 from enum import Enum
 from typing import Any
 from typing import Dict
@@ -23,6 +24,8 @@ from pydantic import validator
 
 from nv_ingest.schemas.base_model_noext import BaseModelNoExt
 from nv_ingest.schemas.metadata_schema import ContentTypeEnum
+
+logger = logging.getLogger(__name__)
 
 
 # Enums
@@ -39,13 +42,17 @@ class DocumentTypeEnum(str, Enum):
 
 
 class TaskTypeEnum(str, Enum):
-    split = "split"
-    extract = "extract"
-    embed = "embed"
     caption = "caption"
-    store = "store"
-    filter = "filter"
     dedup = "dedup"
+    embed = "embed"
+    extract = "extract"
+    filter = "filter"
+    split = "split"
+    store = "store"
+
+
+class FilterTypeEnum(str, Enum):
+    image = "image"
 
 
 class TracingOptionsSchema(BaseModelNoExt):
@@ -104,6 +111,7 @@ class IngestTaskEmbedSchema(BaseModelNoExt):
 
 
 class IngestTaskCaptionSchema(BaseModelNoExt):
+    content_type: str = "image"
     n_neighbors: int = 5
 
 
@@ -141,25 +149,25 @@ class IngestTaskSchema(BaseModelNoExt):
     ]
     raise_on_failure: bool = False
 
-    @root_validator(skip_on_failure=True)
+    @root_validator(pre=True)
     def check_task_properties_type(cls, values):
         task_type, task_properties = values.get("type"), values.get("task_properties")
         if task_type and task_properties:
             expected_type = {
-                TaskTypeEnum.split: IngestTaskSplitSchema,
-                TaskTypeEnum.extract: IngestTaskExtractSchema,
-                TaskTypeEnum.store: IngestTaskStoreSchema,
-                TaskTypeEnum.embed: IngestTaskEmbedSchema,
                 TaskTypeEnum.caption: IngestTaskCaptionSchema,
                 TaskTypeEnum.dedup: IngestTaskDedupSchema,
+                TaskTypeEnum.embed: IngestTaskEmbedSchema,
+                TaskTypeEnum.extract: IngestTaskExtractSchema,
                 TaskTypeEnum.filter: IngestTaskFilterSchema,  # Extend this mapping as necessary
-            }.get(task_type)
+                TaskTypeEnum.split: IngestTaskSplitSchema,
+                TaskTypeEnum.store: IngestTaskStoreSchema,
+            }.get(task_type.lower())
 
-            # Validate that task_properties is of the expected type
-            if not isinstance(task_properties, expected_type):
-                raise ValueError(
-                    f"task_properties must be of type {expected_type.__name__} " f"for task type '{task_type}'"
-                )
+            # logger.debug(f"Checking task_properties type for task type '{task_type}'")
+
+            # Ensure task_properties is validated against the expected schema
+            validated_task_properties = expected_type(**task_properties)
+            values["task_properties"] = validated_task_properties
         return values
 
     @validator("type", pre=True)

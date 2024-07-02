@@ -40,7 +40,13 @@ def _process_pdf_bytes(df, task_props):
 
     def decode_and_extract(base64_row, task_props, default="pymupdf"):
         # Base64 content to extract
-        base64_content = base64_row["content"]
+        try:
+            base64_content = base64_row["content"]
+        except KeyError:
+            log_error_message = f"NO CONTENT FOUND IN ROW:\n{base64_row}"
+            logger.error(log_error_message)
+            raise
+
         # Row data to include in extraction
         bool_index = base64_row.index.isin(("content",))
         row_data = base64_row[~bool_index]
@@ -60,7 +66,7 @@ def _process_pdf_bytes(df, task_props):
             extract_method = default
         try:
             func = getattr(pdf, extract_method, default)
-            logger.info("Running extraction method: %s", extract_method)
+            logger.debug("Running extraction method: %s", extract_method)
             extracted_data = func(pdf_stream, **extract_params)
 
             return extracted_data
@@ -99,7 +105,7 @@ def _process_pdf_bytes(df, task_props):
 
 def generate_pdf_extractor_stage(
     c: Config,
-    task: str = "pdf-extract",
+    task: str = "extract",
     task_desc: str = "pdf_content_extractor",
     pe_count: int = 24,
 ):

@@ -7,8 +7,10 @@
 # disclosure or distribution of this material and related documentation
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
+
+
 import logging
-import os
+import re
 import traceback
 from datetime import datetime
 
@@ -41,6 +43,13 @@ MODULE_NAMESPACE = "nv_ingest"
 OpenTelemetryMeterLoaderFactory = ModuleLoaderFactory(MODULE_NAME, MODULE_NAMESPACE)
 
 
+def sanitize_name(name):
+    # Replace spaces with underscores and ensure only ASCII characters
+    sanitized = re.sub(r"[^a-zA-Z0-9_]", "", name.replace(" ", "_"))
+    # Truncate the name to a maximum of 63 characters
+    return sanitized[:63]
+
+
 @register_module(MODULE_NAME, MODULE_NAMESPACE)
 def _metrics_aggregation(builder: mrc.Builder) -> None:
     """
@@ -68,11 +77,9 @@ def _metrics_aggregation(builder: mrc.Builder) -> None:
         use_ssl=validated_config.redis_client.use_ssl,
     )
 
-    endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
-
     resource = Resource(attributes={"service.name": "nv-ingest"})
 
-    reader = PeriodicExportingMetricReader(OTLPMetricExporter(endpoint=endpoint, insecure=True))
+    reader = PeriodicExportingMetricReader(OTLPMetricExporter(endpoint=validated_config.otel_endpoint, insecure=True))
     metrics.set_meter_provider(MeterProvider(resource=resource, metric_readers=[reader]))
 
     set_global_textmap(TraceContextTextMapPropagator())
@@ -100,21 +107,29 @@ def _metrics_aggregation(builder: mrc.Builder) -> None:
         for key, val in message.filter_timestamp("trace::exit::").items():
             exit_key = key
             entry_key = exit_key.replace("trace::exit::", "trace::entry::")
+            ts_exit = val
             ts_entry = message.get_timestamp(entry_key)
-            ts_exit = message.get_timestamp(exit_key)
             job_name = key.replace("trace::exit::", "")
+
+            # Sanitize job name
+            sanitized_job_name = sanitize_name(job_name)
 
             latency_ms = (ts_exit - ts_entry).total_seconds() * 1e3
 
-            stats.append_job_stat(job_name, latency_ms)
-            mean = stats.get_job_stat(job_name, "mean")
-            median = stats.get_job_stat(job_name, "median")
-            if f"{job_name}_mean" not in gauges:
-                gauges[f"{job_name}_mean"] = meter.create_gauge(f"{job_name}_mean")
-            if f"{job_name}_median" not in gauges:
-                gauges[f"{job_name}_median"] = meter.create_gauge(f"{job_name}_median")
-            gauges[f"{job_name}_mean"].set(mean)
-            gauges[f"{job_name}_median"].set(median)
+            stats.append_job_stat(sanitized_job_name, latency_ms)
+            mean = stats.get_job_stat(sanitized_job_name, "mean")
+            median = stats.get_job_stat(sanitized_job_name, "median")
+
+            mean_gauge_name = f"{sanitized_job_name}_mean"
+            median_gauge_name = f"{sanitized_job_name}_median"
+
+            if mean_gauge_name not in gauges:
+                gauges[mean_gauge_name] = meter.create_gauge(mean_gauge_name)
+            if median_gauge_name not in gauges:
+                gauges[median_gauge_name] = meter.create_gauge(median_gauge_name)
+
+            gauges[mean_gauge_name].set(mean)
+            gauges[median_gauge_name].set(median)
 
     def update_e2e_latency(message):
         created_ts = pushed_ts = None

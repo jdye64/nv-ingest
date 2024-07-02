@@ -23,6 +23,7 @@ def nv_ingest_node_failure_context_manager(
     annotation_id: str,
     payload_can_be_empty: bool = False,
     raise_on_failure: bool = False,
+    forward_func=None,
 ) -> typing.Callable:
     """
     A decorator that applies a default failure context manager around a function to manage
@@ -61,6 +62,10 @@ def nv_ingest_node_failure_context_manager(
                         cm_ensure_payload_not_null(control_message=control_message)
 
                     control_message = func(ctx_mgr.control_message, *args, **kwargs)
+
+            else:
+                if forward_func:
+                    control_message = forward_func(control_message)
 
             return control_message
 

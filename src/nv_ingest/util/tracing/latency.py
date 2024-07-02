@@ -13,8 +13,7 @@ import logging
 from datetime import datetime
 from functools import wraps
 
-# Ensure the logging is configured; for example, to log to console at DEBUG level
-logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 
 # Define ANSI color codes
@@ -61,7 +60,7 @@ def latency_logger(name=None):
                 if message.filter_timestamp("latency::ts_send"):
                     ts_send = message.get_timestamp("latency::ts_send")
                     latency_ms = (start_time - ts_send).total_seconds() * 1e3
-                    logging.debug(f"{func_name} since ts_send: {latency_ms} msec.")
+                    logger.debug(f"{func_name} since ts_send: {latency_ms} msec.")
 
                 message.set_timestamp("latency::ts_send", datetime.now())
                 message.set_timestamp(f"latency::{func_name}::elapsed_time", elapsed_time)

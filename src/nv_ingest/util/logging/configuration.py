@@ -27,6 +27,7 @@ def configure_logging(logger, level_name):
     Parameters:
     - level_name (str): The name of the logging level (e.g., "DEBUG", "INFO").
     """
+
     numeric_level = getattr(logging, level_name, None)
     if not isinstance(numeric_level, int):
         raise ValueError(f"Invalid log level: {level_name}")

@@ -8,15 +8,6 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
+from .mp_pool_singleton import ProcessWorkerPoolSingleton
 
-from pydantic import BaseModel
-
-
-class ImageCaptionExtractionSchema(BaseModel):
-    batch_size: int = 8
-    caption_classifier_model_name: str = "deberta_large"
-    endpoint_url: str = "triton:8001"
-    raise_on_failure: bool = False
-
-    class Config:
-        extra = "forbid"
+__all__ = ["ProcessWorkerPoolSingleton"]
