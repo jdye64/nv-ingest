@@ -94,7 +94,7 @@ def upload_images(df: pd.DataFrame, params: Dict[str, Any]) -> pd.DataFrame:
         metadata["image_metadata"]["uploaded_image_url"] = f"{_DEFAULT_READ_ADDRESS}/{bucket_name}/{destination_file}"
 
         # TODO: validate metadata before putting it back in.
-        df.iloc[idx]["metadata"] = metadata
+        df.loc[idx]["metadata"] = metadata
 
     return df
 
