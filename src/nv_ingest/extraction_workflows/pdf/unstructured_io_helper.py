@@ -30,8 +30,10 @@ from datetime import datetime
 
 import fitz
 from unstructured_client import UnstructuredClient
+from unstructured_client.models import operations
 from unstructured_client.models import shared
-from unstructured_client.models.errors import SDKError
+from unstructured_client.utils import BackoffStrategy
+from unstructured_client.utils import RetryConfig
 
 from nv_ingest.schemas.metadata_schema import AccessLevelEnum
 from nv_ingest.schemas.metadata_schema import ContentTypeEnum
@@ -95,6 +97,9 @@ def unstructured_io(
     if (strategy != "hi_res") and (extract_images or extract_tables):
         warnings.warn("'hi_res' strategy required when extracting images or tables")
 
+    # get unstructured.io split pdf concurrency level
+    concurrency_level = kwargs.get("unstructured_concurrency_level", 10)
+
     # get row_data
     row_data = kwargs.get("row_data", None)
 
@@ -105,6 +110,9 @@ def unstructured_io(
     # get text_depth
     text_depth = kwargs.get("text_depth", "page")
     text_depth = TextTypeEnum[text_depth.upper()]
+
+    # TODO: Not configurable anywhere at the moment; likely don't need to but may be a small perf gain.
+    identify_nearby_objects = kwargs.get("identify_nearby_objects", True)
 
     # get base metadata
     metadata_col = kwargs.get("metadata_column", "metadata")
@@ -167,62 +175,69 @@ def unstructured_io(
 
         source_metadata.update(pymupdf_metadata)
 
-        s = UnstructuredClient(
+        client = UnstructuredClient(
+            retry_config=RetryConfig("backoff", BackoffStrategy(1, 50, 1.1, 100), False),
             server_url=unstructured_url,
             api_key_auth=api_key,
         )
 
-        files = shared.Files(
-            content=pdf_stream.getvalue(),
-            file_name=file_name,
+        req = operations.PartitionRequest(
+            partition_parameters=shared.PartitionParameters(
+                files=shared.Files(
+                    content=pdf_stream.getvalue(),
+                    file_name=file_name,
+                ),
+                strategy=strategy,
+                languages=["eng"],
+                coordinates=True,
+                extract_image_block_types=["Image"] if extract_images else None,
+                split_pdf_page=True,
+                split_pdf_concurrency_level=concurrency_level,
+            ),
         )
 
-        req = shared.PartitionParameters(
-            files=files,
-            # Other partition params
-            strategy=strategy,
-            languages=["eng"],
-            coordinates=True,
-            extract_image_block_types=["Image"] if extract_images else None,
-            split_pdf_page=True,
-        )
-
-        try:
-            resp = s.general.partition(req)
-            resp_elements = resp.elements
-
-        except SDKError as e:
-            logger.error(e)
-            return []
+        res = client.general.partition(request=req)
 
         extracted_data = []
         accumulated_text = []
         curr_page = 1
+        page_nearby_blocks = {
+            "text": {"content": [], "bbox": []},
+            "images": {"content": [], "bbox": []},
+            "structured": {"content": [], "bbox": []},
+        }
 
         # Extract content from each element of partition response
-        for block_idx, item in enumerate(resp_elements):
+        for block_idx, item in enumerate(res.elements):
             # Extract text
             if extract_text and item["type"] not in ("Image", "Table"):
-                if extract_text and text_depth == TextTypeEnum.PAGE and item["metadata"]["page_number"] != curr_page:
-                    text_extraction = _construct_text_metadata(
-                        accumulated_text,
-                        page_count,
-                        curr_page - 1,
-                        -1,
-                        text_depth,
-                        source_metadata,
-                        base_unified_metadata,
-                    )
+                if item["metadata"]["page_number"] != curr_page:
+                    if text_depth == TextTypeEnum.PAGE:
+                        text_extraction = _construct_text_metadata(
+                            accumulated_text,
+                            page_count,
+                            curr_page - 1,
+                            -1,
+                            text_depth,
+                            source_metadata,
+                            base_unified_metadata,
+                        )
 
-                    if len(text_extraction) > 0:
-                        extracted_data.append(text_extraction)
+                        if len(text_extraction) > 0:
+                            extracted_data.append(text_extraction)
 
-                    accumulated_text = []
+                        accumulated_text = []
+
+                    page_nearby_blocks = {
+                        "text": {"content": [], "bbox": []},
+                        "images": {"content": [], "bbox": []},
+                        "structured": {"content": [], "bbox": []},
+                    }
                     curr_page = item["metadata"]["page_number"]
 
                 accumulated_text.append(item["text"])
 
-                if extract_text and text_depth == TextTypeEnum.BLOCK:
+                if text_depth == TextTypeEnum.BLOCK:
                     points = item["metadata"]["coordinates"]["points"]
 
                     text_extraction = _construct_text_metadata(
@@ -241,6 +256,11 @@ def unstructured_io(
 
                     accumulated_text = []
 
+                if (extract_images and identify_nearby_objects) and (len(item["text"]) > 0):
+                    points = item["metadata"]["coordinates"]["points"]
+                    page_nearby_blocks["text"]["content"].append(" ".join(item["text"]))
+                    page_nearby_blocks["text"]["bbox"].append((points[0][0], points[0][1], points[2][0], points[2][1]))
+
             # Extract images
             if extract_images and item["type"] == "Image":
                 base64_img = item["metadata"]["image_base64"]
@@ -254,6 +274,7 @@ def unstructured_io(
                     block_idx,
                     source_metadata,
                     base_unified_metadata,
+                    page_nearby_blocks,
                     bbox=(points[0][0], points[0][1], points[2][0], points[2][1]),
                 )
 
@@ -369,6 +390,7 @@ def _construct_image_metadata(
     block_idx,
     source_metadata,
     base_unified_metadata,
+    page_nearby_blocks,
     bbox,
 ):
     content_metadata = {
@@ -381,6 +403,7 @@ def _construct_image_metadata(
             "block": block_idx,
             "line": -1,
             "span": -1,
+            "nearby_objects": page_nearby_blocks,
         },
     }
 
