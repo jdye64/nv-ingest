@@ -23,6 +23,7 @@ def nv_ingest_node_failure_context_manager(
     annotation_id: str,
     payload_can_be_empty: bool = False,
     raise_on_failure: bool = False,
+    skip_processing_if_failed: bool = True,
     forward_func=None,
 ) -> typing.Callable:
     """
@@ -39,6 +40,10 @@ def nv_ingest_node_failure_context_manager(
     raise_on_failure : bool, optional
         If True, an exception is raised if the decorated function encounters an error.
         Otherwise, the error is handled silently by annotating the ControlMessage. Defaults to False.
+    skip_processing_if_failed:
+        If True, skips the processing of the decorated function if the control message has already
+        been marked as failed. If False, the function will be processed regardless of the failure
+        status of the ControlMessage. Defaults to True.
 
     Returns
     -------
@@ -52,7 +57,7 @@ def nv_ingest_node_failure_context_manager(
         def wrapper(control_message: ControlMessage, *args, **kwargs):
             # Quick return if the ControlMessage has already failed
             is_failed = control_message.get_metadata("cm_failed", False)
-            if not is_failed:
+            if not is_failed or not skip_processing_if_failed:
                 with CMNVIngestFailureContextManager(
                     control_message=control_message,
                     annotation_id=annotation_id,

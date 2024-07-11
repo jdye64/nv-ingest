@@ -16,7 +16,6 @@ from datetime import datetime
 
 import mrc
 from morpheus.messages import ControlMessage
-from morpheus.utils.control_message_utils import cm_skip_processing_if_failed
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
 from mrc.core import operators as ops
@@ -33,7 +32,6 @@ from nv_ingest.util.exception_handlers.decorators import nv_ingest_node_failure_
 from nv_ingest.util.modules.config_validator import fetch_and_validate_module_config
 from nv_ingest.util.redis import RedisClient
 from nv_ingest.util.telemetry.global_stats import GlobalStats
-from nv_ingest.util.tracing import traceable
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +86,8 @@ def _metrics_aggregation(builder: mrc.Builder) -> None:
 
     gauges = {
         "inflight_jobs_total": meter.create_gauge("inflight_jobs_total"),
+        "completed_jobs_total": meter.create_gauge("completed_jobs_total"),
+        "failed_jobs_total": meter.create_gauge("failed_jobs_total"),
         "source_to_sink_mean": meter.create_gauge("source_to_sink_mean"),
         "source_to_sink_median": meter.create_gauge("source_to_sink_median"),
         "outstanding_job_responses_total": meter.create_gauge("outstanding_job_responses_total"),
@@ -97,11 +97,14 @@ def _metrics_aggregation(builder: mrc.Builder) -> None:
 
     response_channels_store = {}
 
-    def update_inflight_jobs():
+    def update_job_stats():
         submitted_jobs = stats.get_stat("submitted_jobs")
         completed_jobs = stats.get_stat("completed_jobs")
-        inflight_jobs = submitted_jobs - completed_jobs
+        failed_jobs = stats.get_stat("failed_jobs")
+        inflight_jobs = submitted_jobs - completed_jobs - failed_jobs
         gauges["inflight_jobs_total"].set(inflight_jobs)
+        gauges["completed_jobs_total"].set(completed_jobs)
+        gauges["failed_jobs_total"].set(failed_jobs)
 
     def update_job_latency(message):
         for key, val in message.filter_timestamp("trace::exit::").items():
@@ -173,11 +176,10 @@ def _metrics_aggregation(builder: mrc.Builder) -> None:
         for key in to_remove:
             del response_channels_store[key]
 
-    @traceable(MODULE_NAME)
-    @cm_skip_processing_if_failed
     @nv_ingest_node_failure_context_manager(
         annotation_id=MODULE_NAME,
         raise_on_failure=validated_config.raise_on_failure,
+        skip_processing_if_failed=False,
     )
     def aggregate_metrics(message: ControlMessage) -> ControlMessage:
         try:
@@ -187,7 +189,7 @@ def _metrics_aggregation(builder: mrc.Builder) -> None:
 
             logger.debug("Performing statistics aggregation.")
 
-            update_inflight_jobs()
+            update_job_stats()
             update_job_latency(message)
             update_e2e_latency(message)
             update_response_stats(message)

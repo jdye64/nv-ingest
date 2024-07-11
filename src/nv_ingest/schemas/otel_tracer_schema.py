@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 
 class OpenTelemetryTracerSchema(BaseModel):
+    otel_endpoint: str = "localhost:4317"
     raise_on_failure: bool = False
 
     class Config:

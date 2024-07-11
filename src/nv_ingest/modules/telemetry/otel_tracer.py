@@ -8,12 +8,10 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 import logging
-import os
 import traceback
 
 import mrc
 from morpheus.messages import ControlMessage
-from morpheus.utils.control_message_utils import cm_skip_processing_if_failed
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
 from mrc.core import operators as ops
@@ -25,12 +23,14 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.sdk.trace.id_generator import RandomIdGenerator
 from opentelemetry.trace import NonRecordingSpan
 from opentelemetry.trace import SpanContext
+from opentelemetry.trace import Status
+from opentelemetry.trace import StatusCode
 from opentelemetry.trace import TraceFlags
 
 from nv_ingest.schemas.otel_tracer_schema import OpenTelemetryTracerSchema
 from nv_ingest.util.exception_handlers.decorators import nv_ingest_node_failure_context_manager
 from nv_ingest.util.modules.config_validator import fetch_and_validate_module_config
-from nv_ingest.util.tracing import traceable
+from nv_ingest.util.tracing.logging import TaskResultStatus
 
 logger = logging.getLogger(__name__)
 
@@ -56,13 +56,11 @@ def _trace(builder: mrc.Builder) -> None:
     """
     validated_config = fetch_and_validate_module_config(builder, OpenTelemetryTracerSchema)
 
-    endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
-
     resource = Resource(attributes={"service.name": "nv-ingest"})
 
     trace.set_tracer_provider(TracerProvider(resource=resource))
 
-    otlp_exporter = OTLPSpanExporter(endpoint=endpoint, insecure=True)
+    otlp_exporter = OTLPSpanExporter(endpoint=validated_config.otel_endpoint, insecure=True)
     span_processor = BatchSpanProcessor(otlp_exporter)
     trace.get_tracer_provider().add_span_processor(span_processor)
 
@@ -91,6 +89,17 @@ def _trace(builder: mrc.Builder) -> None:
 
             timestamps[job_name] = (ts_entry_ns, ts_exit_ns)
 
+        task_results = {}
+        for key in message.list_metadata():
+            if not key.startswith("annotation::"):
+                continue
+            task = message.get_metadata(key)
+            if not (("task_id" in task) and ("task_result" in task)):
+                continue
+            task_id = task["task_id"]
+            task_result = task["task_result"]
+            task_results[task_id] = task_result
+
         flattened = [x for t in timestamps.values() for x in t]
         start_time = min(flattened)
         end_time = max(flattened)
@@ -106,22 +115,33 @@ def _trace(builder: mrc.Builder) -> None:
         child_ctx = trace.set_span_in_context(parent_span)
         for job_name, (ts_entry, ts_exit) in timestamps.items():
             span = tracer.start_span(job_name, context=child_ctx, start_time=ts_entry)
+            if job_name in task_results:
+                task_result = task_results[job_name]
+                if task_result == TaskResultStatus.SUCCESS.value:
+                    span.set_status(Status(StatusCode.OK))
+                if task_result == TaskResultStatus.FAILURE.value:
+                    span.set_status(Status(StatusCode.ERROR))
             try:
                 span.add_event("entry", timestamp=ts_entry)
                 span.add_event("exit", timestamp=ts_exit)
             finally:
                 span.end(end_time=ts_exit)
+
+        if message.has_metadata("cm_failed") and message.get_metadata("cm_failed"):
+            parent_span.set_status(Status(StatusCode.ERROR))
+        else:
+            parent_span.set_status(Status(StatusCode.OK))
+
         try:
             parent_span.add_event("start", timestamp=start_time)
             parent_span.add_event("end", timestamp=end_time)
         finally:
             parent_span.end(end_time=end_time)
 
-    @traceable(MODULE_NAME)
-    @cm_skip_processing_if_failed
     @nv_ingest_node_failure_context_manager(
         annotation_id=MODULE_NAME,
         raise_on_failure=validated_config.raise_on_failure,
+        skip_processing_if_failed=False,
     )
     def on_next(message: ControlMessage) -> ControlMessage:
         try:

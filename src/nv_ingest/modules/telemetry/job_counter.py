@@ -13,7 +13,6 @@ import traceback
 
 import mrc
 from morpheus.messages import ControlMessage
-from morpheus.utils.control_message_utils import cm_skip_processing_if_failed
 from morpheus.utils.module_utils import ModuleLoaderFactory
 from morpheus.utils.module_utils import register_module
 from mrc.core import operators as ops
@@ -54,21 +53,28 @@ def _job_counter(builder: mrc.Builder) -> None:
     stats = GlobalStats.get_instance()
 
     @traceable(MODULE_NAME)
-    @cm_skip_processing_if_failed
     @nv_ingest_node_failure_context_manager(
         annotation_id=MODULE_NAME,
         raise_on_failure=validated_config.raise_on_failure,
+        skip_processing_if_failed=False,
     )
     def count_jobs(message: ControlMessage) -> ControlMessage:
         try:
             logger.debug(f"Performing job counter: {validated_config.name}")
+
+            if validated_config.name == "completed_jobs":
+                if message.has_metadata("cm_failed") and message.get_metadata("cm_failed"):
+                    stats.increment_stat("failed_jobs")
+                else:
+                    stats.increment_stat("completed_jobs")
+                return message
 
             stats.increment_stat(validated_config.name)
 
             return message
         except Exception as e:
             traceback.print_exc()
-            raise ValueError(f"Failed to do caption extraction: {e}")
+            raise ValueError(f"Failed to run job counter: {e}")
 
     job_counter_node = builder.make_node(f"{validated_config.name}_counter", ops.map(count_jobs))
 

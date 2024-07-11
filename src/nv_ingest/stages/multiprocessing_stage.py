@@ -169,6 +169,10 @@ class MultiProcessingBaseStage(SinglePortStage):
         return self._task + uuid.uuid4().hex
 
     @property
+    def task_desc(self) -> str:
+        return self._task_desc
+
+    @property
     def document_type(self) -> str:
         return self._document_type
 
@@ -365,7 +369,7 @@ class MultiProcessingBaseStage(SinglePortStage):
         )
 
         @nv_ingest_node_failure_context_manager(
-            annotation_id=self.name,
+            annotation_id=self.task_desc,
             raise_on_failure=False,
             forward_func=partial(put_in_queue, pass_thru_recv_queue=self._pass_thru_recv_queue),
         )
@@ -388,7 +392,7 @@ class MultiProcessingBaseStage(SinglePortStage):
 
         @filter_by_task([(self._task, self._filter_properties)], forward_func=forward_fn)
         @nv_ingest_node_failure_context_manager(
-            annotation_id=self.name, raise_on_failure=False, forward_func=forward_fn
+            annotation_id=self.task_desc, raise_on_failure=False, forward_func=forward_fn
         )
         def on_next(ctrl_msg: ControlMessage):
             logger.debug(f"base on_next {self.name}")
@@ -458,7 +462,7 @@ class MultiProcessingBaseStage(SinglePortStage):
             ctrl_msg = self._ctrl_msg_ledger.pop(work_package["cm_id"])
 
             @nv_ingest_node_failure_context_manager(
-                annotation_id=self.name,
+                annotation_id=self.task_desc,
                 raise_on_failure=False,
             )
             def cm_func(ctrl_msg: ControlMessage, work_package: dict):
@@ -485,7 +489,7 @@ class MultiProcessingBaseStage(SinglePortStage):
                 yield ctrl_msg
 
         @nv_ingest_node_failure_context_manager(
-            annotation_id=self.name,
+            annotation_id=self.task_desc,
             raise_on_failure=False,
         )
         def merge_fn(ctrl_msg: ControlMessage):
