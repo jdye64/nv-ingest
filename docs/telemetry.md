@@ -5,7 +5,7 @@
 To run OpenTelemetry locally, run
 
 ```shell
-$ docker comopose up otel-collector
+$ docker compose up otel-collector
 ```
 
 Once and OpenTelemetry and Zipkin are running, you can open your browser to explore traces: [http://localhost:9411/zipkin/](http://localhost:9411/zipkin/).

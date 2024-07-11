@@ -102,6 +102,7 @@ class GlobalStats:
         self.stats = {
             "submitted_jobs": 0,
             "completed_jobs": 0,
+            "failed_jobs": 0,
         }
         self.job_stats = defaultdict(lambda: {"values": deque(), "mean": 0.0, "median": 0.0})
 
