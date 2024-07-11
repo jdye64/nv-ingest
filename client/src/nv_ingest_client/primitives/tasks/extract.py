@@ -33,6 +33,9 @@ UNSTRUCTURED_API_KEY = os.environ.get("UNSTRUCTURED_API_KEY", None)
 UNSTRUCTURED_URL = os.environ.get("UNSTRUCTURED_URL", "https://api.unstructured.io/general/v0/general")
 UNSTRUCTURED_STRATEGY = os.environ.get("UNSTRUCTURED_STRATEGY", "auto")
 
+ADOBE_CLIENT_ID = os.environ.get("ADOBE_CLIENT_ID", None)
+ADOBE_CLIENT_SECRET = os.environ.get("ADOBE_CLIENT_SECRET", None)
+
 _DEFAULT_EXTRACTOR_MAP = {
     "pdf": "pymupdf",
     "docx": "python_docx",
@@ -51,6 +54,7 @@ _Type_Extract_Method_PDF = Literal[
     "tika",
     "unstructured_io",
     "llama_parse",
+    "adobe",
 ]
 
 _Type_Extract_Method_DOCX = Literal["python_docx", "haystack", "unstructured_local", "unstructured_service"]
@@ -187,4 +191,10 @@ class ExtractTask(Task):
                 "unstructured_strategy": os.environ.get("UNSTRUCTURED_STRATEGY", UNSTRUCTURED_STRATEGY),
             }
             task_properties["params"].update(unstructured_properties)
+        elif self._extract_method == "adobe":
+            adobe_properties = {
+                "adobe_client_id": os.environ.get("ADOBE_CLIENT_ID", ADOBE_CLIENT_ID),
+                "adobe_client_secrect": os.environ.get("ADOBE_CLIENT_SECRET", ADOBE_CLIENT_SECRET),
+            }
+            task_properties["params"].update(adobe_properties)
         return {"type": "extract", "task_properties": task_properties}
