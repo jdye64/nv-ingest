@@ -32,6 +32,7 @@ ECLAIR_BATCH_SIZE = os.environ.get("ECLAIR_TRITON_PORT", "16")
 UNSTRUCTURED_API_KEY = os.environ.get("UNSTRUCTURED_API_KEY", None)
 UNSTRUCTURED_URL = os.environ.get("UNSTRUCTURED_URL", "https://api.unstructured.io/general/v0/general")
 UNSTRUCTURED_STRATEGY = os.environ.get("UNSTRUCTURED_STRATEGY", "auto")
+UNSTRUCTURED_CONCURRENCY_LEVEL = os.environ.get("UNSTRUCTURED_CONCURRENCY_LEVEL", 10)
 
 _DEFAULT_EXTRACTOR_MAP = {
     "pdf": "pymupdf",
@@ -185,6 +186,9 @@ class ExtractTask(Task):
                 "unstructured_api_key": os.environ.get("UNSTRUCTURED_API_KEY", UNSTRUCTURED_API_KEY),
                 "unstructured_url": os.environ.get("UNSTRUCTURED_URL", UNSTRUCTURED_URL),
                 "unstructured_strategy": os.environ.get("UNSTRUCTURED_STRATEGY", UNSTRUCTURED_STRATEGY),
+                "unstructured_concurrency_level": os.environ.get(
+                    "UNSTRUCTURED_CONCURRENCY_LEVEL", UNSTRUCTURED_CONCURRENCY_LEVEL
+                ),
             }
             task_properties["params"].update(unstructured_properties)
         return {"type": "extract", "task_properties": task_properties}

@@ -179,9 +179,10 @@ def test_unstructured_io_table(table_pdf_stream, document_df, api_key):
     assert len(extracted_data[0]) == 3
 
     assert extracted_data[0][0] == "structured"
+    assert "<table><thead><th>Year</th><th>Bill</th><th>Amy</th><th>James</th><th>" in extracted_data[0][1]["content"]
     assert (
-        "<table><thead><th>Year</th><th>Bill</th><th>Amy</th><th>James</th><th>" in extracted_data[0][1]["content"]
-        and "</tr><tr><td>2005</td><td></td><td>N/A</td><td>N/A</td><td></td><td>631</td><td>"
+        "</tr><tr><td>2005</td><td></td><td>N/A</td><td>N/A</td><td>631</td><td></td></tr><tr><td>"
         in extracted_data[0][1]["content"]
     )
+
     assert extracted_data[0][1]["content_metadata"]["page_number"] == 0
