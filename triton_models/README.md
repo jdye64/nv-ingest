@@ -5,6 +5,7 @@
 - [Model Configurations](#model-configurations)
   - [DeBerta Caption Selection Model](#deberta-caption-selection-model)
   - [ECLAIR](#eclair-document-ocr-model)
+  - [YOLOX](#yolox)
   - [E5-small-v2](#e5-small-v2)
 - [Verifying Model Deployment](#verifying-model-deployment)
 - [Troubleshooting Common Issues](#troubleshooting-common-issues)
@@ -140,6 +141,28 @@ Then, run the server:
 ```
 docker compose -f docker-compose.yaml -f third_party/eclair_triton/docker-compose.yaml up triton-eclair
 ```
+
+### YOLOX
+
+To generate a YOLOX TensorRT engine, pull the LFS tracked pretrained model.
+
+```bash
+git lfs pull --include "best_ckpt.pth"
+```
+
+Once downloaded, run the export script below within the yolox directory to generate the TensorRT engine.
+
+Note, this step will take a while to complete.
+
+```
+./export_trt_engine.sh
+```
+
+When complete, a TensorRT engine will be saved at the path below.
+
+`yolox/1/model.plan`
+
+At this point, the model is ready to be loaded in Triton.
 
 ### E5-Small-V2
 
