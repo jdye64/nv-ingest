@@ -67,7 +67,7 @@ def _cpu_only_apply_filter(df: pd.DataFrame, task_params: dict):
     # return if no images
     image_mask = df["document_type"] == ContentTypeEnum.IMAGE
     if not image_mask.any():
-        return df[image_mask]
+        return df[~image_mask]
 
     df_image = df.loc[image_mask]
     avg_size = df_image["metadata"].apply(calculate_average_image_size)
