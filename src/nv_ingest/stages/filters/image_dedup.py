@@ -46,7 +46,7 @@ def _cpu_only_apply_dedup_filter(df: pd.DataFrame, filter_flag: bool):
     # return if no images
     image_mask = df["document_type"] == ContentTypeEnum.IMAGE
     if not image_mask.any():
-        return df[image_mask]
+        return df[~image_mask]
 
     base_cols = df.columns
     df_images = df.loc[image_mask].copy()
