@@ -153,6 +153,7 @@ def extract_file_content(path: str) -> Tuple[str, DocumentTypeEnum]:
             content = serialize_to_base64(file_stream)
     except Exception as e:
         logger.error(f"Error processing file {path}: {e}")
+
         raise ValueError(f"Failed to extract content from {path}") from e
 
     logger.debug(f"Content extracted from '{path}'")

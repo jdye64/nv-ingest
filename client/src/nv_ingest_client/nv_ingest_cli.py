@@ -91,6 +91,7 @@ logger = logging.getLogger(__name__)
     help="Timeout when waiting for a document to be processed.",
 )
 @click.option("--dry_run", is_flag=True, help="Perform a dry run without executing actions.")
+@click.option("--fail_on_error", is_flag=True, help="Fail on error.")
 @click.option("--output_directory", type=click.Path(), default=None, help="Output directory for results.")
 @click.option(
     "--log_level",
@@ -180,6 +181,7 @@ def main(
     doc: List[str],
     document_processing_timeout: int,
     dry_run: bool,
+    fail_on_error: bool,
     log_level: str,
     output_directory: str,
     shuffle_dataset: bool,
@@ -238,6 +240,7 @@ def main(
                 output_directory=output_directory,
                 batch_size=batch_size,
                 timeout=document_processing_timeout,
+                fail_on_error=fail_on_error,
             )
 
             report_statistics(start_time_ns, trace_times, pages_processed, total_files, total_timeouts)
