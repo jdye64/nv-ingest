@@ -269,7 +269,11 @@ def create_job_specs_for_batch(files_batch: List[str], tasks: Dict, client: NvIn
     """
     job_ids = []
     for file_name in files_batch:
-        file_content, file_type = extract_file_content(file_name)  # Assume these are defined
+        try:
+            file_content, file_type = extract_file_content(file_name)  # Assume these are defined
+        except ValueError as ve:
+            logger.error(f"Error extracting content from {file_name}: {ve}")
+            continue
 
         job_spec = JobSpec(
             document_type=file_type,
@@ -310,7 +314,13 @@ def create_job_specs_for_batch(files_batch: List[str], tasks: Dict, client: NvIn
 
 # TODO(Devin): Circle back on this, we can refactor to be better at keeping as many jobs in-flight as possible.
 def create_and_process_jobs(
-    files: List[str], client: NvIngestClient, tasks: Dict, output_directory: str, batch_size: int, timeout: int = 10
+    files: List[str],
+    client: NvIngestClient,
+    tasks: Dict,
+    output_directory: str,
+    batch_size: int,
+    timeout: int = 10,
+    fail_on_error: bool = False,
 ):
     """
     Processes a list of files, creating and submitting jobs for each file, then fetching results.
@@ -345,6 +355,17 @@ def create_and_process_jobs(
                 batch_files = files[processed : processed + new_job_count]  # noqa: E203
 
                 new_job_ids = create_job_specs_for_batch(batch_files, tasks, client)
+                if len(new_job_ids) != new_job_count:
+                    missing_jobs = new_job_count - len(new_job_ids)
+                    error_msg = (
+                        f"Missing {missing_jobs} job specs -- this is likely due to bad reads or file corruption"
+                    )
+                    if fail_on_error:
+                        raise RuntimeError(error_msg)
+
+                    logger.warning(error_msg)
+                    pbar.update(missing_jobs)
+
                 job_id_map.update({job_id: file for job_id, file in zip(new_job_ids, batch_files)})
 
                 processed += new_job_count

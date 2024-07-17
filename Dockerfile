@@ -6,7 +6,7 @@ ARG BASE_IMG=nvcr.io/nvidia/morpheus/morpheus
 ARG BASE_IMG_TAG=v24.03.02-runtime
 
 # Use NVIDIA Morpheus as the base image
-FROM $BASE_IMG:$BASE_IMG_TAG as base
+FROM $BASE_IMG:$BASE_IMG_TAG AS base
 
 ARG RELEASE_TYPE="dev"
 ARG VERSION=""
@@ -65,13 +65,13 @@ RUN source activate morpheus \
 RUN source activate morpheus \
     && conda install https://anaconda.org/conda-forge/pyarrow/14.0.2/download/linux-64/pyarrow-14.0.2-py310h188ebfb_19_cuda.conda
 
-FROM base as runtime
+FROM base AS runtime
 
 COPY src/pipeline.py ./
 COPY pyproject.toml ./
 
 CMD ["python", "/workspace/pipeline.py"]
 
-FROM base as development
+FROM base AS development
 
 CMD ["/bin/bash"]

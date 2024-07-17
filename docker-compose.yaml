@@ -82,7 +82,7 @@ services:
       - MESSAGE_CLIENT_HOST=redis
       - MESSAGE_CLIENT_PORT=6379
       - REDIS_MORPHEUS_TASK_QUEUE=morpheus_task_queue
-      - ECLAIR_TRITON_HOST=triton-eclair
+      - ECLAIR_TRITON_HOST=triton
       - ECLAIR_TRITON_PORT=8001
       - OTEL_EXPORTER_OTLP_ENDPOINT=otel-collector:4317
       - INGEST_LOG_LEVEL=INFO
@@ -112,7 +112,7 @@ services:
       - MESSAGE_CLIENT_HOST=redis
       - MESSAGE_CLIENT_PORT=6379
       - REDIS_MORPHEUS_TASK_QUEUE=morpheus_task_queue
-      - ECLAIR_TRITON_HOST=triton-eclair
+      - ECLAIR_TRITON_HOST=triton
       - ECLAIR_TRITON_PORT=8001
       - OTEL_EXPORTER_OTLP_ENDPOINT=otel-collector:4317
     deploy:

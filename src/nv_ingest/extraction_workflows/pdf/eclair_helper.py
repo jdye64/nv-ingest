@@ -23,6 +23,7 @@
 # limitations under the License.
 
 import logging
+import os
 import uuid
 from datetime import datetime
 from typing import List
@@ -43,8 +44,8 @@ from nv_ingest.util.exception_handlers.pdf import pymupdf_exception_handler
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_ECLAIR_TRITON_HOST = "localhost"
-DEFAULT_ECLAIR_TRITON_PORT = 8001
+ECLAIR_TRITON_HOST = os.environ.get("ECLAIR_TRITON_HOST", "triton")
+ECLAIR_TRITON_PORT = os.environ.get("ECLAIR_TRITON_PORT", 8001)
 DEFAULT_DPI = 96
 DEFAULT_BATCH_SIZE = 16
 
@@ -74,8 +75,8 @@ def eclair(pdf_stream, extract_text: bool, extract_images: bool, extract_tables:
     """
     logger.debug("Extracting PDF with Eclair backend.")
 
-    eclair_triton_host = kwargs.get("eclair_triton_host", DEFAULT_ECLAIR_TRITON_HOST)
-    eclair_triton_port = kwargs.get("eclair_triton_port", DEFAULT_ECLAIR_TRITON_PORT)
+    eclair_triton_host = kwargs.get("eclair_triton_host", ECLAIR_TRITON_HOST)
+    eclair_triton_port = kwargs.get("eclair_triton_port", ECLAIR_TRITON_PORT)
     eclair_triton_url = f"{eclair_triton_host}:{eclair_triton_port}"
     triton_client = grpcclient.InferenceServerClient(url=eclair_triton_url)
 

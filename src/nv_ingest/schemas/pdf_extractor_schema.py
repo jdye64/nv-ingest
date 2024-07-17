@@ -22,5 +22,7 @@ class PDFExtractorSchema(BaseModel):
     n_workers: int = 16
     raise_on_failure: bool = False
 
+    # TODO: Add additional sub config sections for each extraction method type.
+
     class Config:
         extra = "forbid"
