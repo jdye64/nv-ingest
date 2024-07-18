@@ -44,7 +44,6 @@ We'll use the [ngc-cli](https://org.ngc.nvidia.com/setup/installers/cli) tool to
 ngc registry model download-version "nvidian/nemo-llm/nemo-retriever-caption-classification-triton-pytorch:3" \
   --dest ./
 
-mkdir -p ./scratch
 mkdir -p ./scratch/caption_classification/onnx_conversion
 mkdir -p ./scratch/caption_classification/trt_conversion
 tar -xvf nemo-retriever-caption-classification-triton-pytorch_v3/3.tar.gz -C ./scratch/
@@ -57,7 +56,7 @@ to a directory where you have write permissions.'
 
 ```bash
 python ./src/util/trt_converters.py \
-    --ckpt-path "./models/caption_classification/1/weights/caption_classification/1/weights/fold0/model/model_0.pt" \
+    --ckpt-path "./scratch/caption_classification/3/weights/fold0/model/model_0.pt" \
     --dynamic-batching \
     --engine-path "./scratch/model.plan" \
     --generate-onnx \
@@ -65,13 +64,13 @@ python ./src/util/trt_converters.py \
     --generate-trt \
     --input-size 8 128 \
     --model-class-name "DebertaLargeModel" \
-        --model-io-config '{"inputs":[{"name":"input_ids","dtype":"int64","shape":[128]},{"name":"input_mask","dtype":"float32","shape":[128]},{"name":"input_token_type_ids","dtype":"float32","shape":[128]}],"outputs":[{"name":"output","dtype":"float32","shape":[1]}]}' \
+    --model-io-config '{"inputs":[{"name":"input_ids","dtype":"int64","shape":[128]},{"name":"input_mask","dtype":"float32","shape":[128]},{"name":"input_token_type_ids","dtype":"float32","shape":[128]}],"outputs":[{"name":"output","dtype":"float32","shape":[1]}]}' \
     --model-name "deberta_large" \
     --model-script-path "./triton_models/caption_classification/model_script.py" \
     --onnx-path "./scratch/model.onnx" \
     --overwrite \
     --triton-inputs "input_ids,input_mask" \
-    --triton-repo "./models" \
+    --triton-repo "./triton_models" \
     --use-fp16
 ```
 

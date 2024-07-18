@@ -84,7 +84,7 @@ variables:
       - .venv/
   before_script:
     - apt-get update
-    - apt-get install --no-install-recommends --yes git-core gcc
+    - apt-get install --no-install-recommends --yes git-core gcc libgl1-mesa-glx
     # TODO this should just be in the image already instead of downloading every time, same with git-core
     - pip install .
     - pip install ./client

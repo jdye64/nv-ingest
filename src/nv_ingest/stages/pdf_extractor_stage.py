@@ -14,18 +14,21 @@ import functools
 import io
 import logging
 import traceback
+from typing import Any
+from typing import Dict
 
 import pandas as pd
 from morpheus.config import Config
 
 from nv_ingest.extraction_workflows import pdf
+from nv_ingest.schemas.pdf_extractor_schema import PDFExtractorSchema
 from nv_ingest.stages.multiprocessing_stage import MultiProcessingBaseStage
 from nv_ingest.util.exception_handlers.pdf import create_exception_tag
 
 logger = logging.getLogger(f"morpheus.{__name__}")
 
 
-def _process_pdf_bytes(df, task_props):
+def _process_pdf_bytes(df, task_props, validated_config):
     """
     Processes a cuDF DataFrame containing PDF files in base64 encoding.
     Each PDF's content is replaced with its extracted text.
@@ -62,6 +65,11 @@ def _process_pdf_bytes(df, task_props):
         # Type of extraction method to use
         extract_method = task_props.get("method", "pymupdf")
         extract_params = task_props.get("params", {})
+
+        if extract_params["extract_tables_method"] == "yolox":
+            extract_params["table_detection_endpoint_url"] = validated_config.table_detection_endpoint_url
+            extract_params["table_detection_model_name"] = validated_config.table_detection_model_name
+
         if not hasattr(pdf, extract_method):
             extract_method = default
         try:
@@ -105,6 +113,7 @@ def _process_pdf_bytes(df, task_props):
 
 def generate_pdf_extractor_stage(
     c: Config,
+    extractor_config: Dict[str, Any],
     task: str = "extract",
     task_desc: str = "pdf_content_extractor",
     pe_count: int = 24,
@@ -116,6 +125,8 @@ def generate_pdf_extractor_stage(
     ----------
     c : Config
         Morpheus global configuration object
+    extractor_config : dict
+        Configuration parameters for pdf content extractor.
     task : str
         The task name to match for the stage worker function.
     task_desc : str
@@ -128,7 +139,9 @@ def generate_pdf_extractor_stage(
     MultiProcessingBaseStage
         A Morpheus stage with applied worker function.
     """
+    validated_config = PDFExtractorSchema(**extractor_config)
+    _wrapped_process_fn = functools.partial(_process_pdf_bytes, validated_config=validated_config)
 
     return MultiProcessingBaseStage(
-        c=c, pe_count=pe_count, task=task, task_desc=task_desc, process_fn=_process_pdf_bytes, document_type="pdf"
+        c=c, pe_count=pe_count, task=task, task_desc=task_desc, process_fn=_wrapped_process_fn, document_type="pdf"
     )

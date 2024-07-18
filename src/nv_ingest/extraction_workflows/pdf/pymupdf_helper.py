@@ -26,14 +26,23 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
+from io import BytesIO
+from math import ceil
+from math import floor
 from typing import Dict
 from typing import List
 from typing import Tuple
+from typing import Union
 
 import fitz
+import numpy as np
 import pandas as pd
+import tritonclient.grpc as grpcclient
+from PIL import Image
 
+from nv_ingest.extraction_workflows.pdf import yolox_utils
 from nv_ingest.schemas.metadata_schema import AccessLevelEnum
+from nv_ingest.schemas.metadata_schema import ContentSubtypeEnum
 from nv_ingest.schemas.metadata_schema import ContentTypeEnum
 from nv_ingest.schemas.metadata_schema import ImageTypeEnum
 from nv_ingest.schemas.metadata_schema import SourceTypeEnum
@@ -99,6 +108,14 @@ def pymupdf(pdf_stream, extract_text: bool, extract_images: bool, extract_tables
     partition_id = base_source_metadata.get("partition_id", -1)
     # get access_level (assuming coming in from source_metadata...)
     access_level = base_source_metadata.get("access_level", AccessLevelEnum.LEVEL_1)
+
+    if extract_tables:
+        extract_tables_method = kwargs.get("extract_tables_method", "yolox")
+        if extract_tables_method == "yolox":
+            table_detection_endpoint_url = kwargs.get("table_detection_endpoint_url")
+            table_detection_model_name = kwargs.get("table_detection_model_name")
+            triton_client = grpcclient.InferenceServerClient(url=table_detection_endpoint_url)
+            page_images = []
 
     # each row is a partition level document
     with fitz.open(stream=pdf_stream, filetype="pdf") as doc:
@@ -264,10 +281,29 @@ def pymupdf(pdf_stream, extract_text: bool, extract_images: bool, extract_tables
             # extract page tables
             # currently embedded tables will also part of the accumulated_text
             if extract_tables:
-                for table in _extract_tables_using_pymupdf(page):
-                    extracted_data.append(
-                        _construct_table_metadata(table, page_idx, page_count, source_metadata, base_unified_metadata)
+                if extract_tables_method == "yolox":
+                    # convert each page to images to prepare for table detection
+                    pixmap = page.get_pixmap()
+                    page_images.append(
+                        np.frombuffer(buffer=pixmap.samples, dtype=np.uint8).reshape(pixmap.height, pixmap.width, -1)
                     )
+                else:
+                    for table in _extract_tables_using_pymupdf(page):
+                        extracted_data.append(
+                            _construct_table_metadata(
+                                table, page_idx, page_count, source_metadata, base_unified_metadata
+                            )
+                        )
+
+        if extract_tables and extract_tables_method == "yolox":
+            for page_idx, table in _extract_tables_using_table_detection_model(
+                page_images,
+                triton_client,
+                table_detection_model_name,
+            ):
+                extracted_data.append(
+                    _construct_table_metadata(table, page_idx, page_count, source_metadata, base_unified_metadata)
+                )
 
         # Extract text - document (c)
         if (extract_text) and (text_depth == TextTypeEnum.DOCUMENT):
@@ -447,12 +483,18 @@ def _extract_image_from_imageblock(
 
 
 @dataclass
-class Table:
+class DataFrameTable:
     df: pd.DataFrame
     bbox: Tuple[int, int, int, int]
 
 
-def _extract_tables_using_pymupdf(page: fitz.Page) -> List[Table]:
+@dataclass
+class ImageTable:
+    image: str
+    bbox: Tuple[int, int, int, int]
+
+
+def _extract_tables_using_pymupdf(page: fitz.Page) -> List[DataFrameTable]:
     """
     Basic table extraction using PyMuPDF. This function extracts embedded tables from a PDF page.
     """
@@ -465,13 +507,91 @@ def _extract_tables_using_pymupdf(page: fitz.Page) -> List[Table]:
     for df in table_dfs:
         df.columns = df.columns.str.replace(r"\s+", " ", regex=True)
     bounding_boxes = [table.bbox for table in tables]
-    return [Table(df, bbox) for df, bbox in zip(table_dfs, bounding_boxes)]
+    return [DataFrameTable(df, bbox) for df, bbox in zip(table_dfs, bounding_boxes)]
+
+
+def _extract_tables_using_table_detection_model(
+    page_images: List[Image.Image],
+    triton_client: grpcclient.InferenceServerClient,
+    model_name: str,
+    batch_size: int = 1,
+    num_classes: int = 3,
+    conf_thresh: float = 0.48,
+    iou_thresh: float = 0.5,
+    min_score: float = 0.1,
+) -> List[Tuple[int, ImageTable]]:
+    tables = []
+    page_idx = 0
+    # only extract tables for now.
+    # labels = ["table", "chart", "title"]
+    labels = ["table"]
+
+    original_images = [np.array(image) for image in page_images]
+    original_image_shapes = [image.shape for image in original_images]
+
+    resized_images = [yolox_utils.resize_image(image, (1024, 1024)) for image in page_images]
+
+    results = []
+    batches = [
+        np.einsum("bijk->bkij", resized_images[i : i + batch_size]).astype(np.float32)  # noqa: E203
+        for i in range(0, len(resized_images), batch_size)
+    ]
+    for batch in batches:
+        input_tensors = [grpcclient.InferInput("input", batch.shape, datatype="FP32")]
+        input_tensors[0].set_data_from_numpy(batch)
+
+        outputs = [grpcclient.InferRequestedOutput("output")]
+
+        query_response = triton_client.infer(
+            model_name=model_name,
+            inputs=input_tensors,
+            outputs=outputs,
+        )
+
+        output_array = query_response.as_numpy("output")
+        pred = yolox_utils.postprocess_model_prediction(
+            output_array, num_classes, conf_thresh, iou_thresh, class_agnostic=True
+        )
+        results += pred
+
+    results = yolox_utils.postprocess_results(results, original_image_shapes, min_score=min_score)
+
+    for annotation_dict, original_image in zip(results, original_images):
+        width, height, *_ = original_image.shape
+        for label in labels:
+            objects = annotation_dict[label]
+            for idx, bboxes in enumerate(objects):
+                *bbox, _ = bboxes
+                h1, w1, h2, w2 = bbox * np.array([height, width, height, width])
+                cropped = original_image[floor(w1) : ceil(w2), floor(h1) : ceil(h2)]  # noqa: E203
+                img = Image.fromarray(cropped.astype(np.uint8))
+                buffer = BytesIO()
+                img.save(buffer, format="PNG")
+                base64_img = bytetools.base64frombytes(buffer.getvalue())
+                tables.append((page_idx, ImageTable(base64_img, (w1, h1, w2, h2))))
+
+        page_idx += 1
+
+    return tables
 
 
 @pymupdf_exception_handler(descriptor="pymupdf")
 def _construct_table_metadata(
-    table: Table, page_idx: int, page_count: int, source_metadata: Dict, base_unified_metadata: Dict
+    table: Union[DataFrameTable, ImageTable],
+    page_idx: int,
+    page_count: int,
+    source_metadata: Dict,
+    base_unified_metadata: Dict,
 ):
+    if isinstance(table, DataFrameTable):
+        content = table.df.to_markdown(index=False)
+        table_format = TableFormatEnum.MARKDOWN
+    elif isinstance(table, ImageTable):
+        content = table.image
+        table_format = TableFormatEnum.IMAGE
+    else:
+        raise ValueError("Unknown table type.")
+
     content_metadata = {
         "type": ContentTypeEnum.STRUCTURED,
         "description": StdContentDescEnum.PDF_TABLE,
@@ -482,17 +602,18 @@ def _construct_table_metadata(
             "line": -1,
             "span": -1,
         },
+        "subtype": ContentSubtypeEnum.TABLE,
     }
     table_metadata = {
         "caption": "",
-        "table_format": TableFormatEnum.MARKDOWN,
+        "table_format": table_format,
         "table_location": table.bbox,
     }
     ext_unified_metadata = base_unified_metadata.copy()
 
     ext_unified_metadata.update(
         {
-            "content": table.df.to_markdown(index=False),
+            "content": content,
             "source_metadata": source_metadata,
             "content_metadata": content_metadata,
             "table_metadata": table_metadata,

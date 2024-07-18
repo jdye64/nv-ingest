@@ -68,6 +68,18 @@ _Type_Extract_Method_Map = {
     "pptx": get_args(_Type_Extract_Method_PPTX),
 }
 
+_Type_Extract_Tables_Method_PDF = Literal["yolox", "pymupdf"]
+
+_Type_Extract_Tables_Method_DOCX = Literal["python_docx",]
+
+_Type_Extract_Tables_Method_PPTX = Literal["python_pptx",]
+
+_Type_Extract_Tables_Method_Map = {
+    "pdf": get_args(_Type_Extract_Tables_Method_PDF),
+    "docx": get_args(_Type_Extract_Tables_Method_DOCX),
+    "pptx": get_args(_Type_Extract_Tables_Method_PPTX),
+}
+
 
 class ExtractTaskSchema(BaseModel):
     document_type: str
@@ -75,6 +87,7 @@ class ExtractTaskSchema(BaseModel):
     extract_text: bool = (True,)
     extract_images: bool = (True,)
     extract_tables: bool = False
+    extract_tables_method: str = "yolox"
     text_depth: str = "document"
 
     @root_validator(pre=True)
@@ -108,6 +121,14 @@ class ExtractTaskSchema(BaseModel):
             )
         return v.lower()
 
+    @validator("extract_tables_method")
+    def extract_tables_method_must_be_valid(cls, v, values, **kwargs):
+        document_type = values.get("document_type", "").lower()  # Ensure case-insensitive comparison
+        valid_methods = set(_Type_Extract_Tables_Method_Map[document_type])
+        if v not in valid_methods:
+            raise ValueError(f"extract_method must be one of {valid_methods}")
+        return v
+
     class Config:
         extra = "forbid"
 
@@ -124,6 +145,7 @@ class ExtractTask(Task):
         extract_text: bool = False,
         extract_images: bool = False,
         extract_tables: bool = False,
+        extract_tables_method: _Type_Extract_Tables_Method_PDF = "yolox",
         text_depth: str = "document",
     ) -> None:
         """
@@ -135,6 +157,7 @@ class ExtractTask(Task):
         self._extract_images = extract_images
         self._extract_method = extract_method
         self._extract_tables = extract_tables
+        self._extract_tables_method = extract_tables_method
         self._extract_text = extract_text
         self._text_depth = text_depth
 
@@ -149,6 +172,7 @@ class ExtractTask(Task):
         info += f"  extract text: {self._extract_text}\n"
         info += f"  extract images: {self._extract_images}\n"
         info += f"  extract tables: {self._extract_tables}\n"
+        info += f"  extract tables method: {self._extract_tables_method}\n"
         info += f"  text depth: {self._text_depth}\n"
         return info
 
@@ -160,6 +184,7 @@ class ExtractTask(Task):
             "extract_text": self._extract_text,
             "extract_images": self._extract_images,
             "extract_tables": self._extract_tables,
+            "extract_tables_method": self._extract_tables_method,
             "text_depth": self._text_depth,
         }
 

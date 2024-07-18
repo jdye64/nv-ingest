@@ -25,3 +25,5 @@ opentelemetry-sdk
 opentelemetry-exporter-otlp
 pdfservices-sdk~=4.0.0
 tabulate
+torchvision==0.18.0
+opencv-python==4.10.0.84

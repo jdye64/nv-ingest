@@ -20,6 +20,8 @@ class PDFExtractorSchema(BaseModel):
     identify_nearby_objects: bool = True
     max_queue_size: int = 1
     n_workers: int = 16
+    table_detection_endpoint_url: str = "triton:8001"
+    table_detection_model_name: str = "yolox"
     raise_on_failure: bool = False
 
     # TODO: Add additional sub config sections for each extraction method type.

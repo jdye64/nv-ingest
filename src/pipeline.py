@@ -80,6 +80,20 @@ def get_triton_service_caption_classifier():
     return triton_service_caption_classifier, triton_service_caption_classifier_name
 
 
+def get_triton_service_table_detection():
+    triton_service_table_detection = os.environ.get(
+        "TABLE_DETECTION_GRPC_TRITON",
+        "triton:8001",
+    )
+    triton_service_table_detection_model_name = os.environ.get(
+        "TABLE_DETECTION_MODEL_NAME",
+        "yolox",
+    )
+    logger.info(f"TABLE_DETECTION_GRPC_TRITON: {triton_service_table_detection}")
+
+    return triton_service_table_detection, triton_service_table_detection_model_name
+
+
 def get_default_cpu_count(morpheus_pipeline_config):
     default_cpu_count = int(max(1, math.floor(os.cpu_count() * 0.8)))
     if morpheus_pipeline_config.num_threads:
@@ -167,10 +181,19 @@ def add_metadata_injector_stage(pipe, morpheus_pipeline_config):
     return metadata_injector_stage
 
 
-def add_pdf_extractor_stage(pipe, morpheus_pipeline_config, default_cpu_count):
+def add_pdf_extractor_stage(pipe, morpheus_pipeline_config, ingest_config, default_cpu_count):
+    endpoint_url, model_name = get_triton_service_table_detection()
+    pdf_content_extractor_config = ingest_config.get(
+        "pdf_content_extraction_module",
+        {
+            "table_detection_endpoint_url": endpoint_url,
+            "table_detection_model_name": model_name,
+        },
+    )
     pdf_extractor_stage = pipe.add_stage(
         generate_pdf_extractor_stage(
             morpheus_pipeline_config,
+            pdf_content_extractor_config,
             pe_count=default_cpu_count,
             task="extract",
             task_desc="pdf_content_extractor",
@@ -399,7 +422,7 @@ def setup_ingestion_pipeline(
     metadata_injector_stage = add_metadata_injector_stage(pipe, morpheus_pipeline_config)
 
     # Primitive extraction
-    pdf_extractor_stage = add_pdf_extractor_stage(pipe, morpheus_pipeline_config, default_cpu_count)
+    pdf_extractor_stage = add_pdf_extractor_stage(pipe, morpheus_pipeline_config, ingest_config, default_cpu_count)
     docx_extractor_stage = add_docx_extractor_stage(pipe, morpheus_pipeline_config, default_cpu_count)
     pptx_extractor_stage = add_pptx_extractor_stage(pipe, morpheus_pipeline_config, default_cpu_count)
 
