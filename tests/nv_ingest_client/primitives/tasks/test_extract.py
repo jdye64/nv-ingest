@@ -65,20 +65,23 @@ def test_extract_task_initialization(extract_method, extract_text, extract_image
 
 
 @pytest.mark.parametrize(
-    "document_type, extract_method, extract_text, extract_images, extract_tables",
+    "document_type, extract_method, extract_text, extract_images, extract_tables, extract_tables_method",
     [
-        ("pdf", "tika", True, False, False),
-        ("docx", "haystack", False, True, True),
-        ("txt", "llama_parse", True, True, False),
+        ("pdf", "tika", True, False, False, "yolox"),
+        ("docx", "haystack", False, True, True, "python_docx"),
+        ("txt", "llama_parse", True, True, False, None),
     ],
 )
-def test_extract_task_to_dict_basic(document_type, extract_method, extract_text, extract_images, extract_tables):
+def test_extract_task_to_dict_basic(
+    document_type, extract_method, extract_text, extract_images, extract_tables, extract_tables_method
+):
     task = ExtractTask(
         document_type=document_type,
         extract_method=extract_method,
         extract_text=extract_text,
         extract_images=extract_images,
         extract_tables=extract_tables,
+        extract_tables_method=extract_tables_method,
     )
     expected_dict = {
         "type": "extract",
@@ -89,10 +92,12 @@ def test_extract_task_to_dict_basic(document_type, extract_method, extract_text,
                 "extract_text": extract_text,
                 "extract_images": extract_images,
                 "extract_tables": extract_tables,
+                "extract_tables_method": extract_tables_method,
                 "text_depth": "document",
             },
         },
     }
+
     assert task.to_dict() == expected_dict, "ExtractTask.to_dict() did not return the expected dictionary"
 
 

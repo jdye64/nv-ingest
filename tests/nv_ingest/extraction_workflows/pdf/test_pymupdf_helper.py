@@ -143,6 +143,7 @@ def test_pymupdf_table_extraction_on_pdf_with_no_tables(pdf_stream_test_pdf, doc
         extract_text=False,
         extract_images=False,
         extract_tables=True,
+        extract_tables_method="pymupdf",
         row_data=document_df.iloc[0],
     )
 
@@ -159,6 +160,7 @@ def test_pymupdf_table_extraction_on_pdf_with_tables(pdf_stream_embedded_tables_
         extract_text=False,
         extract_images=False,
         extract_tables=True,
+        extract_tables_method="pymupdf",
         row_data=document_df.iloc[0],
     )
 

@@ -9,37 +9,6 @@
 # its affiliates is strictly prohibited.
 
 services:
-  morpheus-ms-base:
-    image: "morpheus-ms-base:24.03"
-    build:
-      context: ${MORPHEUS_ROOT}
-      dockerfile: "./docker/Dockerfile"
-      target: runtime
-      network: host
-      args:
-        CUDA_MAJOR_VER: 12
-        CUDA_MINOR_VER: 1
-        CUDA_REV_VER: 1
-        DOCA_ARTIFACTS_HOST:
-        DOCA_REPO_HOST:
-        FROM_IMAGE: nvidia/cuda
-        LINUX_DISTRO: ubuntu
-        LINUX_VER: "22.04"
-        MORPHEUS_ROOT_HOST: .
-        MORPHEUS_SUPPORT_DOCA: OFF
-        PYTHON_VER: "3.10"
-    volumes:
-      - ${NV_INGEST_ROOT}/models:/models
-    command: >
-      bash -c "python -m pip install sentence_transformers onnx && python /workspace/examples/llm/main.py vdb_upload export-triton-model --model_name ${MODEL_NAME} --triton_repo /models/triton-model-repo"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-
   redis:
     image: "redis/redis-stack"
     ports:
@@ -51,15 +20,17 @@ services:
       - "9998:9998"
 
   triton:
-    image: "nvcr.io/nvidia/tritonserver:24.05-py3"
-    command: >
-      bash -c "tritonserver --model-repository=/models --exit-on-error=false --model-control-mode=explicit --load-model deberta_large --load-model deberta_large_trt --load-model deberta_large_onnx"
+    image: "nvcr.io/nvidia/tritonserver:24.06-py3"
+    command:
+      bash -c "tritonserver --model-repository=/models --exit-on-error=false --model-control-mode=explicit --load-model deberta_large --load-model deberta_large_trt --load-model deberta_large_onnx --load-model yolox"
     ports:
       - "8000:8000"
       - "8001:8001"
       - "8002:8002"
     volumes:
-      - ${NV_INGEST_ROOT}/models:/models
+      - ${NV_INGEST_ROOT}/models/deberta_large_trt:/models/deberta_large_trt
+      - ${NV_INGEST_ROOT}/models/deberta_large_onnx:/models/deberta_large_onnx
+      - ${NV_INGEST_ROOT}/triton_models/yolox:/models/yolox
     deploy:
       resources:
         reservations:
@@ -87,6 +58,7 @@ services:
       - OTEL_EXPORTER_OTLP_ENDPOINT=otel-collector:4317
       - INGEST_LOG_LEVEL=INFO
       - CAPTION_CLASSIFIER_GRPC_TRITON=triton:8001
+      - TABLE_DETECTION_GRPC_TRITON=triton:8001
     deploy:
       resources:
         reservations:

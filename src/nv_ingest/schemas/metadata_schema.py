@@ -151,6 +151,7 @@ class ImageTypeEnum(str, Enum):
 class TableFormatEnum(str, Enum):
     HTML = "html"
     MARKDOWN = "markdown"
+    IMAGE = "image"
 
 
 class TaskTypeEnum(str, Enum):
@@ -165,6 +166,11 @@ class TaskTypeEnum(str, Enum):
 class StatusEnum(str, Enum):
     ERROR: str = "error"
     SUCCESS: str = "success"
+
+
+class ContentSubtypeEnum(str, Enum):
+    TABLE = "table"
+    CHART = "chart"
 
 
 # Sub schemas
@@ -233,6 +239,7 @@ class ContentMetadataSchema(BaseModelNoExt):
     description: str = ""
     page_number: int = -1
     hierarchy: ContentHierarchySchema = ContentHierarchySchema()
+    subtype: Union[ContentSubtypeEnum, str] = ""
 
 
 class TextMetadataSchema(BaseModelNoExt):

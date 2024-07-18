@@ -15,6 +15,10 @@ ARG VERSION_REV="0"
 # Set the working directory in the container
 WORKDIR /workspace
 
+RUN apt-get update \
+    && apt-get install --yes \
+        libgl1-mesa-glx
+
 # Copy the module code
 COPY setup.py setup.py
 # Don't copy full source here, pipelines won't be installed via setup anyway, and this allows us to rebuild more quickly if we're just changing the pipeline
