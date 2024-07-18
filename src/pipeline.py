@@ -197,7 +197,7 @@ def add_pptx_extractor_stage(pipe, morpheus_pipeline_config, default_cpu_count):
         generate_pptx_extractor_stage(
             morpheus_pipeline_config,
             pe_count=int(max(1, default_cpu_count * 0.5)),
-            task="pptx-extract",
+            task="extract",
             task_desc="pptx_content_extractor",
         )
     )

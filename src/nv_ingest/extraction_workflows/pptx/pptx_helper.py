@@ -26,6 +26,7 @@ import logging
 import operator
 import re
 import uuid
+from datetime import datetime
 from typing import Dict
 from typing import Optional
 
@@ -114,8 +115,16 @@ def python_pptx(pptx_stream, extract_text: bool, extract_images: bool, extract_t
     presentation = Presentation(pptx_stream)
 
     # Collect source metadata from the core properties of the document.
-    last_modified = presentation.core_properties.modified.isoformat()
-    date_created = presentation.core_properties.created.isoformat()
+    last_modified = (
+        presentation.core_properties.modified.isoformat()
+        if presentation.core_properties.modified
+        else datetime.now().isoformat()
+    )
+    date_created = (
+        presentation.core_properties.created.isoformat()
+        if presentation.core_properties.created
+        else datetime.now().isoformat()
+    )
     keywords = presentation.core_properties.keywords
     source_type = SourceTypeEnum.PPTX
     source_metadata = {
@@ -261,16 +270,23 @@ def python_pptx(pptx_stream, extract_text: bool, extract_images: bool, extract_t
                     and getattr(shape, "image")
                 )
             ):
-                image_extraction = _construct_image_metadata(
-                    shape,
-                    shape_idx,
-                    slide_idx,
-                    slide_count,
-                    source_metadata,
-                    base_unified_metadata,
-                    page_nearby_blocks,
-                )
-                extracted_data.append(image_extraction)
+                try:
+                    image_extraction = _construct_image_metadata(
+                        shape,
+                        shape_idx,
+                        slide_idx,
+                        slide_count,
+                        source_metadata,
+                        base_unified_metadata,
+                        page_nearby_blocks,
+                    )
+                    extracted_data.append(image_extraction)
+                except ValueError as e:
+                    # Handle the specific case where no embedded image is found
+                    logger.warning(f"No embedded image found for shape {shape_idx} on slide {slide_idx}: {e}")
+                except Exception as e:
+                    # Handle any other exceptions that might occur
+                    logger.warning(f"An error occurred while processing shape {shape_idx} on slide {slide_idx}: {e}")
 
             if extract_tables and shape.has_table:
                 table_extraction = _construct_table_metadata(
