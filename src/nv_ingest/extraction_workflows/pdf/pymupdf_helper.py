@@ -290,19 +290,21 @@ def pymupdf(pdf_stream, extract_text: bool, extract_images: bool, extract_tables
                 else:
                     for table in _extract_tables_using_pymupdf(page):
                         extracted_data.append(
-                            _construct_table_metadata(
+                            _construct_table_or_chart_metadata(
                                 table, page_idx, page_count, source_metadata, base_unified_metadata
                             )
                         )
 
         if extract_tables and extract_tables_method == "yolox":
-            for page_idx, table in _extract_tables_using_table_detection_model(
+            for page_idx, table_and_charts in _extract_tables_and_charts_using_table_detection_model(
                 page_images,
                 triton_client,
                 table_detection_model_name,
             ):
                 extracted_data.append(
-                    _construct_table_metadata(table, page_idx, page_count, source_metadata, base_unified_metadata)
+                    _construct_table_or_chart_metadata(
+                        table_and_charts, page_idx, page_count, source_metadata, base_unified_metadata
+                    )
                 )
 
         # Extract text - document (c)
@@ -494,6 +496,12 @@ class ImageTable:
     bbox: Tuple[int, int, int, int]
 
 
+@dataclass
+class ImageChart:
+    image: str
+    bbox: Tuple[int, int, int, int]
+
+
 def _extract_tables_using_pymupdf(page: fitz.Page) -> List[DataFrameTable]:
     """
     Basic table extraction using PyMuPDF. This function extracts embedded tables from a PDF page.
@@ -510,7 +518,7 @@ def _extract_tables_using_pymupdf(page: fitz.Page) -> List[DataFrameTable]:
     return [DataFrameTable(df, bbox) for df, bbox in zip(table_dfs, bounding_boxes)]
 
 
-def _extract_tables_using_table_detection_model(
+def _extract_tables_and_charts_using_table_detection_model(
     page_images: List[Image.Image],
     triton_client: grpcclient.InferenceServerClient,
     model_name: str,
@@ -520,11 +528,8 @@ def _extract_tables_using_table_detection_model(
     iou_thresh: float = 0.5,
     min_score: float = 0.1,
 ) -> List[Tuple[int, ImageTable]]:
-    tables = []
+    tables_and_charts = []
     page_idx = 0
-    # only extract tables for now.
-    # labels = ["table", "chart", "title"]
-    labels = ["table"]
 
     original_images = [np.array(image) for image in page_images]
     original_image_shapes = [image.shape for image in original_images]
@@ -555,10 +560,11 @@ def _extract_tables_using_table_detection_model(
         results += pred
 
     results = yolox_utils.postprocess_results(results, original_image_shapes, min_score=min_score)
+    results = [yolox_utils.expand_chart_bboxes(annotation_dict) for annotation_dict in results]
 
     for annotation_dict, original_image in zip(results, original_images):
         width, height, *_ = original_image.shape
-        for label in labels:
+        for label in ["table", "chart"]:
             objects = annotation_dict[label]
             for idx, bboxes in enumerate(objects):
                 *bbox, _ = bboxes
@@ -568,16 +574,19 @@ def _extract_tables_using_table_detection_model(
                 buffer = BytesIO()
                 img.save(buffer, format="PNG")
                 base64_img = bytetools.base64frombytes(buffer.getvalue())
-                tables.append((page_idx, ImageTable(base64_img, (w1, h1, w2, h2))))
+                if label == "table":
+                    tables_and_charts.append((page_idx, ImageTable(base64_img, (w1, h1, w2, h2))))
+                elif label == "chart":
+                    tables_and_charts.append((page_idx, ImageChart(base64_img, (w1, h1, w2, h2))))
 
         page_idx += 1
 
-    return tables
+    return tables_and_charts
 
 
 @pymupdf_exception_handler(descriptor="pymupdf")
-def _construct_table_metadata(
-    table: Union[DataFrameTable, ImageTable],
+def _construct_table_or_chart_metadata(
+    table: Union[DataFrameTable, ImageTable, ImageChart],
     page_idx: int,
     page_count: int,
     source_metadata: Dict,
@@ -586,9 +595,15 @@ def _construct_table_metadata(
     if isinstance(table, DataFrameTable):
         content = table.df.to_markdown(index=False)
         table_format = TableFormatEnum.MARKDOWN
+        subtype = ContentSubtypeEnum.TABLE
     elif isinstance(table, ImageTable):
         content = table.image
         table_format = TableFormatEnum.IMAGE
+        subtype = ContentSubtypeEnum.TABLE
+    elif isinstance(table, ImageChart):
+        content = table.image
+        table_format = TableFormatEnum.IMAGE
+        subtype = ContentSubtypeEnum.CHART
     else:
         raise ValueError("Unknown table type.")
 
@@ -602,7 +617,7 @@ def _construct_table_metadata(
             "line": -1,
             "span": -1,
         },
-        "subtype": ContentSubtypeEnum.TABLE,
+        "subtype": subtype,
     }
     table_metadata = {
         "caption": "",
