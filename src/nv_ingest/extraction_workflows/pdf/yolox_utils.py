@@ -66,7 +66,6 @@ def postprocess_results(results, original_image_shapes, min_score=0.0):
     Keep only bboxes with high enough confidence.
     """
     labels = ["table", "chart", "title"]
-    annotation_dict = {label: [] for label in labels}
     out = []
 
     for original_image_shape, result in zip(original_image_shapes, results):
@@ -89,6 +88,9 @@ def postprocess_results(results, original_image_shapes, min_score=0.0):
             scores = scores[scores > min_score]
         except Exception as e:
             raise ValueError(f"Error in postprocessing {result.shape} and {original_image_shape}: {e}")
+
+        annotation_dict = {label: [] for label in labels}
+
         # bboxes are in format [x_min, y_min, x_max, y_max]
         for j in range(len(bboxes)):
             label = labels[int(label_idxs[j])]

@@ -596,20 +596,23 @@ def _construct_table_or_chart_metadata(
         content = table.df.to_markdown(index=False)
         table_format = TableFormatEnum.MARKDOWN
         subtype = ContentSubtypeEnum.TABLE
+        description = StdContentDescEnum.PDF_TABLE
     elif isinstance(table, ImageTable):
         content = table.image
         table_format = TableFormatEnum.IMAGE
         subtype = ContentSubtypeEnum.TABLE
+        description = StdContentDescEnum.PDF_TABLE
     elif isinstance(table, ImageChart):
         content = table.image
         table_format = TableFormatEnum.IMAGE
         subtype = ContentSubtypeEnum.CHART
+        description = StdContentDescEnum.PDF_CHART
     else:
         raise ValueError("Unknown table type.")
 
     content_metadata = {
         "type": ContentTypeEnum.STRUCTURED,
-        "description": StdContentDescEnum.PDF_TABLE,
+        "description": description,
         "page_number": page_idx,
         "hierarchy": {
             "page_count": page_count,

@@ -50,6 +50,7 @@ class StdContentDescEnum(str, Enum):
     PDF_TEXT = "Unstructured text from PDF document."
     PDF_IMAGE = "Image extracted from PDF document."
     PDF_TABLE = "Structured table extracted from PDF document."
+    PDF_CHART = "Structured chart extracted from PDF document."
     DOCX_TEXT = "Unstructured text from DOCX document."
     DOCX_IMAGE = "Image extracted from DOCX document."
     DOCX_TABLE = "Structured table extracted from DOCX document."
