@@ -12,9 +12,9 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from io import BytesIO
 from math import ceil
 from math import floor
+from math import log
 from typing import Dict
 from typing import List
 from typing import Tuple
@@ -115,8 +115,7 @@ def pymupdf(pdf_stream, extract_text: bool, extract_images: bool, extract_tables
         if extract_tables_method == "yolox":
             table_detection_endpoint_url = kwargs.get("table_detection_endpoint_url")
             table_detection_model_name = kwargs.get("table_detection_model_name")
-            triton_client = grpcclient.InferenceServerClient(url=table_detection_endpoint_url)
-            page_images = []
+            pages = []
 
     # each row is a partition level document
     with fitz.open(stream=pdf_stream, filetype="pdf") as doc:
@@ -283,12 +282,7 @@ def pymupdf(pdf_stream, extract_text: bool, extract_images: bool, extract_tables
             # currently embedded tables will also part of the accumulated_text
             if extract_tables:
                 if extract_tables_method == "yolox":
-                    # convert each page to images to prepare for table detection
-                    pixmap = page.get_pixmap(matrix=fitz.Matrix(300 / 72, 300 / 72))
-                    img_bytes = pixmap.tobytes("png")  # Get the image as PNG bytes
-                    img = Image.open(io.BytesIO(img_bytes))
-                    img.thumbnail((1536, 1536), Image.Resampling.LANCZOS)
-                    page_images.append(np.array(img))
+                    pages.append(page)
                 else:
                     for table in _extract_tables_using_pymupdf(page):
                         extracted_data.append(
@@ -299,8 +293,8 @@ def pymupdf(pdf_stream, extract_text: bool, extract_images: bool, extract_tables
 
         if extract_tables and extract_tables_method == "yolox":
             for page_idx, table_and_charts in _extract_tables_and_charts_using_table_detection_model(
-                page_images,
-                triton_client,
+                pages,
+                table_detection_endpoint_url,
                 table_detection_model_name,
             ):
                 extracted_data.append(
@@ -324,7 +318,6 @@ def pymupdf(pdf_stream, extract_text: bool, extract_images: bool, extract_tables
                 source_metadata,
                 base_unified_metadata,
             )
-
             if len(text_extraction) > 0:
                 extracted_data.append(text_extraction)
 
@@ -521,31 +514,45 @@ def _extract_tables_using_pymupdf(page: fitz.Page) -> List[DataFrameTable]:
 
 
 def _extract_tables_and_charts_using_table_detection_model(
-    page_images: List[Image.Image],
-    triton_client: grpcclient.InferenceServerClient,
+    pages: List[fitz.Page],
+    endpoint_url: str,
     model_name: str,
-    batch_size: int = 1,
+    max_batch_size: int = 32,
     num_classes: int = 3,
     conf_thresh: float = 0.48,
     iou_thresh: float = 0.5,
     min_score: float = 0.1,
 ) -> List[Tuple[int, ImageTable]]:
+    triton_client = grpcclient.InferenceServerClient(url=endpoint_url)
+
     tables_and_charts = []
     page_idx = 0
 
-    original_images = [np.array(image) for image in page_images]
-    original_image_shapes = [image.shape for image in original_images]
+    i = 0
+    batches = []
+    while i < len(pages):
+        batch_size = min(2 ** int(log(len(pages) - i, 2)), max_batch_size)
+        batches.append(pages[i : i + batch_size])  # noqa: E203
+        i += batch_size
 
-    resized_images = [yolox_utils.resize_image(image, (1024, 1024)) for image in page_images]
-
-    results = []
-    batches = [
-        np.einsum("bijk->bkij", resized_images[i : i + batch_size]).astype(np.float32)  # noqa: E203
-        for i in range(0, len(resized_images), batch_size)
-    ]
     for batch in batches:
-        input_tensors = [grpcclient.InferInput("input", batch.shape, datatype="FP32")]
-        input_tensors[0].set_data_from_numpy(batch)
+        original_images = []
+        for page in batch:
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(300 / 72, 300 / 72))
+            img_bytes = pixmap.tobytes("png")  # Get the image as PNG bytes
+            with io.BytesIO(img_bytes) as f:
+                img = Image.open(f)
+                img.thumbnail((1536, 1536), Image.Resampling.LANCZOS)
+                img_arr = np.array(img)
+            original_images.append(img_arr)
+
+        original_image_shapes = [image.shape for image in original_images]
+        resized_images = [yolox_utils.resize_image(image, (1024, 1024)) for image in original_images]
+
+        input_array = np.einsum("bijk->bkij", resized_images).astype(np.float32)
+
+        input_tensors = [grpcclient.InferInput("input", input_array.shape, datatype="FP32")]
+        input_tensors[0].set_data_from_numpy(input_array)
 
         outputs = [grpcclient.InferRequestedOutput("output")]
 
@@ -559,29 +566,30 @@ def _extract_tables_and_charts_using_table_detection_model(
         pred = yolox_utils.postprocess_model_prediction(
             output_array, num_classes, conf_thresh, iou_thresh, class_agnostic=True
         )
-        results += pred
 
-    results = yolox_utils.postprocess_results(results, original_image_shapes, min_score=min_score)
-    results = [yolox_utils.expand_chart_bboxes(annotation_dict) for annotation_dict in results]
+        results = yolox_utils.postprocess_results(pred, original_image_shapes, min_score=min_score)
+        results = [yolox_utils.expand_chart_bboxes(annotation_dict) for annotation_dict in results]
 
-    for annotation_dict, original_image in zip(results, original_images):
-        width, height, *_ = original_image.shape
-        for label in ["table", "chart"]:
-            objects = annotation_dict[label]
-            for idx, bboxes in enumerate(objects):
-                *bbox, _ = bboxes
-                h1, w1, h2, w2 = bbox * np.array([height, width, height, width])
-                cropped = original_image[floor(w1) : ceil(w2), floor(h1) : ceil(h2)]  # noqa: E203
-                img = Image.fromarray(cropped.astype(np.uint8))
-                buffer = BytesIO()
-                img.save(buffer, format="PNG")
-                base64_img = bytetools.base64frombytes(buffer.getvalue())
-                if label == "table":
-                    tables_and_charts.append((page_idx, ImageTable(base64_img, (w1, h1, w2, h2))))
-                elif label == "chart":
-                    tables_and_charts.append((page_idx, ImageChart(base64_img, (w1, h1, w2, h2))))
+        for annotation_dict, original_image in zip(results, original_images):
+            width, height, *_ = original_image.shape
+            for label in ["table", "chart"]:
+                objects = annotation_dict[label]
+                for idx, bboxes in enumerate(objects):
+                    *bbox, _ = bboxes
+                    h1, w1, h2, w2 = bbox * np.array([height, width, height, width])
+                    cropped = original_image[floor(w1) : ceil(w2), floor(h1) : ceil(h2)]  # noqa: E203
+                    img = Image.fromarray(cropped.astype(np.uint8))
+                    with io.BytesIO() as buffer:
+                        img.save(buffer, format="PNG")
+                        base64_img = bytetools.base64frombytes(buffer.getvalue())
+                    if label == "table":
+                        tables_and_charts.append((page_idx, ImageTable(base64_img, (w1, h1, w2, h2))))
+                    elif label == "chart":
+                        tables_and_charts.append((page_idx, ImageChart(base64_img, (w1, h1, w2, h2))))
 
-        page_idx += 1
+            page_idx += 1
+
+    triton_client.close()
 
     return tables_and_charts
 

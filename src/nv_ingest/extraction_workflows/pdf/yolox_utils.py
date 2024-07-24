@@ -110,7 +110,7 @@ def postprocess_results(results, original_image_shapes, min_score=0.0):
 
 
 def resize_image(image, target_img_size):
-    w, h, _ = np.array(image.shape)
+    w, h, _ = np.array(image).shape
 
     if target_img_size is not None:  # Resize + Pad
         r = min(target_img_size[0] / w, target_img_size[1] / h)
