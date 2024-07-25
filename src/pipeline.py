@@ -94,22 +94,8 @@ def get_triton_service_table_detection():
     return triton_service_table_detection, triton_service_table_detection_model_name
 
 
-def get_default_cpu_count(morpheus_pipeline_config):
-    default_cpu_count = int(max(1, math.floor(os.cpu_count() * 0.8)))
-    if morpheus_pipeline_config.num_threads:
-        if os.cpu_count() < morpheus_pipeline_config.num_threads:
-            logger.warning(
-                "morpheus_pipeline_config.num_threads is set. However, the requested "
-                f"{morpheus_pipeline_config.num_threads} CPU cores are not available. "
-                f"Defaulting to {default_cpu_count} CPU cores"
-            )
-        else:
-            default_cpu_count = morpheus_pipeline_config.num_threads
-    else:
-        logger.warning(
-            f"morpheus_pipeline_config.num_threads not set. Defaulting to 80% of available CPU cores which is: "
-            f"{default_cpu_count}"
-        )
+def get_default_cpu_count():
+    default_cpu_count = os.environ.get("NV_INGEST_MAX_UTIL", int(max(1, math.floor(len(os.sched_getaffinity(0))))))
 
     return default_cpu_count
 
@@ -194,7 +180,7 @@ def add_pdf_extractor_stage(pipe, morpheus_pipeline_config, ingest_config, defau
         generate_pdf_extractor_stage(
             morpheus_pipeline_config,
             pdf_content_extractor_config,
-            pe_count=default_cpu_count,
+            pe_count=8,
             task="extract",
             task_desc="pdf_content_extractor",
         )
@@ -207,7 +193,7 @@ def add_docx_extractor_stage(pipe, morpheus_pipeline_config, default_cpu_count):
     docx_extractor_stage = pipe.add_stage(
         generate_docx_extractor_stage(
             morpheus_pipeline_config,
-            pe_count=int(max(1, default_cpu_count * 0.5)),
+            pe_count=1,
             task="extract",
             task_desc="docx_content_extractor",
         )
@@ -219,7 +205,7 @@ def add_pptx_extractor_stage(pipe, morpheus_pipeline_config, default_cpu_count):
     pptx_extractor_stage = pipe.add_stage(
         generate_pptx_extractor_stage(
             morpheus_pipeline_config,
-            pe_count=int(max(1, default_cpu_count * 0.5)),
+            pe_count=1,
             task="extract",
             task_desc="pptx_content_extractor",
         )
@@ -233,7 +219,7 @@ def add_image_dedup_stage(pipe, morpheus_pipeline_config, ingest_config, default
         generate_dedup_stage(
             morpheus_pipeline_config,
             image_dedup_config,
-            pe_count=int(max(1, math.floor(default_cpu_count * 0.25))),
+            pe_count=2,
             task="dedup",
             task_desc="dedup_images",
         )
@@ -247,7 +233,7 @@ def add_image_filter_stage(pipe, morpheus_pipeline_config, ingest_config, defaul
         generate_image_filter_stage(
             morpheus_pipeline_config,
             image_filter_config,
-            pe_count=int(max(1, math.floor(os.cpu_count() * 0.25))),
+            pe_count=2,
             task="filter",
             task_desc="filter_images",
         )
@@ -287,7 +273,7 @@ def add_image_caption_stage(pipe, morpheus_pipeline_config, ingest_config, defau
         generate_caption_extraction_stage(
             morpheus_pipeline_config,
             image_caption_config,
-            pe_count=int(max(1, math.floor(default_cpu_count * 0.25))),
+            pe_count=2,
             task="caption",
             task_desc="caption_ext",
         )
@@ -412,7 +398,7 @@ def setup_ingestion_pipeline(
 ):
     message_provider_host, message_provider_port = get_message_provider_config()
 
-    default_cpu_count = get_default_cpu_count(morpheus_pipeline_config)
+    default_cpu_count = get_default_cpu_count()
 
     # Pre-processing stages
     source_stage = add_source_stage(
@@ -499,7 +485,7 @@ def pipeline(morpheus_pipeline_config, ingest_config) -> float:
 @click.option("--pipeline_batch_size", default=256, type=int, help="Batch size for the pipeline.")
 @click.option("--enable_monitor", is_flag=True, help="Enable monitoring.")
 @click.option("--feature_length", default=512, type=int, help="Feature length.")
-@click.option("--num_threads", default=os.cpu_count(), type=int, help="Number of threads.")
+@click.option("--num_threads", default=get_default_cpu_count(), type=int, help="Number of threads.")
 @click.option("--model_max_batch_size", default=256, type=int, help="Model max batch size.")
 @click.option(
     "--caption_batch_size",
