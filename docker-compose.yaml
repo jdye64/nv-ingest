@@ -21,8 +21,7 @@ services:
 
   triton:
     image: "nvcr.io/nvidia/tritonserver:24.06-py3"
-    command:
-      bash -c "tritonserver --model-repository=/models --exit-on-error=false --model-control-mode=explicit --load-model deberta_large --load-model deberta_large_trt --load-model deberta_large_onnx --load-model yolox"
+    command: bash -c "tritonserver --model-repository=/models --exit-on-error=false --model-control-mode=explicit --load-model yolox"
     ports:
       - "8000:8000"
       - "8001:8001"
@@ -30,7 +29,7 @@ services:
     volumes:
       - ${NV_INGEST_ROOT}/models/deberta_large_trt:/models/deberta_large_trt
       - ${NV_INGEST_ROOT}/models/deberta_large_onnx:/models/deberta_large_onnx
-      - ${NV_INGEST_ROOT}/triton_models/yolox:/models/yolox
+      - ${NV_INGEST_ROOT}/models/yolox:/models/yolox
     deploy:
       resources:
         reservations:
@@ -40,7 +39,7 @@ services:
               capabilities: [gpu]
 
   nv-ingest-ms-runtime:
-    image: "gitlab-master.nvidia.com:5005/dl/ai-services/microservices/nv-ingest:2024.6.3.dev0"
+    image: "nv-ingest:latest"
     build:
       context: ${NV_INGEST_ROOT}
       dockerfile: "./Dockerfile"

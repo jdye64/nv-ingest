@@ -517,7 +517,7 @@ def _extract_tables_and_charts_using_table_detection_model(
     pages: List[fitz.Page],
     endpoint_url: str,
     model_name: str,
-    max_batch_size: int = 32,
+    max_batch_size: int = 16,  # TODO(Devin) Lowered to 16 so it can fit on a 50 GB GPU, need to make this configurable.
     num_classes: int = 3,
     conf_thresh: float = 0.48,
     iou_thresh: float = 0.5,

@@ -9,6 +9,7 @@
 # its affiliates is strictly prohibited.
 
 import logging
+import math
 import multiprocessing as mp
 import os
 from threading import Lock
@@ -47,7 +48,7 @@ class ProcessWorkerPoolSingleton:
         with cls._lock:
             if cls._instance is None:
                 cls._instance = super(ProcessWorkerPoolSingleton, cls).__new__(cls)
-                max_workers = max(int(os.cpu_count() * 0.8), 1)
+                max_workers = math.floor(max(1, len(os.sched_getaffinity(0)) * 0.4))
                 cls._instance._initialize(max_workers)
                 logger.debug(f"ProcessWorkerPoolSingleton instance created: {cls._instance}")
             else:
