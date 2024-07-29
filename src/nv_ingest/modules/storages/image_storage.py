@@ -14,6 +14,7 @@ import traceback
 from io import BytesIO
 from typing import Any
 from typing import Dict
+from urllib.parse import quote
 
 import mrc
 import mrc.core.operators as ops
@@ -79,9 +80,16 @@ def upload_images(df: pd.DataFrame, params: Dict[str, Any]) -> pd.DataFrame:
         content = base64.b64decode(metadata["content"].encode())
 
         source_id = metadata["source_metadata"]["source_id"]
-        image_type = metadata["image_metadata"]["image_type"]
 
-        destination_file = f"{source_id}/{idx}.{image_type}"
+        image_type = "png"
+        if content_type == ContentTypeEnum.IMAGE:
+            image_type = metadata.get("image_metadata").get("image_type", "png")
+
+        # URL-encode source_id and image_type to ensure they are safe for the URL path
+        encoded_source_id = quote(source_id, safe="")
+        encoded_image_type = quote(image_type, safe="")
+
+        destination_file = f"{encoded_source_id}/{idx}.{encoded_image_type}"
 
         source_file = BytesIO(content)
         client.put_object(
@@ -91,7 +99,17 @@ def upload_images(df: pd.DataFrame, params: Dict[str, Any]) -> pd.DataFrame:
             length=len(content),
         )
 
-        metadata["image_metadata"]["uploaded_image_url"] = f"{_DEFAULT_READ_ADDRESS}/{bucket_name}/{destination_file}"
+        metadata["source_metadata"]["source_location"] = f"{_DEFAULT_READ_ADDRESS}/{bucket_name}/{destination_file}"
+        if content_type == ContentTypeEnum.IMAGE:
+            logger.debug("Storing image data to Minio")
+            metadata["image_metadata"][
+                "uploaded_image_url"
+            ] = f"{_DEFAULT_READ_ADDRESS}/{bucket_name}/{destination_file}"
+        elif content_type == ContentTypeEnum.STRUCTURED:
+            logger.debug("Storing structured image data to Minio")
+            metadata["table_metadata"][
+                "uploaded_image_url"
+            ] = f"{_DEFAULT_READ_ADDRESS}/{bucket_name}/{destination_file}"
 
         # TODO: validate metadata before putting it back in.
         df.loc[idx]["metadata"] = metadata
@@ -112,15 +130,21 @@ def _storage_images(builder: mrc.Builder):
     def on_data(ctrl_msg: ControlMessage):
         try:
             task_props = ctrl_msg.get_tasks().get("store").pop()
+
+            content_type = task_props.get("content_type", ContentTypeEnum.IMAGE)
             params = task_props.get("params", {})
+            params["content_type"] = content_type
+
             # TODO(Matt) validate this resolves to the right filter criteria....
+            logger.debug(f"Processing storage task with parameters: {params}")
             content_type = params.get("content_type", ContentTypeEnum.IMAGE)
 
             with ctrl_msg.payload().mutable_dataframe() as mdf:
                 df = mdf.to_pandas()
 
-            image_mask = df["document_type"] == content_type
-            if (~image_mask).all():  # if there are no images, return immediately.
+            storage_obj_mask = df["document_type"] == content_type
+            if (~storage_obj_mask).all():  # if there are no images, return immediately.
+                logger.debug(f"No storage objects for '{content_type}' found in the dataframe.")
                 return ctrl_msg
 
             df = upload_images(df, params)
