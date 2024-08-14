@@ -113,7 +113,7 @@ To set up Triton, set the following environment variables in `.env`:
 
 ```
 ECLAIR_CHECKPOINT_DIR=./third_party/eclair_triton/checkpoints
-ECLAIR_CHECKPOINT_NAME=sweep_0_cooperative-swine_2024.04.20_22.35
+ECLAIR_CHECKPOINT_NAME=eclair_nvpdftex_v9p1_cc_text_shortwind_meticulous
 ECLAIR_MODEL_DIR=./third_party/eclair_triton/models
 ECLAIR_BATCH_SIZE=16
 ```

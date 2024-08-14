@@ -152,6 +152,7 @@ class ImageTypeEnum(str, Enum):
 class TableFormatEnum(str, Enum):
     HTML = "html"
     MARKDOWN = "markdown"
+    LATEX = "latex"
     IMAGE = "image"
 
 
