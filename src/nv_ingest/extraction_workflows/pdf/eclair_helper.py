@@ -25,17 +25,25 @@
 import logging
 import os
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
+from typing import Dict
 from typing import List
+from typing import Tuple
 
 import fitz
 import numpy as np
+import pandas as pd
 import tritonclient.grpc as grpcclient
 
+from nv_ingest.extraction_workflows.pdf import eclair_utils
 from nv_ingest.schemas.metadata_schema import AccessLevelEnum
+from nv_ingest.schemas.metadata_schema import ContentSubtypeEnum
 from nv_ingest.schemas.metadata_schema import ContentTypeEnum
+from nv_ingest.schemas.metadata_schema import ImageTypeEnum
 from nv_ingest.schemas.metadata_schema import SourceTypeEnum
 from nv_ingest.schemas.metadata_schema import StdContentDescEnum
+from nv_ingest.schemas.metadata_schema import TableFormatEnum
 from nv_ingest.schemas.metadata_schema import TextTypeEnum
 from nv_ingest.schemas.metadata_schema import validate_metadata
 from nv_ingest.util.converters import datetools
@@ -44,10 +52,28 @@ from nv_ingest.util.exception_handlers.pdf import pymupdf_exception_handler
 
 logger = logging.getLogger(__name__)
 
-ECLAIR_TRITON_HOST = os.environ.get("ECLAIR_TRITON_HOST", "triton")
-ECLAIR_TRITON_PORT = os.environ.get("ECLAIR_TRITON_PORT", 8001)
-DEFAULT_DPI = 96
+ECLAIR_GRPC_TRITON = os.environ.get("ECLAIR_GRPC_TRITON", "triton:8001")
 DEFAULT_BATCH_SIZE = 16
+ACCEPTED_CLASSES = set(
+    [
+        "Text",
+        "Title",
+        "Section-header",
+        "List-item",
+        "TOC",
+        "Bibliography",
+        "Formula",
+    ]
+)
+IGNORED_CLASSES = set(
+    [
+        "Page-header",
+        "Page-footer",
+        "Caption",
+        "Footnote",
+        "Floating-text",
+    ]
+)
 
 
 # Define a helper function to use Eclair to extract text from a base64 encoded bytestram PDF
@@ -75,10 +101,7 @@ def eclair(pdf_stream, extract_text: bool, extract_images: bool, extract_tables:
     """
     logger.debug("Extracting PDF with Eclair backend.")
 
-    eclair_triton_host = kwargs.get("eclair_triton_host", ECLAIR_TRITON_HOST)
-    eclair_triton_port = kwargs.get("eclair_triton_port", ECLAIR_TRITON_PORT)
-    eclair_triton_url = f"{eclair_triton_host}:{eclair_triton_port}"
-    triton_client = grpcclient.InferenceServerClient(url=eclair_triton_url)
+    eclair_triton_url = kwargs.get("eclair_grpc_triton", ECLAIR_GRPC_TRITON)
 
     batch_size = int(kwargs.get("eclair_batch_size", DEFAULT_BATCH_SIZE))
 
@@ -88,6 +111,9 @@ def eclair(pdf_stream, extract_text: bool, extract_images: bool, extract_tables:
     # get text_depth
     text_depth = kwargs.get("text_depth", "page")
     text_depth = TextTypeEnum[text_depth.upper()]
+
+    identify_nearby_objects = kwargs.get("identify_nearby_objects", True)
+
     # get base metadata
     metadata_col = kwargs.get("metadata_column", "metadata")
     base_unified_metadata = row_data[metadata_col] if metadata_col in row_data.index else {}
@@ -148,66 +174,124 @@ def eclair(pdf_stream, extract_text: bool, extract_images: bool, extract_tables:
             "access_level": access_level,
         }
 
-        image_arrays = []
+        # Convert all pages to fitz.Page.
+        pages = []
         for page_idx in range(len(doc)):
             page = doc.load_page(page_idx)
-            # Extract text - page
-            if extract_text:
-                pixmap = page.get_pixmap(dpi=DEFAULT_DPI)
-                image_arrays.append(
-                    np.frombuffer(buffer=pixmap.samples, dtype=np.uint8).reshape(pixmap.height, pixmap.width, -1)
-                )
+            pages.append(page)
 
-            # extract page tables
-            if extract_tables:
-                pass
+        # Split into batches.
+        i = 0
+        batches = []
+        while i < len(pages):
+            batches.append(pages[i : i + batch_size])  # noqa: E203
+            i += batch_size
 
-        image_arrays = pad_arrays_if_sizes_are_different(image_arrays)
-        batches = [
-            np.array(image_arrays[i : i + batch_size]) for i in range(0, len(image_arrays), batch_size)  # noqa:  E203
-        ]
+        accumulated_text = []
+        accumulated_tables = []
+        accumulated_images = []
 
-        extracted_text = []
+        triton_client = grpcclient.InferenceServerClient(url=eclair_triton_url)
+
         for batch in batches:
-            input_tensors = [grpcclient.InferInput("image", batch.shape, datatype="UINT8")]
-            input_tensors[0].set_data_from_numpy(batch)
+            responses = preprocess_and_send_requests(triton_client, batch)
 
-            outputs = [grpcclient.InferRequestedOutput("text")]
+            for page_idx, raw_text, bbox_offset in responses:
+                page_image = None
 
-            query_response = triton_client.infer(
-                model_name="eclair",
-                inputs=input_tensors,
-                outputs=outputs,
-            )
+                classes, bboxes, texts = eclair_utils.extract_classes_bboxes(raw_text)
 
-            text = query_response.as_numpy("text").tolist()
-            extracted_text.extend([t.decode("utf-8") for t in text])
+                page_nearby_blocks = {
+                    "text": {"content": [], "bbox": []},
+                    "images": {"content": [], "bbox": []},
+                    "structured": {"content": [], "bbox": []},
+                }
 
-        # Construct text - page
-        if (extract_text) and (text_depth == TextTypeEnum.PAGE):
-            for page_idx, page_text in enumerate(extracted_text):
-                text_extraction = _construct_text_metadata(
-                    page_text,
-                    keywords,
-                    page_idx,
-                    -1,
-                    -1,
-                    -1,
-                    page_count,
-                    text_depth,
-                    source_metadata,
-                    base_unified_metadata,
-                )
+                for cls, bbox, txt in zip(classes, bboxes, texts):
+                    if cls in IGNORED_CLASSES:
+                        continue
 
-                if len(text_extraction) > 0:
-                    extracted_data.append(text_extraction)
+                    elif extract_tables and (cls == "Table"):
+                        try:
+                            txt = txt.encode().decode("unicode_escape")  # remove double backlashes
+                        except UnicodeDecodeError:
+                            pass
+                        bbox = eclair_utils.reverse_transform_bbox(bbox, bbox_offset)
+                        table = LatexTable(latex=txt, bbox=bbox)
+                        accumulated_tables.append(table)
+
+                    elif extract_images and (cls == "Picture"):
+                        if page_image is None:
+                            page_image, *_ = eclair_utils.pymupdf_page_to_numpy_array(pages[page_idx])
+
+                        base64_img = eclair_utils.crop_image(page_image, bbox)
+                        if base64_img:
+                            bbox = eclair_utils.reverse_transform_bbox(bbox, bbox_offset)
+                            image = Base64Image(image=base64_img, bbox=bbox)
+                            accumulated_images.append(image)
+
+                    elif extract_text and (cls in ACCEPTED_CLASSES):
+                        txt = txt.replace("<tbc>", "").strip()  # remove <tbc> tokens (continued paragraphs)
+                        txt = eclair_utils.convert_mmd_to_plain_text_ours(txt)
+
+                        if extract_images and identify_nearby_objects:
+                            bbox = eclair_utils.reverse_transform_bbox(bbox, bbox_offset)
+                            page_nearby_blocks["text"]["content"].append(txt)
+                            page_nearby_blocks["text"]["bbox"].append(bbox)
+
+                        accumulated_text.append(txt)
+
+                # Construct tables
+                if extract_tables:
+                    for table in accumulated_tables:
+                        extracted_data.append(
+                            _construct_table_metadata(
+                                table,
+                                page_idx,
+                                page_count,
+                                source_metadata,
+                                base_unified_metadata,
+                            )
+                        )
+                    accumulated_tables = []
+
+                # Construct images
+                if extract_images:
+                    for image in accumulated_images:
+                        extracted_data.append(
+                            _construct_image_metadata(
+                                image,
+                                page_idx,
+                                page_count,
+                                source_metadata,
+                                base_unified_metadata,
+                                page_nearby_blocks,
+                            )
+                        )
+                    accumulated_images = []
+
+                # Construct text - page
+                if (extract_text) and (text_depth == TextTypeEnum.PAGE):
+                    extracted_data.append(
+                        _construct_text_metadata(
+                            accumulated_text,
+                            keywords,
+                            page_idx,
+                            -1,
+                            -1,
+                            -1,
+                            page_count,
+                            text_depth,
+                            source_metadata,
+                            base_unified_metadata,
+                        )
+                    )
+                    accumulated_text = []
 
         # Construct text - document
         if (extract_text) and (text_depth == TextTypeEnum.DOCUMENT):
-            extracted_text = "".join(extracted_text)
-
             text_extraction = _construct_text_metadata(
-                extracted_text,
+                accumulated_text,
                 keywords,
                 -1,
                 -1,
@@ -222,10 +306,62 @@ def eclair(pdf_stream, extract_text: bool, extract_images: bool, extract_tables:
             if len(text_extraction) > 0:
                 extracted_data.append(text_extraction)
 
+        triton_client.close()
+
     return extracted_data
 
 
-@pymupdf_exception_handler(descriptor="pymupdf")
+def preprocess_and_send_requests(
+    triton_client,
+    batch: List[fitz.Page],
+) -> List[Tuple[int, str]]:
+    if not batch:
+        return []
+
+    page_numbers = []
+    page_images = []
+    bbox_offsets = []
+    for page in batch:
+        page_numbers.append(page.number)
+        page_image, offset = eclair_utils.pymupdf_page_to_numpy_array(page)
+        page_images.append(page_image)
+        bbox_offsets.append(offset)
+
+    batch = np.array(page_images)
+
+    input_tensors = [grpcclient.InferInput("image", batch.shape, datatype="UINT8")]
+    input_tensors[0].set_data_from_numpy(batch)
+
+    outputs = [grpcclient.InferRequestedOutput("text")]
+
+    query_response = triton_client.infer(
+        model_name="eclair",
+        inputs=input_tensors,
+        outputs=outputs,
+    )
+
+    text = query_response.as_numpy("text").tolist()
+    text = [t.decode() for t in text]
+
+    if len(text) != len(batch):
+        return []
+
+    return list(zip(page_numbers, text, bbox_offsets))
+
+
+@dataclass
+class LatexTable:
+    latex: pd.DataFrame
+    bbox: Tuple[int, int, int, int]
+
+
+@dataclass
+class Base64Image:
+    image: str
+    bbox: Tuple[int, int, int, int]
+
+
+@pymupdf_exception_handler(descriptor="eclair")
 def _construct_text_metadata(
     accumulated_text,
     keywords,
@@ -241,7 +377,7 @@ def _construct_text_metadata(
     if len(accumulated_text) < 1:
         return []
 
-    extracted_text = "".join(accumulated_text)
+    extracted_text = "\n\n".join(accumulated_text)
 
     content_metadata = {
         "type": ContentTypeEnum.TEXT,
@@ -281,27 +417,93 @@ def _construct_text_metadata(
     return [ContentTypeEnum.TEXT, validated_unified_metadata.dict(), str(uuid.uuid4())]
 
 
-def pad_arrays_if_sizes_are_different(arrays: List[np.array]) -> List[np.array]:
-    """
-    In some cases, different pages in a PDF might be of different sizes.
-    If the size of any pixmap is different from the others, we pad the smaller images.
-    Assumes all arrays are 3-D arrays.
-    """
-    if any(len(arr.shape) != 3 for arr in arrays):
-        raise ValueError("One of the arrays is not a 3-D array that represents an image.")
+@pymupdf_exception_handler(descriptor="eclair")
+def _construct_table_metadata(
+    table: LatexTable,
+    page_idx: int,
+    page_count: int,
+    source_metadata: Dict,
+    base_unified_metadata: Dict,
+):
+    content = table.latex
+    table_format = TableFormatEnum.LATEX
+    subtype = ContentSubtypeEnum.TABLE
+    description = StdContentDescEnum.PDF_TABLE
 
-    if all(arr.shape == arrays[0].shape for arr in arrays):
-        # all shapes match, so no need to pad any of the images.
-        return arrays
+    content_metadata = {
+        "type": ContentTypeEnum.STRUCTURED,
+        "description": description,
+        "page_number": page_idx,
+        "hierarchy": {
+            "page_count": page_count,
+            "page": page_idx,
+            "line": -1,
+            "span": -1,
+        },
+        "subtype": subtype,
+    }
+    table_metadata = {
+        "caption": "",
+        "table_format": table_format,
+        "table_location": table.bbox,
+    }
+    ext_unified_metadata = base_unified_metadata.copy()
 
-    max_height = max(arr.shape[0] for arr in arrays)
-    max_width = max(arr.shape[1] for arr in arrays)
-    for idx, arr in enumerate(arrays):
-        if arr.shape[0] == max_height and arr.shape[1] == max_width:
-            continue
-        pad_height = (max_height - arr.shape[0]) // 2
-        pad_width = (max_width - arr.shape[1]) // 2
-        canvas = np.zeros((max_height, max_width, 3), dtype=np.uint8)
-        canvas[pad_height : pad_height + arr.shape[0], pad_width : pad_width + arr.shape[1]] = arr  # noqa: E203
-        arrays[idx] = canvas
-    return arrays
+    ext_unified_metadata.update(
+        {
+            "content": content,
+            "source_metadata": source_metadata,
+            "content_metadata": content_metadata,
+            "table_metadata": table_metadata,
+        }
+    )
+
+    validated_unified_metadata = validate_metadata(ext_unified_metadata)
+
+    return [ContentTypeEnum.STRUCTURED, validated_unified_metadata.dict(), str(uuid.uuid4())]
+
+
+@pymupdf_exception_handler(descriptor="eclair")
+def _construct_image_metadata(
+    base64_img,
+    page_idx,
+    page_count,
+    source_metadata,
+    base_unified_metadata,
+    page_nearby_blocks,
+):
+    content_metadata = {
+        "type": ContentTypeEnum.IMAGE,
+        "description": StdContentDescEnum.PDF_IMAGE,
+        "page_number": page_idx,
+        "hierarchy": {
+            "page_count": page_count,
+            "page": page_idx,
+            "line": -1,
+            "span": -1,
+            "nearby_objects": page_nearby_blocks,
+        },
+    }
+
+    image_metadata = {
+        "image_type": ImageTypeEnum.PNG,
+        "structured_image_type": ImageTypeEnum.image_type_1,
+        "caption": "",
+        "text": "",
+        "image_location": base64_img.bbox,
+    }
+
+    unified_metadata = base_unified_metadata.copy()
+
+    unified_metadata.update(
+        {
+            "content": base64_img.image,
+            "source_metadata": source_metadata,
+            "content_metadata": content_metadata,
+            "image_metadata": image_metadata,
+        }
+    )
+
+    validated_unified_metadata = validate_metadata(unified_metadata)
+
+    return [ContentTypeEnum.IMAGE, validated_unified_metadata.dict(), str(uuid.uuid4())]
