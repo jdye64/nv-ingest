@@ -25,6 +25,8 @@
 import io
 import json
 import logging
+import random
+import time
 import uuid
 import zipfile
 from datetime import datetime
@@ -99,7 +101,7 @@ def adobe(
 
     logger.info("Extracting PDF with Adobe backend.")
 
-    # get unstructured.io api key
+    # get adobe api key
     client_id = kwargs.get("adobe_client_id", None)
     client_secret = kwargs.get("adobe_client_secret", None)
 
@@ -178,51 +180,65 @@ def adobe(
 
         source_metadata.update(pymupdf_metadata)
 
-        try:
-            # Initial setup, create credentials instance
-            credentials = ServicePrincipalCredentials(
-                client_id=client_id,
-                client_secret=client_secret,
-            )
+        retry_delay = 1
+        max_delay = 50
+        while True:
+            try:
+                # Initial setup, create credentials instance
+                credentials = ServicePrincipalCredentials(
+                    client_id=client_id,
+                    client_secret=client_secret,
+                )
 
-            # Creates a PDF Services instance
-            pdf_services = PDFServices(credentials=credentials)
+                # Creates a PDF Services instance
+                pdf_services = PDFServices(credentials=credentials)
 
-            # Creates an asset(s) from source file(s) and upload
-            input_asset = pdf_services.upload(input_stream=pdf_stream, mime_type=PDFServicesMediaType.PDF)
+                # Creates an asset(s) from source file(s) and upload
+                input_asset = pdf_services.upload(input_stream=pdf_stream, mime_type=PDFServicesMediaType.PDF)
 
-            # Create parameters for the job
-            elements_to_extract = []
-            if extract_text:
-                elements_to_extract.append(ExtractElementType.TEXT)
-            if extract_tables:
-                elements_to_extract.append(ExtractElementType.TABLES)
+                # Create parameters for the job
+                elements_to_extract = []
+                if extract_text:
+                    elements_to_extract.append(ExtractElementType.TEXT)
+                if extract_tables:
+                    elements_to_extract.append(ExtractElementType.TABLES)
 
-            extract_pdf_params = ExtractPDFParams(
-                table_structure_type=TableStructureType.CSV,
-                elements_to_extract=elements_to_extract,
-                elements_to_extract_renditions=[ExtractRenditionsElementType.FIGURES] if extract_images else [],
-            )
+                extract_pdf_params = ExtractPDFParams(
+                    table_structure_type=TableStructureType.CSV,
+                    elements_to_extract=elements_to_extract,
+                    elements_to_extract_renditions=[ExtractRenditionsElementType.FIGURES] if extract_images else [],
+                )
 
-            # Creates a new job instance
-            extract_pdf_job = ExtractPDFJob(input_asset=input_asset, extract_pdf_params=extract_pdf_params)
+                # Creates a new job instance
+                extract_pdf_job = ExtractPDFJob(input_asset=input_asset, extract_pdf_params=extract_pdf_params)
 
-            # Submit the job and gets the job result
-            location = pdf_services.submit(extract_pdf_job)
-            pdf_services_response = pdf_services.get_job_result(location, ExtractPDFResult)
+                # Submit the job and gets the job result
+                location = pdf_services.submit(extract_pdf_job)
+                pdf_services_response = pdf_services.get_job_result(location, ExtractPDFResult)
 
-            # Get content from the resulting asset(s)
-            result_asset: CloudAsset = pdf_services_response.get_result().get_resource()
-            stream_asset: StreamAsset = pdf_services.get_content(result_asset)
+                # Get content from the resulting asset(s)
+                result_asset: CloudAsset = pdf_services_response.get_result().get_resource()
+                stream_asset: StreamAsset = pdf_services.get_content(result_asset)
 
-            archive = zipfile.ZipFile(io.BytesIO(stream_asset.get_input_stream()))
-            jsonentry = archive.open("structuredData.json")
-            jsondata = jsonentry.read()
-            data = json.loads(jsondata)
+                archive = zipfile.ZipFile(io.BytesIO(stream_asset.get_input_stream()))
+                jsonentry = archive.open("structuredData.json")
+                jsondata = jsonentry.read()
+                data = json.loads(jsondata)
 
-        except (ServiceApiException, ServiceUsageException, SdkException):
-            logging.exception("Exception encountered while executing operation")
-            return []
+                # Request successful
+                break
+
+            except (ServiceApiException, ServiceUsageException, SdkException) as e:
+                if isinstance(e, ServiceUsageException) and (retry_delay * 1.1) < max_delay:
+                    time.sleep(retry_delay)
+                    retry_delay *= 1.1
+                    retry_delay += random.uniform(0, 1)
+                    logging.error(
+                        f"Exception encountered while executing operation: {e}, retrying in {int(retry_delay)}s."
+                    )
+                else:
+                    logging.exception(f"Exception encountered while executing operation: {e}")
+                    return []
 
         extracted_data = []
         accumulated_text = []
@@ -292,8 +308,11 @@ def adobe(
             if extract_images and item["Path"].endswith("/Figure"):
                 bounds = item["Bounds"]
 
-                figure = archive.open(item["filePaths"][0])
-                base64_img = bytetools.base64frombytes(figure.read())
+                try:
+                    figure = archive.open(item["filePaths"][0])
+                    base64_img = bytetools.base64frombytes(figure.read())
+                except KeyError:
+                    base64_img = ""
 
                 image_extraction = _construct_image_metadata(
                     base64_img,
@@ -313,7 +332,10 @@ def adobe(
             if extract_tables and item["Path"].endswith("/Table"):
                 bounds = item["Bounds"]
 
-                df = pd.read_csv(archive.open(item["filePaths"][0]))
+                try:
+                    df = pd.read_csv(archive.open(item["filePaths"][0]), delimiter=",")
+                except KeyError:
+                    df = pd.DataFrame()
 
                 table_extraction = _construct_table_metadata(
                     df.to_markdown(),
