@@ -351,7 +351,7 @@ def create_and_process_jobs(
                 retry_job_ids = []  # Clear retry list after assigning
 
             if (cur_job_count < batch_size) and (processed < len(files)):
-                new_job_count = batch_size - cur_job_count
+                new_job_count = min(batch_size - cur_job_count, len(files) - processed)
                 batch_files = files[processed : processed + new_job_count]  # noqa: E203
 
                 new_job_ids = create_job_specs_for_batch(batch_files, tasks, client)
