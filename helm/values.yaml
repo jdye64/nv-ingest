@@ -16,48 +16,25 @@ kafkaEnabled: false
 # Tika configurations
 tikaEnabled: false
 
-# Array containing extra env vars to load
-extraEnvVars:
-  - name: MESSAGE_CLIENT_HOST
-    value: "nv-ingest-redis-master"
-  - name: MESSAGE_CLIENT_PORT
-    value: "6379"
-  - name: REDIS_MORPHEUS_TASK_QUEUE
-    value: "morpheus_task_queue"
-  - name: NV_INGEST_DEFAULT_TIMEOUT_MS
-    value: "1234"
-  - name: NGC_API_KEY
-    valueFrom:
-      secretKeyRef:
-        name: ngcapisecrets
-        key: ngc_api_key
+# Define environment variables as key/value dictionary pairs
+envVars:
+  MESSAGE_CLIENT_HOST: "nv-ingest-redis-master"
+  MESSAGE_CLIENT_PORT: "6379"
+  REDIS_MORPHEUS_TASK_QUEUE: "morpheus_task_queue"
+  NV_INGEST_DEFAULT_TIMEOUT_MS: "1234"
+  TABLE_DETECTION_GRPC_TRITON: nvingest-yolox:8001
+
   # OpenTelemetry
-  - name: HOST_IP
-    valueFrom:
-      fieldRef:
-        fieldPath: status.hostIP
-  - name: NAMESPACE
-    valueFrom:
-      fieldRef:
-        fieldPath: metadata.namespace
-  - name: OTEL_EXPORTER_OTLP_ENDPOINT
-    value: "http://$(HOST_IP):4317" # sends to gRPC receiver on port 4317
-  - name: OTEL_SERVICE_NAME
-    value: "nemo-retrieval-service"
-  - name: OTEL_TRACES_EXPORTER
-    value: otlp
-  - name: OTEL_METRICS_EXPORTER
-    value: otlp
-  - name: OTEL_LOGS_EXPORTER
-    value: none
-  - name: OTEL_PROPAGATORS
-    value: "tracecontext,baggage"
-  - name: OTEL_RESOURCE_ATTRIBUTES
-    value: "deployment.environment=$(NAMESPACE)"
-  - name: OTEL_PYTHON_EXCLUDED_URLS
-    value: "health"
-  - name: LOG_LEVEL
-    value: DEBUG
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://$(HOST_IP):4317" # sends to gRPC receiver on port 4317
+  OTEL_SERVICE_NAME: "nemo-retrieval-service"
+  OTEL_TRACES_EXPORTER: otlp
+  OTEL_METRICS_EXPORTER: otlp
+  OTEL_LOGS_EXPORTER: none
+  OTEL_PROPAGATORS: "tracecontext,baggage"
+  OTEL_RESOURCE_ATTRIBUTES: "deployment.environment=$(NAMESPACE)"
+  OTEL_PYTHON_EXCLUDED_URLS: "health"
+  LOG_LEVEL: DEBUG
+
 # ConfigMap containing extra env vars to load
 extraEnvVarsCM: ""
 # Secret containing extra sensitive env vars to load
@@ -67,8 +44,7 @@ image:
   pullPolicy: IfNotPresent
   repository: ""
   tag: ""
-imagePullSecrets:
-  - name: gitlab-imagepull
+
 ingress:
   annotations: {}
   className: ""
@@ -79,13 +55,27 @@ ingress:
     - path: /
       pathType: ImplementationSpecific
   tls: []
+
 livenessProbe:
   httpGet:
     path: /health
     port: http
   periodSeconds: 10
   timeoutSeconds: 20
-  failureThreshold: 20 
+  failureThreshold: 20
+
+startupProbe:
+  httpGet:
+    path: /health
+    port: http
+  periodSeconds: 30
+  timeoutSeconds: 10
+  failureThreshold: 220
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
 
 nameOverride: ""
 nodeSelector: {}
@@ -167,22 +157,210 @@ podSecurityContext:
 replicaCount: 1
 resources:
   limits:
-    memory: 1Gi
+    memory: 32Gi
     nvidia.com/gpu: 1
   requests:
-    memory: 512Mi
+    memory: 16Gi
+
 securityContext: {}
 service:
   port: 8000
   type: ClusterIP
   # string with space-delimited additional arguments to be passed to 'uvicorn'
   # in the service's main container
-  extraEntrypointArgs: ""
+  nodePort: null
+
 serviceAccount:
   annotations: {}
   automount: true
   create: true
   name: ""
+
 tolerations: []
 # zipkin overrides
 zipkinEnabled: false
+
+imagePullSecrets:
+  - name: gitlab-imagepull
+  - name: nvcrimagepullsecret
+
+# containerSecurityContext only affects the main container
+containerSecurityContext: {}
+
+# <Temporary> Until image nims are produced, launch triton instances
+
+ngcSecret:
+  # If set to false, the chart expects a secret with name ngc-api to exist in the namespace
+  # credentials are needed.
+  create: false
+  password: ""
+
+imagePullSecret:
+  create: false
+  # Leave blank, if no imagePullSecret is needed.
+  registry: "nvcr.io"
+  name: "nvcrimagepullsecret"
+  # If set to false, the chart expects either a imagePullSecret
+  # with the name configured above to be present on the cluster or that no
+  # credentials are needed.
+
+  username: '$oauthtoken'
+  password: ""
+
+triton:
+  enabled: true
+  common:
+    health_port: 8000
+    http_port: 8000
+    grpc_port: 8001
+    openai_port: 9999 # pod, not service port
+    nemo_port: 9998
+
+    metrics:
+      enabled: true
+      port: 8002
+
+    readinessProbe:
+      enabled: true
+      path: /v2/health/ready
+      initialDelaySeconds: 15
+      timeoutSeconds: 1
+      periodSeconds: 10
+      successThreshold: 1
+      failureThreshold: 3
+
+    livenessProbe:
+      enabled: true
+      path: /v2/health/live
+      port: health
+      initialDelaySeconds: 15
+      timeoutSeconds: 1
+      periodSeconds: 10
+      successThreshold: 1
+      failureThreshold: 3
+
+    startupProbe:
+      enabled: true
+      path: /v2/health/ready
+      initialDelaySeconds: 30
+      timeoutSeconds: 1
+      periodSeconds: 10
+      successThreshold: 1
+      failureThreshold: 180
+
+  instances:
+    deplot:
+      image:
+        repository: nvcr.io/nvidian/nemo-llm/nemo-retriever-triton
+        tag: 0.0.4
+
+      replicaCount: 1
+
+      service:
+        name: deplot
+
+      persistence:
+        enabled: true
+        size: 80Gi
+        storageClass: local-path
+        accessMode: ReadWriteOnce
+
+      resources:
+        requests:
+          nvidia.com/gpu: 1
+          memory: 16Gi
+          cpu: 1
+        limits:
+          nvidia.com/gpu: 1
+          memory: 24Gi
+          cpu: 32
+
+      models:
+        deplot:
+          NGC_MODEL_NAME: "nemo-retriever-deplot-image-to-text-triton-pytorch"
+          NGC_MODEL_VERSION: "11"
+          MODEL_NAME:  "deplot-image-to-text-triton-pytorch"
+          NGC_CLI_ORG: "nvidian"
+          NGC_CLI_TEAM: "nemo-llm"
+          TARFILE: "yes"
+
+    yolox:
+      image:
+        repository: nvcr.io/nvidian/nemo-llm/nemo-retriever-triton-yolox
+        tag: 0.0.3
+
+      replicaCount: 1
+
+      service:
+        name: yolox
+
+      persistence:
+        enabled: true
+        size: 80Gi
+        storageClass: local-path
+        accessMode: ReadWriteOnce
+
+      resources:
+        requests:
+          nvidia.com/gpu: 1
+          memory: 16Gi
+          cpu: 1
+        limits:
+          nvidia.com/gpu: 1
+          memory: 24Gi
+          cpu: 32
+
+      models:
+        yolox:
+          NGC_MODEL_NAME: "nemo-retriever-yolox-triton-pytorch"
+          NGC_MODEL_VERSION: "8"
+          MODEL_NAME:  "yolox"
+          NGC_CLI_ORG: "nvidian"
+          NGC_CLI_TEAM: "nemo-llm"
+          TARFILE: "yes"
+
+    paddle-cached:
+      image:
+        repository: nvcr.io/nvidian/nemo-llm/nemo-retriever-triton-mmdet
+        tag: 0.0.2
+
+      replicaCount: 1
+
+      service:
+        name: paddle-cached
+
+      persistence:
+        enabled: true
+        size: 80Gi
+        storageClass: local-path
+        accessMode: ReadWriteOnce
+
+      resources:
+        requests:
+          nvidia.com/gpu: 1
+          memory: 16Gi
+          cpu: 1
+        limits:
+          nvidia.com/gpu: 1
+          memory: 24Gi
+          cpu: 32
+
+      models:
+        paddle:
+          NGC_MODEL_NAME: "nemo-retriever-paddleocr-image-to-text-triton-pytorch"
+          NGC_MODEL_VERSION: "7"
+          MODEL_NAME:  "paddleocr-image-to-text-triton-pytorch"
+          NGC_CLI_ORG: "nvidian"
+          NGC_CLI_TEAM: "nemo-llm"
+          TARFILE: "yes"
+        cached:
+          NGC_MODEL_NAME: "nemo-retriever-cached-image-to-text-triton-pytorch"
+          NGC_MODEL_VERSION: "15"
+          MODEL_NAME:  "cached-image-to-text-triton-pytorch"
+          NGC_CLI_ORG: "nvidian"
+          NGC_CLI_TEAM: "nemo-llm"
+          TARFILE: "yes"
+
+extraVolumeMounts: {}
+
+# </Temporary>
