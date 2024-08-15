@@ -17,7 +17,7 @@ WORKDIR /workspace
 
 RUN apt-get update \
     && apt-get install --yes \
-        libgl1-mesa-glx
+    libgl1-mesa-glx
 
 # Copy the module code
 COPY setup.py setup.py
@@ -36,15 +36,15 @@ ENV HAYSTACK_TELEMETRY_ENABLED=False
 
 # Ensure the NV_INGEST_VERSION is PEP 440 compatible
 RUN if [ -z "${VERSION}" ]; then \
-        export VERSION="$(date +'%Y.%m.%d')"; \
+    export VERSION="$(date +'%Y.%m.%d')"; \
     fi; \
     if [ "${RELEASE_TYPE}" = "dev" ]; then \
-        export NV_INGEST_VERSION_OVERRIDE="${VERSION}.dev${VERSION_REV}"; \
+    export NV_INGEST_VERSION_OVERRIDE="${VERSION}.dev${VERSION_REV}"; \
     elif [ "${RELEASE_TYPE}" = "release" ]; then \
-        export NV_INGEST_VERSION_OVERRIDE="${VERSION}.post${VERSION_REV}"; \
+    export NV_INGEST_VERSION_OVERRIDE="${VERSION}.post${VERSION_REV}"; \
     else \
-        echo "Invalid RELEASE_TYPE: ${RELEASE_TYPE}"; \
-        exit 1; \
+    echo "Invalid RELEASE_TYPE: ${RELEASE_TYPE}"; \
+    exit 1; \
     fi
 
 ENV NV_INGEST_RELEASE_TYPE=${RELEASE_TYPE}
