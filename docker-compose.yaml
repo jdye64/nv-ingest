@@ -27,8 +27,6 @@ services:
       - "8001:8001"
       - "8002:8002"
     volumes:
-      - ${NV_INGEST_ROOT}/models/deberta_large_trt:/models/deberta_large_trt
-      - ${NV_INGEST_ROOT}/models/deberta_large_onnx:/models/deberta_large_onnx
       - ${NV_INGEST_ROOT}/models/yolox:/models/yolox
     deploy:
       resources:
@@ -37,6 +35,66 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+
+  deplot:
+    image: nvcr.io/nvidian/nemo-llm/nemo-retriever-triton:0.0.4
+    shm_size: 2gb
+    command: bash -c "tritonserver --model-repository=/models --exit-on-error=false --model-control-mode=explicit --load-model deplot"
+    ports:
+      - "8003:8000"
+      - "8004:8001"
+      - "8005:8002"
+    volumes:
+      - ${NV_INGEST_ROOT}/models/deplot:/models/deplot
+    privileged: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    runtime: nvidia
+
+  cached:
+    image: nvcr.io/nvidian/nemo-llm/nemo-retriever-triton-mmdet:0.0.1
+    shm_size: 2gb
+    command: bash -c "tritonserver --model-repository=/models --exit-on-error=false --model-control-mode=explicit --load-model cached"
+    ports:
+      - "8006:8000"
+      - "8007:8001"
+      - "8008:8002"
+    volumes:
+      - ${NV_INGEST_ROOT}/models/cached:/models/cached
+    privileged: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    runtime: nvidia
+
+  paddle:
+    image: nvcr.io/nvidian/nemo-llm/nemo-retriever-triton-mmdet:0.0.1
+    shm_size: 2gb
+    command: bash -c "tritonserver --model-repository=/models --exit-on-error=false --model-control-mode=explicit --load-model paddle"
+    ports:
+      - "8009:8000"
+      - "8010:8001"
+      - "8011:8002"
+    volumes:
+      - ${NV_INGEST_ROOT}/models/paddle:/models/paddle
+    privileged: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    runtime: nvidia
 
   nv-ingest-ms-runtime:
     image: "nv-ingest:latest"

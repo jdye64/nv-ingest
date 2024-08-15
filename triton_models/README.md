@@ -163,6 +163,18 @@ When complete, a TensorRT engine will be saved at the path below.
 
 At this point, the model is ready to be loaded in Triton.
 
+### PaddleOCR Cached and Deplot - interim instructions
+
+# TODO(Devin) -- This should be updated to use NIMs when avialable
+
+Use [download_triton_models.sh](./common/download_triton_models.sh) to pull the most up-to-date model weights
+
+This script will download and unpack the model weights and config.pbtxt files for Triton into `./triton_models/
+[cached|paddle|deplot]`
+
+- Move each of these Triton model specifications into the corresponding model directory path defined in your
+  docker-compose.yaml configuration.
+
 ### E5-Small-V2
 
 TODO

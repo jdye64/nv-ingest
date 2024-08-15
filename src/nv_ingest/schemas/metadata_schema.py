@@ -266,7 +266,9 @@ class ImageMetadataSchema(BaseModelNoExt):
 class TableMetadataSchema(BaseModelNoExt):
     caption: str = ""
     table_format: TableFormatEnum
+    table_content: str = ""
     table_location: tuple = (0, 0, 0, 0)
+    uploaded_image_uri: str = ""
 
 
 # TODO consider deprecating this in favor of info msg...
