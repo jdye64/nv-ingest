@@ -28,11 +28,12 @@ directory="${STORE_MOUNT_PATH}/${NGC_MODEL_NAME}_v${NGC_MODEL_VERSION}"
 echo "Directory is $directory"
 ready_file="$directory/.ready"
 lock_file="$directory/.lock"
+
 mkdir -p "$directory"
-touch "$lock_file"
+exec 200>"$lock_file"
 {
-  if flock -xn 200; then
-    trap 'rm -f $lock_file' EXIT
+  if ln -s "$lock_file" "$lock_file.locked"; then
+    trap 'rm -f $lock_file.locked' EXIT
     if [ ! -e "$ready_file" ]; then
       $NGC_EXE registry model download-version --dest "$STORE_MOUNT_PATH" "${NGC_CLI_ORG}/${NGC_CLI_TEAM}/${NGC_MODEL_NAME}:${NGC_MODEL_VERSION}"
       # decrypt the model - if needed (conditions met)
@@ -58,10 +59,10 @@ touch "$lock_file"
       fi
       touch "$ready_file"
       echo "Done dowloading"
-      flock -u 200
     else
       echo "Download was already complete"
     fi;
+    rm -f "$lock_file.locked"
   else
     while [ ! -e "$ready_file" ]
     do
@@ -70,5 +71,5 @@ touch "$lock_file"
     done;
     echo "Done waiting"
   fi
-} 200>"$lock_file"
+}
 ls -la "$directory"
