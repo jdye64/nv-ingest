@@ -24,6 +24,9 @@ envVars:
   NV_INGEST_DEFAULT_TIMEOUT_MS: "1234"
   TABLE_DETECTION_GRPC_TRITON: nvingest-yolox:8001
 
+logLevel: DEBUG
+
+otelEnvVars:
   # OpenTelemetry
   OTEL_EXPORTER_OTLP_ENDPOINT: "http://$(HOST_IP):4317" # sends to gRPC receiver on port 4317
   OTEL_SERVICE_NAME: "nemo-retrieval-service"
@@ -33,7 +36,6 @@ envVars:
   OTEL_PROPAGATORS: "tracecontext,baggage"
   OTEL_RESOURCE_ATTRIBUTES: "deployment.environment=$(NAMESPACE)"
   OTEL_PYTHON_EXCLUDED_URLS: "health"
-  LOG_LEVEL: DEBUG
 
 # ConfigMap containing extra env vars to load
 extraEnvVarsCM: ""
@@ -79,7 +81,10 @@ readinessProbe:
 
 nameOverride: ""
 nodeSelector: {}
+
 otelEnabled: false
+otelDeployed: false
+
 opentelemetry-collector:
   mode: deployment
   config:
@@ -177,8 +182,9 @@ serviceAccount:
   name: ""
 
 tolerations: []
+
 # zipkin overrides
-zipkinEnabled: false
+zipkinDeployed: false
 
 imagePullSecrets:
   - name: gitlab-imagepull
@@ -223,6 +229,7 @@ triton:
     readinessProbe:
       enabled: true
       path: /v2/health/ready
+      port: health
       initialDelaySeconds: 15
       timeoutSeconds: 1
       periodSeconds: 10
@@ -242,6 +249,7 @@ triton:
     startupProbe:
       enabled: true
       path: /v2/health/ready
+      port: health
       initialDelaySeconds: 30
       timeoutSeconds: 1
       periodSeconds: 10
