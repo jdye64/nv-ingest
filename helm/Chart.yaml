@@ -2,7 +2,7 @@ apiVersion: v2
 name: nv-ingest
 description: NV-Ingest Microservice
 type: application
-version: 0.2.22
+version: 0.2.23
 maintainers:
   - name: NVIDIA Corporation
     url: https://www.nvidia.com/
@@ -18,8 +18,8 @@ dependencies:
   - name: zipkin
     repository: https://zipkin.io/zipkin-helm
     version: 0.1.2
-    condition: zipkinEnabled
+    condition: zipkinDeployed
   - name: opentelemetry-collector
     repository: https://open-telemetry.github.io/opentelemetry-helm-charts
     version: 0.78.1
-    condition: otelEnabled
+    condition: otelDeployed
