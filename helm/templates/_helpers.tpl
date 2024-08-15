@@ -347,7 +347,11 @@ spec:
         - name: model-store-{{ $tName }}
           {{- if $triton.persistence.enabled }}
           persistentVolumeClaim:
-            claimName:  {{ $triton.persistence.existingClaim | default cat (include "nv-ingest.fullname" $ ) "-" $tName }}
+            {{- if $triton.persistence.existingClaim }}
+            claimName: {{ $triton.persistence.existingClaim }}
+            {{- else }}
+            claimName:  "{{ include "nv-ingest.fullname" $ }}-{{ $tName }}"
+            {{- end }}
           {{- else if $triton.hostPath.enabled }}
           hostPath:
             path: {{ $triton.hostPath.path }}
