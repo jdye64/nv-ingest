@@ -1060,6 +1060,9 @@ def handle_table_chart_extraction(
     """
     width, height, *_ = original_image.shape
     for label in ["table", "chart"]:
+        if not annotation_dict:
+            continue
+
         objects = annotation_dict[label]
         for idx, bboxes in enumerate(objects):
             *bbox, _ = bboxes
@@ -1177,6 +1180,8 @@ def extract_tables_and_charts_using_image_ensemble(
                 output_array, original_image_shapes, num_classes, conf_thresh, iou_thresh, min_score
             )
 
+            # assert len(results) == len(batch)
+
             for annotation_dict, original_image in zip(results, original_images):
                 handle_table_chart_extraction(
                     annotation_dict,
@@ -1188,7 +1193,7 @@ def extract_tables_and_charts_using_image_ensemble(
                     tables_and_charts,
                 )
 
-            page_idx += 1
+                page_idx += 1
     finally:
         if paddle_client:
             paddle_client.close()

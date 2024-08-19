@@ -20,6 +20,7 @@ def postprocess_model_prediction(prediction, num_classes, conf_thre=0.7, nms_thr
         # If none are remaining => process next image
         if not image_pred.size(0):
             continue
+
         # Get score and class with highest confidence
         class_conf, class_pred = torch.max(image_pred[:, 5 : 5 + num_classes], 1, keepdim=True)  # noqa: E203
 
@@ -70,7 +71,9 @@ def postprocess_results(results, original_image_shapes, min_score=0.0):
 
     for original_image_shape, result in zip(original_image_shapes, results):
         if result is None:
+            out.append({})
             continue
+
         try:
             result = result.cpu().numpy()
             scores = result[:, 4] * result[:, 5]
@@ -141,7 +144,7 @@ def expand_chart_bboxes(annotation_dict, labels=None):
     if not labels:
         labels = ["table", "chart", "title"]
 
-    if len(annotation_dict["chart"]) == 0:
+    if not annotation_dict or len(annotation_dict["chart"]) == 0:
         return annotation_dict
 
     bboxes = []
