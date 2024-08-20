@@ -67,8 +67,9 @@ class RedisIngestService(IngestServiceMeta):
             raise
 
     async def fetch_job(self, job_id: str) -> Any:
+        print(f"Before fetch_job_result_async")
         futures_dict = self._ingest_client.fetch_job_result_async(job_id, timeout=60, data_only=False)
-
+        print(f"After fetch_job_result_async")
         futures = list(futures_dict.keys())
         result = futures[0].result()
         if len(result) > 1:

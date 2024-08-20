@@ -360,15 +360,18 @@ class NvIngestClient:
             job_ids = [job_ids]  # Ensure job_ids is always a list
 
         # Make sure all jobs have actually been submitted before launching fetches.
-        breakpoint()
+        print(f"Before _ensure_submitted: {job_ids}")
         self._ensure_submitted(job_ids)
 
         future_to_job_id = {}
         for job_id in job_ids:
+            print(f"Checking job state")
             job_state = self._get_and_check_job_state(job_id)
-
+            print(f"JobState: {job_state}")
             future = self._worker_pool.submit(self.fetch_job_result, job_id, timeout, data_only)
+            print(f"AFter submit: {future}")
             job_state.future = future
+            print(f"Whatever this is")
             future_to_job_id[future] = job_id
 
         return future_to_job_id

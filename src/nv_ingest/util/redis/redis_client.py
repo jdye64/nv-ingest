@@ -70,12 +70,12 @@ class RedisClient:
         except (RedisError, AttributeError):
             return False
 
-    def fetch_message(self, job_state: JobState):
+    def fetch_message(self, job_state: JobState, timeout: float):
         retries = 0
         task_queue = job_state.response_channel
         while True:
             try:
-                _, job_payload = self.get_client().blpop([task_queue])
+                _, job_payload = self.get_client().blpop([task_queue], timeout)
                 return job_payload
             except RedisError as err:
                 retries += 1
