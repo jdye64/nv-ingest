@@ -15,7 +15,7 @@ import typing
 from io import BytesIO
 from typing import Dict
 
-import fitz
+import pypdfium2 as pdfium
 from docx import Document as DocxDocument
 from nv_ingest_client.util.file_processing.extract import DocumentTypeEnum
 from nv_ingest_client.util.file_processing.extract import detect_encoding_and_read_text_file
@@ -59,8 +59,8 @@ def estimate_page_count(file_path: str) -> int:
 def count_pages_for_documents(file_path: str, document_type: DocumentTypeEnum) -> int:
     try:
         if document_type == DocumentTypeEnum.pdf:
-            with fitz.open(file_path) as doc:
-                return len(doc)
+            doc = pdfium.PdfDocument(file_path)
+            return len(doc)
         elif document_type == DocumentTypeEnum.docx:
             doc = DocxDocument(file_path)
             # Approximation, as word documents do not have a direct 'page count' attribute

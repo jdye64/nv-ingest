@@ -254,13 +254,13 @@ Options:
 ![Simple PDF with Text and Images](./docs/images/test.pdf.png)
 
 ```shell
-Submit ./data/test.pdf to the ingest service, and extract text and images from it using the pymupdf method.
+Submit ./data/test.pdf to the ingest service, and extract text and images from it using the pdfium method.
 =====================================================================================================================
 
 nv-ingest-cli \
   --doc ./data/test.pdf \
   --output_directory ./processed_docs \
-  --task='extract:{"document_type": "pdf", "extract_method": "pymupdf"}' \
+  --task='extract:{"document_type": "pdf", "extract_method": "pdfium"}' \
   --client_host=localhost \
   --client_port=6379
 
@@ -425,14 +425,14 @@ nv-ingest-cli \
 
 Submit a PDF file with splitting and extraction tasks.
 
-**Note: (TODO)** This currently only works for pymupdf, eclair, and Unstructured.io; haystack, Adobe, and LlamaParse
+**Note: (TODO)** This currently only works for pdfium, eclair, and Unstructured.io; haystack, Adobe, and LlamaParse
 have existing workflows but have not been fully converted to use our unified metadata schema.
 
 ```bash
 nv-ingest-cli \
   --doc ./data/test.pdf \
   --output_directory ./processed_docs \
-  --task='extract:{"document_type": "pdf", "extract_method": "pymupdf"}' \
+  --task='extract:{"document_type": "pdf", "extract_method": "pdfium"}' \
   --task='extract:{"document_type": "docx", "extract_method": "python_docx"}' \
   --task='split' \
   --client_host=localhost \
@@ -446,7 +446,7 @@ Submit a [dataset](#command-line-dataset-creation-with-enumeration-and-sampling)
 nv-ingest-cli \
   --dataset dataset.json \
   --output_directory ./processed_docs \
-  --task='extract:{"document_type": "pdf", "extract_method": "pymupdf"}' \
+  --task='extract:{"document_type": "pdf", "extract_method": "pdfium"}' \
   --client_host=localhost \
   --client_port=6379
 
@@ -458,7 +458,7 @@ Submit a PDF file with extraction tasks and upload extracted images to MinIO.
 nv-ingest-cli \
   --doc ./data/test.pdf \
   --output_directory ./processed_docs \
-  --task='extract:{"document_type": "pdf", "extract_method": "pymupdf"}' \
+  --task='extract:{"document_type": "pdf", "extract_method": "pdfium"}' \
   --task='store:{"endpoint":"minio:9000","access_key":"minioadmin","secret_key":"minioadmin"}' \
   --client_host=localhost \
   --client_port=6379

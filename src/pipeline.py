@@ -418,7 +418,6 @@ def setup_ingestion_pipeline(
 
     # Transforms and data synthesis
     nemo_splitter_stage = add_nemo_splitter_stage(pipe, morpheus_pipeline_config, ingest_config)
-    image_caption_stage = add_image_caption_stage(pipe, morpheus_pipeline_config, ingest_config, default_cpu_count)
 
     # Storage and output
     image_storage_stage = add_image_storage_stage(pipe, morpheus_pipeline_config)
@@ -442,8 +441,7 @@ def setup_ingestion_pipeline(
     pipe.add_edge(pptx_extractor_stage, image_dedup_stage)
     pipe.add_edge(image_dedup_stage, image_filter_stage)
     pipe.add_edge(image_filter_stage, nemo_splitter_stage)
-    pipe.add_edge(nemo_splitter_stage, image_caption_stage)
-    pipe.add_edge(image_caption_stage, image_storage_stage)
+    pipe.add_edge(nemo_splitter_stage, image_storage_stage)
     pipe.add_edge(image_storage_stage, sink_stage)
     pipe.add_edge(sink_stage, otel_meter_stage)
     pipe.add_edge(otel_meter_stage, otel_tracer_stage)

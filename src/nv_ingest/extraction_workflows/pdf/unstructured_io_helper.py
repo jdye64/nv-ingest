@@ -26,9 +26,8 @@ import io
 import logging
 import uuid
 import warnings
-from datetime import datetime
 
-import fitz
+import pypdfium2 as pdfium
 from unstructured_client import UnstructuredClient
 from unstructured_client.models import operations
 from unstructured_client.models import shared
@@ -38,13 +37,12 @@ from unstructured_client.utils import RetryConfig
 from nv_ingest.schemas.metadata_schema import AccessLevelEnum
 from nv_ingest.schemas.metadata_schema import ContentTypeEnum
 from nv_ingest.schemas.metadata_schema import ImageTypeEnum
-from nv_ingest.schemas.metadata_schema import SourceTypeEnum
 from nv_ingest.schemas.metadata_schema import StdContentDescEnum
 from nv_ingest.schemas.metadata_schema import TableFormatEnum
 from nv_ingest.schemas.metadata_schema import TextTypeEnum
 from nv_ingest.schemas.metadata_schema import validate_metadata
-from nv_ingest.util.converters import datetools
-from nv_ingest.util.detectors.language import detect_language
+from nv_ingest.util.pdf.metadata_aggregators import construct_text_metadata
+from nv_ingest.util.pdf.metadata_aggregators import extract_pdf_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -139,116 +137,63 @@ def unstructured_io(
         "access_level": access_level,
     }
 
-    with fitz.open(stream=pdf_stream, filetype="pdf") as doc:
-        page_count = doc.page_count
+    doc = pdfium.PdfDocument(pdf_stream)
+    pdf_metadata = extract_pdf_metadata(doc, source_id)
 
-        # last_modified
-        last_modified = doc.metadata.get("modDate", None)
-        if last_modified in (
-            None,
-            "",
-        ):
-            last_modified = datetools.remove_tz(datetime.now()).isoformat()
-        else:
-            last_modified = datetools.datetimefrompdfmeta(last_modified)
+    document_metadata = {
+        "source_type": pdf_metadata.source_type,
+        "date_created": pdf_metadata.date_created,
+        "last_modified": pdf_metadata.last_modified,
+    }
 
-        # date_created
-        date_created = doc.metadata.get("creationDate", None)
-        if date_created in (
-            None,
-            "",
-        ):
-            date_created = datetools.remove_tz(datetime.now()).isoformat()
-        else:
-            date_created = datetools.datetimefrompdfmeta(date_created)
+    source_metadata.update(document_metadata)
 
-        # keywords
-        doc.metadata.get("keywords", [])
-        # source_type
-        source_type = doc.metadata.get("format", SourceTypeEnum.PDF)
+    client = UnstructuredClient(
+        retry_config=RetryConfig("backoff", BackoffStrategy(1, 50, 1.1, 100), False),
+        server_url=unstructured_url,
+        api_key_auth=api_key,
+    )
 
-        pymupdf_metadata = {
-            "source_type": source_type,
-            "date_created": date_created,
-            "last_modified": last_modified,
-        }
-
-        source_metadata.update(pymupdf_metadata)
-
-        client = UnstructuredClient(
-            retry_config=RetryConfig("backoff", BackoffStrategy(1, 50, 1.1, 100), False),
-            server_url=unstructured_url,
-            api_key_auth=api_key,
-        )
-
-        req = operations.PartitionRequest(
-            partition_parameters=shared.PartitionParameters(
-                files=shared.Files(
-                    content=pdf_stream.getvalue(),
-                    file_name=file_name,
-                ),
-                strategy=strategy,
-                languages=["eng"],
-                coordinates=True,
-                extract_image_block_types=["Image"] if extract_images else None,
-                split_pdf_page=True,
-                split_pdf_concurrency_level=concurrency_level,
+    req = operations.PartitionRequest(
+        partition_parameters=shared.PartitionParameters(
+            files=shared.Files(
+                content=pdf_stream.getvalue(),
+                file_name=file_name,
             ),
-        )
+            strategy=strategy,
+            languages=["eng"],
+            coordinates=True,
+            extract_image_block_types=["Image"] if extract_images else None,
+            split_pdf_page=True,
+            split_pdf_concurrency_level=concurrency_level,
+        ),
+    )
 
-        res = client.general.partition(request=req)
+    res = client.general.partition(request=req)
 
-        extracted_data = []
-        accumulated_text = []
-        curr_page = 1
-        page_nearby_blocks = {
-            "text": {"content": [], "bbox": []},
-            "images": {"content": [], "bbox": []},
-            "structured": {"content": [], "bbox": []},
-        }
+    extracted_data = []
+    accumulated_text = []
+    curr_page = 1
+    page_nearby_blocks = {
+        "text": {"content": [], "bbox": []},
+        "images": {"content": [], "bbox": []},
+        "structured": {"content": [], "bbox": []},
+    }
 
-        # Extract content from each element of partition response
-        for block_idx, item in enumerate(res.elements):
-            # Extract text
-            if extract_text and item["type"] not in ("Image", "Table"):
-                if item["metadata"]["page_number"] != curr_page:
-                    if text_depth == TextTypeEnum.PAGE:
-                        text_extraction = _construct_text_metadata(
-                            accumulated_text,
-                            page_count,
-                            curr_page - 1,
-                            -1,
-                            text_depth,
-                            source_metadata,
-                            base_unified_metadata,
-                        )
-
-                        if len(text_extraction) > 0:
-                            extracted_data.append(text_extraction)
-
-                        accumulated_text = []
-
-                    page_nearby_blocks = {
-                        "text": {"content": [], "bbox": []},
-                        "images": {"content": [], "bbox": []},
-                        "structured": {"content": [], "bbox": []},
-                    }
-                    curr_page = item["metadata"]["page_number"]
-
-                accumulated_text.append(item["text"])
-
-                if text_depth == TextTypeEnum.BLOCK:
-                    points = item["metadata"]["coordinates"]["points"]
-
-                    text_extraction = _construct_text_metadata(
+    # Extract content from each element of partition response
+    for block_idx, item in enumerate(res.elements):
+        # Extract text
+        if extract_text and item["type"] not in ("Image", "Table"):
+            if item["metadata"]["page_number"] != curr_page:
+                if text_depth == TextTypeEnum.PAGE:
+                    text_extraction = construct_text_metadata(
                         accumulated_text,
-                        page_count,
-                        item["metadata"]["page_number"] - 1,
-                        block_idx,
+                        pdf_metadata.page_count,
+                        curr_page - 1,
+                        -1,
                         text_depth,
                         source_metadata,
                         base_unified_metadata,
-                        bbox=(points[0][0], points[0][1], points[2][0], points[2][1]),
                     )
 
                     if len(text_extraction) > 0:
@@ -256,130 +201,104 @@ def unstructured_io(
 
                     accumulated_text = []
 
-                if (extract_images and identify_nearby_objects) and (len(item["text"]) > 0):
-                    points = item["metadata"]["coordinates"]["points"]
-                    page_nearby_blocks["text"]["content"].append(" ".join(item["text"]))
-                    page_nearby_blocks["text"]["bbox"].append((points[0][0], points[0][1], points[2][0], points[2][1]))
+                page_nearby_blocks = {
+                    "text": {"content": [], "bbox": []},
+                    "images": {"content": [], "bbox": []},
+                    "structured": {"content": [], "bbox": []},
+                }
+                curr_page = item["metadata"]["page_number"]
 
-            # Extract images
-            if extract_images and item["type"] == "Image":
-                base64_img = item["metadata"]["image_base64"]
+            accumulated_text.append(item["text"])
+
+            if text_depth == TextTypeEnum.BLOCK:
                 points = item["metadata"]["coordinates"]["points"]
 
-                image_extraction = _construct_image_metadata(
-                    base64_img,
-                    item["text"],
-                    page_count,
+                text_extraction = construct_text_metadata(
+                    accumulated_text,
+                    pdf_metadata.page_count,
                     item["metadata"]["page_number"] - 1,
                     block_idx,
-                    source_metadata,
-                    base_unified_metadata,
-                    page_nearby_blocks,
-                    bbox=(points[0][0], points[0][1], points[2][0], points[2][1]),
-                )
-
-                extracted_data.append(image_extraction)
-
-            # Extract tables
-            if extract_tables and item["type"] == "Table":
-                table = item["metadata"]["text_as_html"]
-                points = item["metadata"]["coordinates"]["points"]
-
-                table_extraction = _construct_table_metadata(
-                    table,
-                    page_count,
-                    item["metadata"]["page_number"] - 1,
-                    block_idx,
+                    text_depth,
                     source_metadata,
                     base_unified_metadata,
                     bbox=(points[0][0], points[0][1], points[2][0], points[2][1]),
                 )
 
-                extracted_data.append(table_extraction)
+                if len(text_extraction) > 0:
+                    extracted_data.append(text_extraction)
 
-        if extract_text and text_depth == TextTypeEnum.PAGE:
-            text_extraction = _construct_text_metadata(
-                accumulated_text,
-                page_count,
-                curr_page - 1,
-                -1,
-                text_depth,
+                accumulated_text = []
+
+            if (extract_images and identify_nearby_objects) and (len(item["text"]) > 0):
+                points = item["metadata"]["coordinates"]["points"]
+                page_nearby_blocks["text"]["content"].append(" ".join(item["text"]))
+                page_nearby_blocks["text"]["bbox"].append((points[0][0], points[0][1], points[2][0], points[2][1]))
+
+        # Extract images
+        if extract_images and item["type"] == "Image":
+            base64_img = item["metadata"]["image_base64"]
+            points = item["metadata"]["coordinates"]["points"]
+
+            image_extraction = _construct_image_metadata(
+                base64_img,
+                item["text"],
+                pdf_metadata.page_count,
+                item["metadata"]["page_number"] - 1,
+                block_idx,
                 source_metadata,
                 base_unified_metadata,
+                page_nearby_blocks,
+                bbox=(points[0][0], points[0][1], points[2][0], points[2][1]),
             )
 
-            if len(text_extraction) > 0:
-                extracted_data.append(text_extraction)
+            extracted_data.append(image_extraction)
 
-        elif extract_text and text_depth == TextTypeEnum.DOCUMENT:
-            text_extraction = _construct_text_metadata(
-                accumulated_text,
-                page_count,
-                -1,
-                -1,
-                text_depth,
+        # Extract tables
+        if extract_tables and item["type"] == "Table":
+            table = item["metadata"]["text_as_html"]
+            points = item["metadata"]["coordinates"]["points"]
+
+            table_extraction = _construct_table_metadata(
+                table,
+                pdf_metadata.page_count,
+                item["metadata"]["page_number"] - 1,
+                block_idx,
                 source_metadata,
                 base_unified_metadata,
+                bbox=(points[0][0], points[0][1], points[2][0], points[2][1]),
             )
 
-            if len(text_extraction) > 0:
-                extracted_data.append(text_extraction)
+            extracted_data.append(table_extraction)
 
-        return extracted_data
+    if extract_text and text_depth == TextTypeEnum.PAGE:
+        text_extraction = construct_text_metadata(
+            accumulated_text,
+            pdf_metadata.page_count,
+            curr_page - 1,
+            -1,
+            text_depth,
+            source_metadata,
+            base_unified_metadata,
+        )
 
+        if len(text_extraction) > 0:
+            extracted_data.append(text_extraction)
 
-def _construct_text_metadata(
-    accumulated_text,
-    page_count,
-    page_idx,
-    block_idx,
-    text_depth,
-    source_metadata,
-    base_unified_metadata,
-    bbox=(-1, -1, -1, -1),
-):
-    if len(accumulated_text) < 1:
-        return []
+    elif extract_text and text_depth == TextTypeEnum.DOCUMENT:
+        text_extraction = construct_text_metadata(
+            accumulated_text,
+            pdf_metadata.page_count,
+            -1,
+            -1,
+            text_depth,
+            source_metadata,
+            base_unified_metadata,
+        )
 
-    extracted_text = " ".join(accumulated_text)
+        if len(text_extraction) > 0:
+            extracted_data.append(text_extraction)
 
-    content_metadata = {
-        "type": ContentTypeEnum.TEXT,
-        "description": StdContentDescEnum.PDF_TEXT,
-        "page_number": page_idx,
-        "hierarchy": {
-            "page_count": page_count,
-            "page": page_idx,
-            "block": block_idx,
-            "line": -1,
-            "span": -1,
-        },
-    }
-
-    language = detect_language(extracted_text)
-
-    text_metadata = {
-        "text_type": text_depth,
-        "summary": "",
-        "keywords": "",
-        "language": language,
-        "text_location": bbox,
-    }
-
-    ext_unified_metadata = base_unified_metadata.copy()
-
-    ext_unified_metadata.update(
-        {
-            "content": extracted_text,
-            "source_metadata": source_metadata,
-            "content_metadata": content_metadata,
-            "text_metadata": text_metadata,
-        }
-    )
-
-    validated_unified_metadata = validate_metadata(ext_unified_metadata)
-
-    return [ContentTypeEnum.TEXT.value, validated_unified_metadata.dict(), str(uuid.uuid4())]
+    return extracted_data
 
 
 def _construct_image_metadata(

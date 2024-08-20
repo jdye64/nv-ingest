@@ -118,12 +118,12 @@ Specification for creating a job for submission to the nv-ingest microservice.
 
 Object for document extraction tasks, extending the `Task` class.
 
-- **Method**: `__init__(document_type, extract_method='pymupdf', extract_text=False, extract_images=False,
+- **Method**: `__init__(document_type, extract_method='pdfium', extract_text=False, extract_images=False,
 extract_tables=False)`
 
   - **Parameters**:
     - `document_type`: Type of document.
-    - `extract_method`: Method used for extraction. Default is 'pymupdf'.
+    - `extract_method`: Method used for extraction. Default is 'pdfium'.
     - `extract_text`: Boolean indicating if text should be extracted. Default is False.
     - `extract_images`: Boolean indicating if images should be extracted. Default is False.
     - `extract_tables`: Boolean indicating if tables should be extracted. Default is False.

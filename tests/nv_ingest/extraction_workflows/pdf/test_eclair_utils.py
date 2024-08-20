@@ -1,7 +1,3 @@
-from unittest.mock import Mock
-from unittest.mock import patch
-
-import fitz
 import numpy as np
 import PIL
 import pytest
@@ -10,7 +6,6 @@ from nv_ingest.extraction_workflows.pdf.eclair_utils import convert_mmd_to_plain
 from nv_ingest.extraction_workflows.pdf.eclair_utils import crop_image
 from nv_ingest.extraction_workflows.pdf.eclair_utils import extract_classes_bboxes
 from nv_ingest.extraction_workflows.pdf.eclair_utils import pad_image
-from nv_ingest.extraction_workflows.pdf.eclair_utils import pymupdf_page_to_numpy_array
 from nv_ingest.extraction_workflows.pdf.eclair_utils import reverse_transform_bbox
 
 
@@ -175,29 +170,29 @@ def create_test_image(width: int, height: int, color: tuple = (255, 0, 0)) -> PI
     return image
 
 
-def test_pymupdf_page_to_numpy_array_simple():
-    mock_page = Mock(spec=fitz.Page)
-    mock_pixmap = Mock()
-    mock_pixmap.pil_tobytes.return_value = b"fake image data"
-    mock_page.get_pixmap.return_value = mock_pixmap
+# def test_pymupdf_page_to_numpy_array_simple():
+#    mock_page = Mock(spec=fitz.Page)
+#    mock_pixmap = Mock()
+#    mock_pixmap.pil_tobytes.return_value = b"fake image data"
+#    mock_page.get_pixmap.return_value = mock_pixmap
+#
+#    with patch("PIL.Image.open", return_value=PIL.Image.new("RGB", (100, 100))):
+#        image, offset = pymupdf_page_to_numpy_array(mock_page, target_width=100, target_height=100)
+#
+#    assert isinstance(image, np.ndarray)
+#    assert image.shape == (1280, 1024, 3)
+#    assert isinstance(offset, tuple)
+#    assert len(offset) == 2
+#    assert all(isinstance(x, int) for x in offset)
+#    mock_page.get_pixmap.assert_called_once_with(dpi=300)
+#    mock_pixmap.pil_tobytes.assert_called_once_with(format="PNG")
 
-    with patch("PIL.Image.open", return_value=PIL.Image.new("RGB", (100, 100))):
-        image, offset = pymupdf_page_to_numpy_array(mock_page, target_width=100, target_height=100)
 
-    assert isinstance(image, np.ndarray)
-    assert image.shape == (1280, 1024, 3)
-    assert isinstance(offset, tuple)
-    assert len(offset) == 2
-    assert all(isinstance(x, int) for x in offset)
-    mock_page.get_pixmap.assert_called_once_with(dpi=300)
-    mock_pixmap.pil_tobytes.assert_called_once_with(format="PNG")
-
-
-def test_pymupdf_page_to_numpy_array_different_dpi():
-    mock_page = Mock(spec=fitz.Page)
-    mock_pixmap = Mock()
-    mock_pixmap.pil_tobytes.return_value = b"fake image data"
-    mock_page.get_pixmap.return_value = mock_pixmap
+# def test_pymupdf_page_to_numpy_array_different_dpi():
+#     mock_page = Mock(spec=fitz.Page)
+#     mock_pixmap = Mock()
+#     mock_pixmap.pil_tobytes.return_value = b"fake image data"
+#     mock_page.get_pixmap.return_value = mock_pixmap
 
 
 def test_crop_image_valid_bbox():

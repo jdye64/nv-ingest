@@ -30,7 +30,7 @@ def test_task_factory_with_invalid_type():
 
 # Test successful task creation for implemented tasks
 def test_task_factory_success():
-    task = task_factory(TaskType.EXTRACT, document_type="test", extract_method="pymupdf")
+    task = task_factory(TaskType.EXTRACT, document_type="test", extract_method="pdfium")
     assert isinstance(task, ExtractTask)
 
 
