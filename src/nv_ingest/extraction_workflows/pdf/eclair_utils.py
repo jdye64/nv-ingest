@@ -6,7 +6,6 @@ from typing import List
 from typing import Optional
 from typing import Tuple
 
-import fitz
 import numpy as np
 from PIL import Image
 
@@ -78,22 +77,6 @@ def convert_mmd_to_plain_text_ours(mmd_text, remove_inline_math: bool = False):
     return mmd_text.strip()
 
 
-def pymupdf_page_to_numpy_array(
-    page: fitz.Page,
-    dpi: int = DEFAULT_DPI,
-    format: str = "PNG",
-    target_width: int = DEFAULT_MAX_WIDTH,
-    target_height: int = DEFAULT_MAX_HEIGHT,
-) -> np.array:
-    pixmap = page.get_pixmap(dpi=dpi)
-    # Use Pillow to convert PDF page to PNG images.
-    # The model may produce different results if we use other conversion methods.
-    page = Image.open(BytesIO(pixmap.pil_tobytes(format=format)))
-    page.thumbnail((target_width, target_height), Image.Resampling.LANCZOS)
-    page, offset = pad_image(np.array(page))
-    return page, offset
-
-
 def crop_image(array: np.array, bbox: Tuple[int, int, int, int], format="PNG") -> Optional[str]:
     w1, h1, w2, h2 = bbox
     h1 = max(floor(h1), 0)
@@ -144,4 +127,5 @@ def reverse_transform_bbox(
     h1 = int((h1 - bbox_offset[1]) / height_ratio)
     w2 = int((w2 - bbox_offset[0]) / width_ratio)
     h2 = int((h2 - bbox_offset[1]) / height_ratio)
+
     return (w1, h1, w2, h2)

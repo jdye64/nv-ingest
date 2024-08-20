@@ -98,7 +98,7 @@ def test_validate_task_with_valid_split():
 
 def test_validate_task_with_valid_extract():
     """Test with valid extract task options."""
-    value = ['extract:{"document_type": "pdf", "extract_method": "pymupdf"}']
+    value = ['extract:{"document_type": "pdf", "extract_method": "pdfium"}']
     result = click_validate_task(None, None, value)
 
     assert "extract_pdf" in result

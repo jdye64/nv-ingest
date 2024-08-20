@@ -56,7 +56,7 @@ def _process_pdf_bytes(df, task_props):
     - A cuDF DataFrame with the PDF content replaced by the extracted text.
     """
 
-    def decode_and_extract(base64_row, task_props, default="pymupdf"):
+    def decode_and_extract(base64_row, task_props, default="pdfium"):
         # Base64 content to extract
         base64_content = base64_row["content"]
         # Row data to include in extraction
@@ -72,7 +72,7 @@ def _process_pdf_bytes(df, task_props):
         pdf_stream = io.BytesIO(pdf_bytes)
 
         # Type of extraction method to use
-        extract_method = task_props.get("method", "pymupdf")
+        extract_method = task_props.get("method", "pdfium")
         extract_params = task_props.get("params", {})
         if not hasattr(pdf, extract_method):
             extract_method = default

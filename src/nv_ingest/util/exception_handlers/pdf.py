@@ -18,7 +18,7 @@ from nv_ingest.schemas.metadata_schema import validate_metadata
 logger = logging.getLogger(__name__)
 
 
-def pymupdf_exception_handler(descriptor):
+def pdfium_exception_handler(descriptor):
     def outer_function(func):
         def inner_function(*args, **kwargs):
             try:

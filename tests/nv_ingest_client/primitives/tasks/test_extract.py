@@ -6,7 +6,7 @@ from nv_ingest_client.primitives.tasks.extract import ExtractTask
     "document_type, extract_method, extract_text, extract_images, extract_tables",
     [
         ("pdf", "tika", True, False, True),
-        (None, "pymupdf", False, True, None),
+        (None, "pdfium", False, True, None),
         ("txt", None, None, None, False),
     ],
 )
@@ -41,7 +41,7 @@ def test_extract_task_str_representation(document_type, extract_method, extract_
 @pytest.mark.parametrize(
     "extract_method, extract_text, extract_images, extract_tables",
     [
-        ("pymupdf", True, False, False),
+        ("pdfium", True, False, False),
         ("haystack", False, True, True),
         ("unstructured_local", True, True, True),
     ],
@@ -108,7 +108,7 @@ def test_extract_task_to_dict_basic(
     "extract_method, has_method_specific",
     [
         ("unstructured_local", True),
-        ("pymupdf", False),
+        ("pdfium", False),
         ("tika", False),
     ],
 )
