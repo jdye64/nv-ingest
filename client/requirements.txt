@@ -3,3 +3,5 @@ pydantic
 python-magic
 redis~=5.0.1
 setuptools
+httpx
+requests

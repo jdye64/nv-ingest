@@ -16,6 +16,7 @@ from typing import Optional
 from uuid import UUID
 
 from nv_ingest_client.primitives.tasks import Task
+from nv_ingest_client.primitives.tasks.extract import ExtractTask
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,12 @@ class JobSpec:
         Dict
             A dictionary representation of the job specification.
         """
+        # None of this is necessary with Pydantic ...
+        if self._tasks and isinstance(self._tasks[0], ExtractTask):
+            fixed_tasks = [task.to_dict() for task in self._tasks]
+        else:
+            fixed_tasks = self._tasks
+
         return {
             "job_payload": {
                 "source_name": [self._source_name],
@@ -102,9 +109,27 @@ class JobSpec:
                 "document_type": [self._document_type],
             },
             "job_id": str(self._job_id),
-            "tasks": [task.to_dict() for task in self._tasks],
+            "tasks": fixed_tasks,
             "tracing_options": self._extended_options.get("tracing_options", {}),
         }
+
+    @staticmethod
+    def from_dict(d: dict):
+        """
+        Converts a Python Dict to a proper JobSpec object
+        """
+        print(f"Tasks Type: {type(d['tasks'])}")
+        print(f"Tasks: {d['tasks']}")
+        js = JobSpec(
+            payload=d["job_payload"]["content"],
+            tasks=Task.from_dict(d["tasks"]),
+            source_id=d["job_payload"]["source_id"],
+            source_name=d["job_payload"]["source_name"],
+            document_type=d["job_payload"]["document_type"],
+            job_id=d["job_id"],
+            extended_options={"tracing_options": d["tracing_options"]},
+        )
+        return js
 
     @property
     def payload(self) -> Dict:

@@ -104,6 +104,8 @@ services:
       target: runtime
     volumes:
       - ${DATASET_ROOT}:/workspace/data
+    ports:
+      - "7670:7670"
     cap_add:
       - sys_nice
     environment:
@@ -112,7 +114,7 @@ services:
       - REDIS_MORPHEUS_TASK_QUEUE=morpheus_task_queue
       - ECLAIR_GRPC_TRITON=triton-eclair:8001
       - OTEL_EXPORTER_OTLP_ENDPOINT=otel-collector:4317
-      - INGEST_LOG_LEVEL=INFO
+      - INGEST_LOG_LEVEL=DEBUG
       - CAPTION_CLASSIFIER_GRPC_TRITON=triton:8001
       - TABLE_DETECTION_GRPC_TRITON=triton:8001
     deploy:

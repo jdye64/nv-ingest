@@ -199,6 +199,9 @@ notebooks/output
 triton_models/**/*.engine
 triton_models/**/*.onnx
 triton_models/**/*.plan
+triton_models/cached
+triton_models/deplot
+triton_models/paddle
 models
 viz_frames*
 scratch
