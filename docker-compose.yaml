@@ -19,15 +19,17 @@ services:
     ports:
       - "9998:9998"
 
-  triton:
-    image: "nvcr.io/nvidia/tritonserver:24.06-py3"
-    command: bash -c "tritonserver --model-repository=/models --exit-on-error=false --model-control-mode=explicit --load-model yolox"
+  yolox:
+    # NeMo ON
+    image: "nvcr.io/nvstaging/nim/nv-yolox:24.07-17583450"
     ports:
       - "8000:8000"
       - "8001:8001"
       - "8002:8002"
-    volumes:
-      - ${NV_INGEST_ROOT}/models/yolox:/models/yolox
+    environment:
+      - NIM_HTTP_API_PORT=8000
+      - NIM_TRITON_LOG_VERBOSE=1
+      - NGC_API_KEY=$NIM_NGC_API_KEY
     deploy:
       resources:
         reservations:
@@ -35,18 +37,37 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+    runtime: nvidia
+
+    # NeMo OFF
+    # image: "nvcr.io/nvidia/tritonserver:24.06-py3"
+    # command: bash -c "tritonserver --model-repository=/models --exit-on-error=false --model-control-mode=explicit --load-model yolox"
+    # ports:
+    #   - "8000:8000"
+    #   - "8001:8001"
+    #   - "8002:8002"
+    # volumes:
+    #   - ${NV_INGEST_ROOT}/models/yolox:/models/yolox
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    # runtime: nvidia
 
   deplot:
-    image: nvcr.io/nvidian/nemo-llm/nemo-retriever-triton:0.0.4
-    shm_size: 2gb
-    command: bash -c "tritonserver --model-repository=/models --exit-on-error=false --model-control-mode=explicit --load-model deplot"
+    # NeMo ON
+    image: "gitlab-master.nvidia.com:5005/nim/nim-factory/google-deplot:24.07-17654435"
     ports:
       - "8003:8000"
       - "8004:8001"
       - "8005:8002"
-    volumes:
-      - ${NV_INGEST_ROOT}/models/deplot:/models/deplot
-    privileged: true
+    environment:
+      - NIM_HTTP_API_PORT=8000
+      - NIM_TRITON_LOG_VERBOSE=1
+      - NGC_API_KEY=$NIM_NGC_API_KEY
     deploy:
       resources:
         reservations:
@@ -56,17 +77,39 @@ services:
               capabilities: [gpu]
     runtime: nvidia
 
+    # NeMo OFF
+    # image: nvcr.io/nvidian/nemo-llm/nemo-retriever-triton:0.0.4
+    # shm_size: 2gb
+    # command: bash -c "tritonserver --model-repository=/models --exit-on-error=false --model-control-mode=explicit --load-model deplot"
+    # ports:
+    #   - "8003:8000"
+    #   - "8004:8001"
+    #   - "8005:8002"
+    # volumes:
+    #   - ${NV_INGEST_ROOT}/models/deplot:/models/deplot
+    # privileged: true
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    # runtime: nvidia
+
   cached:
-    image: nvcr.io/nvidian/nemo-llm/nemo-retriever-triton-mmdet:0.0.1
+    # NeMo ON
+    image: nvcr.io/nvstaging/nim/cached:24.07-17586292
     shm_size: 2gb
-    command: bash -c "tritonserver --model-repository=/models --exit-on-error=false --model-control-mode=explicit --load-model cached"
     ports:
       - "8006:8000"
       - "8007:8001"
       - "8008:8002"
-    volumes:
-      - ${NV_INGEST_ROOT}/models/cached:/models/cached
     privileged: true
+    environment:
+      - NIM_HTTP_API_PORT=8000
+      - NIM_TRITON_LOG_VERBOSE=1
+      - NGC_API_KEY=$NIM_NGC_API_KEY
     deploy:
       resources:
         reservations:
@@ -76,17 +119,39 @@ services:
               capabilities: [gpu]
     runtime: nvidia
 
+    # NeMo OFF
+    # image: nvcr.io/nvstaging/nim/cached:24.07-17586292
+    # shm_size: 2gb
+    # command: bash -c "tritonserver --model-repository=/models --exit-on-error=false --model-control-mode=explicit --load-model cached"
+    # ports:
+    #   - "8006:8000"
+    #   - "8007:8001"
+    #   - "8008:8002"
+    # volumes:
+    #   - ${NV_INGEST_ROOT}/models/cached:/models/cached
+    # privileged: true
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    # runtime: nvidia
+
   paddle:
-    image: nvcr.io/nvidian/nemo-llm/nemo-retriever-triton-mmdet:0.0.1
+    # NeMo ON
+    image: nvcr.io/nvstaging/nim/paddleocr:24.07-17586069
     shm_size: 2gb
-    command: bash -c "tritonserver --model-repository=/models --exit-on-error=false --model-control-mode=explicit --load-model paddle"
     ports:
       - "8009:8000"
       - "8010:8001"
       - "8011:8002"
-    volumes:
-      - ${NV_INGEST_ROOT}/models/paddle:/models/paddle
     privileged: true
+    environment:
+      - NIM_HTTP_API_PORT=8000
+      - NIM_TRITON_LOG_VERBOSE=1
+      - NGC_API_KEY=$NIM_NGC_API_KEY
     deploy:
       resources:
         reservations:
@@ -95,6 +160,26 @@ services:
               count: all
               capabilities: [gpu]
     runtime: nvidia
+
+    # NeMo OFF
+    # image: nvcr.io/nvidian/nemo-llm/nemo-retriever-triton-mmdet:0.0.1
+    # shm_size: 2gb
+    # command: bash -c "tritonserver --model-repository=/models --exit-on-error=false --model-control-mode=explicit --load-model paddle"
+    # ports:
+    #   - "8009:8000"
+    #   - "8010:8001"
+    #   - "8011:8002"
+    # volumes:
+    #   - ${NV_INGEST_ROOT}/models/paddle:/models/paddle
+    # privileged: true
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    # runtime: nvidia
 
   nv-ingest-ms-runtime:
     image: "nv-ingest:latest"
@@ -113,8 +198,8 @@ services:
       - ECLAIR_GRPC_TRITON=triton-eclair:8001
       - OTEL_EXPORTER_OTLP_ENDPOINT=otel-collector:4317
       - INGEST_LOG_LEVEL=INFO
-      - CAPTION_CLASSIFIER_GRPC_TRITON=triton:8001
-      - TABLE_DETECTION_GRPC_TRITON=triton:8001
+      - CAPTION_CLASSIFIER_GRPC_TRITON=yolox:8001
+      - TABLE_DETECTION_GRPC_TRITON=yolox:8001
     deploy:
       resources:
         reservations:
