@@ -32,20 +32,6 @@ import zipfile
 
 import pandas as pd
 import pypdfium2 as pdfium
-from adobe.pdfservices.operation.auth.service_principal_credentials import ServicePrincipalCredentials
-from adobe.pdfservices.operation.exception.exceptions import SdkException
-from adobe.pdfservices.operation.exception.exceptions import ServiceApiException
-from adobe.pdfservices.operation.exception.exceptions import ServiceUsageException
-from adobe.pdfservices.operation.io.cloud_asset import CloudAsset
-from adobe.pdfservices.operation.io.stream_asset import StreamAsset
-from adobe.pdfservices.operation.pdf_services import PDFServices
-from adobe.pdfservices.operation.pdf_services_media_type import PDFServicesMediaType
-from adobe.pdfservices.operation.pdfjobs.jobs.extract_pdf_job import ExtractPDFJob
-from adobe.pdfservices.operation.pdfjobs.params.extract_pdf import extract_renditions_element_type
-from adobe.pdfservices.operation.pdfjobs.params.extract_pdf.extract_element_type import ExtractElementType
-from adobe.pdfservices.operation.pdfjobs.params.extract_pdf.extract_pdf_params import ExtractPDFParams
-from adobe.pdfservices.operation.pdfjobs.params.extract_pdf.table_structure_type import TableStructureType
-from adobe.pdfservices.operation.pdfjobs.result.extract_pdf_result import ExtractPDFResult
 
 from nv_ingest.schemas.metadata_schema import AccessLevelEnum
 from nv_ingest.schemas.metadata_schema import ContentTypeEnum
@@ -58,7 +44,28 @@ from nv_ingest.util.converters import bytetools
 from nv_ingest.util.pdf.metadata_aggregators import construct_text_metadata
 from nv_ingest.util.pdf.metadata_aggregators import extract_pdf_metadata
 
-ExtractRenditionsElementType = extract_renditions_element_type.ExtractRenditionsElementType  # black / isort conflict
+ADOBE_INSTALLED = True
+try:
+    from adobe.pdfservices.operation.auth.service_principal_credentials import ServicePrincipalCredentials
+    from adobe.pdfservices.operation.exception.exceptions import SdkException
+    from adobe.pdfservices.operation.exception.exceptions import ServiceApiException
+    from adobe.pdfservices.operation.exception.exceptions import ServiceUsageException
+    from adobe.pdfservices.operation.io.cloud_asset import CloudAsset
+    from adobe.pdfservices.operation.io.stream_asset import StreamAsset
+    from adobe.pdfservices.operation.pdf_services import PDFServices
+    from adobe.pdfservices.operation.pdf_services_media_type import PDFServicesMediaType
+    from adobe.pdfservices.operation.pdfjobs.jobs.extract_pdf_job import ExtractPDFJob
+    from adobe.pdfservices.operation.pdfjobs.params.extract_pdf import extract_renditions_element_type
+    from adobe.pdfservices.operation.pdfjobs.params.extract_pdf.extract_element_type import ExtractElementType
+    from adobe.pdfservices.operation.pdfjobs.params.extract_pdf.extract_pdf_params import ExtractPDFParams
+    from adobe.pdfservices.operation.pdfjobs.params.extract_pdf.table_structure_type import TableStructureType
+    from adobe.pdfservices.operation.pdfjobs.result.extract_pdf_result import ExtractPDFResult
+
+    ExtractRenditionsElementType = (
+        extract_renditions_element_type.ExtractRenditionsElementType
+    )  # black / isort conflict
+except ImportError:
+    ADOBE_INSTALLED = False
 logger = logging.getLogger(__name__)
 
 
@@ -98,6 +105,14 @@ def adobe(
     """
 
     logger.info("Extracting PDF with Adobe backend.")
+    if not ADOBE_INSTALLED:
+        err_msg = (
+            "Adobe SDK not installed -- cannot extract PDF.\r\nTo install the adobe SDK please review the "
+            "license agreement at https://github.com/adobe/pdfservices-python-sdk?tab=License-1-ov-file and"
+            "re-launch the nv-ingest microservice with -e INSTALL_ADOBE_SDK=True."
+        )
+        logger.error(err_msg)
+        raise RuntimeError(err_msg)
 
     # get adobe api key
     client_id = kwargs.get("adobe_client_id", None)
