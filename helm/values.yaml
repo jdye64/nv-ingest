@@ -23,6 +23,9 @@ envVars:
   REDIS_MORPHEUS_TASK_QUEUE: "morpheus_task_queue"
   NV_INGEST_DEFAULT_TIMEOUT_MS: "1234"
   TABLE_DETECTION_GRPC_TRITON: nvingest-yolox:8001
+  # The dependency for MINIO is missing
+  MINIO_INTERNAL_ADDRESS: minio:9000
+  MINIO_PUBLIC_ADDRESS: http://localhost:9000
 
 logLevel: DEBUG
 
@@ -193,8 +196,6 @@ imagePullSecrets:
 # containerSecurityContext only affects the main container
 containerSecurityContext: {}
 
-# <Temporary> Until image nims are produced, launch triton instances
-
 ngcSecret:
   # If set to false, the chart expects a secret with name ngc-api to exist in the namespace
   # credentials are needed.
@@ -213,162 +214,45 @@ imagePullSecret:
   username: '$oauthtoken'
   password: ""
 
+yoloxDeployed: true
+yolox-nim:
+  fullnameOverride: nv-ingest-yolox
+  service:
+    name: nv-ingest-yolox
+    grpcPort: 8001
+  nim:
+    grpcPort: 8001
+
+cachedDeployed: true
+cached-nim:
+  fullnameOverride: nv-ingest-cached
+  service:
+    name: nv-ingest-cached
+    grpcPort: 8001
+  nim:
+    grpcPort: 8001
+
+paddleocrDeployed: true
+paddleocr-nim:
+  fullnameOverride: nv-ingest-paddle
+  service:
+    name: nv-ingest-paddle
+    grpcPort: 8001
+  nim:
+    grpcPort: 8001
+
+deplotDeployed: true
+deplot-nim:
+  fullnameOverride: nv-ingest-deplot
+  service:
+    name: nv-ingest-deplot
+    grpcPort: 8001
+  nim:
+    grpcPort: 8001
+
+# Use this to load an image Pre NIM Factory via triton
 triton:
-  enabled: true
-  common:
-    health_port: 8000
-    http_port: 8000
-    grpc_port: 8001
-    openai_port: 9999 # pod, not service port
-    nemo_port: 9998
-
-    metrics:
-      enabled: true
-      port: 8002
-
-    readinessProbe:
-      enabled: true
-      path: /v2/health/ready
-      port: health
-      initialDelaySeconds: 15
-      timeoutSeconds: 1
-      periodSeconds: 10
-      successThreshold: 1
-      failureThreshold: 3
-
-    livenessProbe:
-      enabled: true
-      path: /v2/health/live
-      port: health
-      initialDelaySeconds: 15
-      timeoutSeconds: 1
-      periodSeconds: 10
-      successThreshold: 1
-      failureThreshold: 3
-
-    startupProbe:
-      enabled: true
-      path: /v2/health/ready
-      port: health
-      initialDelaySeconds: 30
-      timeoutSeconds: 1
-      periodSeconds: 10
-      successThreshold: 1
-      failureThreshold: 180
-
-  instances:
-    deplot:
-      image:
-        repository: nvcr.io/nvidian/nemo-llm/nemo-retriever-triton
-        tag: 0.0.4
-
-      replicaCount: 1
-
-      service:
-        name: deplot
-
-      persistence:
-        enabled: true
-        size: 80Gi
-        storageClass: local-path
-        accessMode: ReadWriteOnce
-
-      resources:
-        requests:
-          nvidia.com/gpu: 1
-          memory: 16Gi
-          cpu: 1
-        limits:
-          nvidia.com/gpu: 1
-          memory: 24Gi
-          cpu: 32
-
-      models:
-        deplot:
-          NGC_MODEL_NAME: "nemo-retriever-deplot-image-to-text-triton-pytorch"
-          NGC_MODEL_VERSION: "11"
-          MODEL_NAME:  "deplot-image-to-text-triton-pytorch"
-          NGC_CLI_ORG: "nvidian"
-          NGC_CLI_TEAM: "nemo-llm"
-          TARFILE: "yes"
-
-    yolox:
-      image:
-        repository: nvcr.io/nvidian/nemo-llm/nemo-retriever-triton-yolox
-        tag: 0.0.3
-
-      replicaCount: 1
-
-      service:
-        name: yolox
-
-      persistence:
-        enabled: true
-        size: 80Gi
-        storageClass: local-path
-        accessMode: ReadWriteOnce
-
-      resources:
-        requests:
-          nvidia.com/gpu: 1
-          memory: 16Gi
-          cpu: 1
-        limits:
-          nvidia.com/gpu: 1
-          memory: 24Gi
-          cpu: 32
-
-      models:
-        yolox:
-          NGC_MODEL_NAME: "nemo-retriever-yolox-triton-pytorch"
-          NGC_MODEL_VERSION: "8"
-          MODEL_NAME:  "yolox"
-          NGC_CLI_ORG: "nvidian"
-          NGC_CLI_TEAM: "nemo-llm"
-          TARFILE: "yes"
-
-    paddle-cached:
-      image:
-        repository: nvcr.io/nvidian/nemo-llm/nemo-retriever-triton-mmdet
-        tag: 0.0.2
-
-      replicaCount: 1
-
-      service:
-        name: paddle-cached
-
-      persistence:
-        enabled: true
-        size: 80Gi
-        storageClass: local-path
-        accessMode: ReadWriteOnce
-
-      resources:
-        requests:
-          nvidia.com/gpu: 1
-          memory: 16Gi
-          cpu: 1
-        limits:
-          nvidia.com/gpu: 1
-          memory: 24Gi
-          cpu: 32
-
-      models:
-        paddle:
-          NGC_MODEL_NAME: "nemo-retriever-paddleocr-image-to-text-triton-pytorch"
-          NGC_MODEL_VERSION: "7"
-          MODEL_NAME:  "paddleocr-image-to-text-triton-pytorch"
-          NGC_CLI_ORG: "nvidian"
-          NGC_CLI_TEAM: "nemo-llm"
-          TARFILE: "yes"
-        cached:
-          NGC_MODEL_NAME: "nemo-retriever-cached-image-to-text-triton-pytorch"
-          NGC_MODEL_VERSION: "15"
-          MODEL_NAME:  "cached-image-to-text-triton-pytorch"
-          NGC_CLI_ORG: "nvidian"
-          NGC_CLI_TEAM: "nemo-llm"
-          TARFILE: "yes"
+  enabled: false
 
 extraVolumeMounts: {}
 
-# </Temporary>

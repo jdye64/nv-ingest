@@ -198,7 +198,7 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: "ngc-api"
-                  key: NGC_CLI_API_KEY
+                  key: NGC_API_KEY
             - name: NGC_DECRYPT_KEY
               valueFrom:
                 secretKeyRef:
