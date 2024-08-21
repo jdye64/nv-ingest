@@ -190,11 +190,30 @@ publish:pip_packages:
 lint:helm:
   stage: test
   extends: .helm-lint
+  tags:
+    - nemollm-common
+  needs:
+    - job: vault-init
+      optional: false
+  id_tokens:
+    VAULT_JWT_TOKEN:
+      aud: https://prod.vault.nvidia.com
+  secrets:
+    NGC_REGISTRY_PASSWORD:
+      vault: tokens/prod-ngc/token@secrets
+      file: false
+  before_script:
+    - apk add jq
+    - !reference [.helm-scripts, context-check]
+    - !reference [.helm-scripts, ngc-repo-add]
+    - helm dependency update ${HELM_CONTEXT}
 
 # version check helm charts if there are changes only
 check:helm:
   stage: test
   extends: .helm-publish-check
+  tags:
+    - nemollm-common
   needs:
     - job: lint:helm
       optional: true
@@ -205,6 +224,8 @@ check:helm:
 publish:helm:
   stage: publish
   extends: .helm-publish
+  tags:
+    - nemollm-common
   needs:
     - job: check:helm
       optional: true
