@@ -4,14 +4,22 @@ from io import BytesIO
 import pandas as pd
 import pytest
 
-from nv_ingest.extraction_workflows.pdf.adobe_helper import adobe
 from nv_ingest.schemas.metadata_schema import TextTypeEnum
 
+from ....import_checks import ADOBE_IMPORT_OK
 
-def requires_client_id_and_secret():
+if ADOBE_IMPORT_OK:
+    from nv_ingest.extraction_workflows.pdf.adobe_helper import adobe
+
+
+def requires_sdk_client_id_and_secret():
     client_id = os.getenv("ADOBE_CLIENT_ID")
     client_secret = os.getenv("ADOBE_CLIENT_SECRET")
-    return pytest.mark.skipif(client_id is None or client_secret is None, reason="requires Adobe client id and secret")
+
+    reqs_ok = (client_id is not None) and (client_secret is not None) and (ADOBE_IMPORT_OK)
+    print(reqs_ok)
+
+    return pytest.mark.skipif(not reqs_ok, reason="requires Adobe client id and secret")
 
 
 @pytest.fixture
@@ -49,7 +57,7 @@ def client_secret():
     return os.getenv("ADOBE_CLIENT_SECRET")
 
 
-@requires_client_id_and_secret()
+@requires_sdk_client_id_and_secret()
 @pytest.mark.parametrize(
     "text_depth",
     ["page", TextTypeEnum.PAGE],
@@ -81,7 +89,7 @@ def test_adobe_text_depth_page(pdf_stream, document_df, text_depth, client_id, c
     assert extracted_data[0][1]["content_metadata"]["page_number"] == 0
 
 
-@requires_client_id_and_secret()
+@requires_sdk_client_id_and_secret()
 @pytest.mark.parametrize(
     "text_depth",
     ["document", TextTypeEnum.DOCUMENT],
@@ -114,7 +122,7 @@ def test_adobe_text_depth_doc(pdf_stream, document_df, text_depth, client_id, cl
     assert extracted_data[0][1]["content_metadata"]["hierarchy"]["page_count"] == 1
 
 
-@requires_client_id_and_secret()
+@requires_sdk_client_id_and_secret()
 @pytest.mark.parametrize(
     "text_depth",
     ["block", TextTypeEnum.BLOCK],
@@ -144,7 +152,7 @@ def test_adobe_text_depth_block(pdf_stream, document_df, text_depth, client_id, 
     assert extracted_data[2][1]["content_metadata"]["page_number"] == 0
 
 
-@requires_client_id_and_secret()
+@requires_sdk_client_id_and_secret()
 def test_adobe_image(pdf_stream, document_df, client_id, client_secret):
     extracted_data = adobe(
         pdf_stream,
@@ -171,7 +179,7 @@ def test_adobe_image(pdf_stream, document_df, client_id, client_secret):
     assert extracted_data[1][1]["content_metadata"]["page_number"] == 0
 
 
-@requires_client_id_and_secret()
+@requires_sdk_client_id_and_secret()
 def test_adobe_table(table_pdf_stream, document_df, client_id, client_secret):
     extracted_data = adobe(
         table_pdf_stream,

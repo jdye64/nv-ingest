@@ -73,6 +73,7 @@ FROM base AS runtime
 
 COPY src/pipeline.py ./
 COPY pyproject.toml ./
+COPY ./docker/scripts/entrypoint_source_ext.sh /opt/docker/bin/entrypoint_source
 
 CMD ["python", "/workspace/pipeline.py"]
 

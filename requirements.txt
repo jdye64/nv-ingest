@@ -14,7 +14,6 @@ opentelemetry-api
 opentelemetry-exporter-otlp
 opentelemetry-sdk
 pandas~=1.5.3
-pdfservices-sdk~=4.0.0
 pydantic==1.10.14
 pyinstrument
 pypdfium2

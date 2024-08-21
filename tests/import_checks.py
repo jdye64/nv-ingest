@@ -23,5 +23,15 @@ def check_cuda_driver():
         return False
 
 
-MORPHEUS_IMPORT_OK = check_morpheus_import()
+def check_adobe_import():
+    try:
+        import adobe.pdfservices
+
+        return True
+    except ImportError:
+        return False
+
+
+ADOBE_IMPORT_OK = check_adobe_import()
 CUDA_DRIVER_OK = check_cuda_driver()
+MORPHEUS_IMPORT_OK = check_morpheus_import()
