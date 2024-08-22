@@ -82,7 +82,11 @@ class JobSpec:
         return (
             f"job-id: {self._job_id}\n"
             f"source-id: {self._source_id}\n"
+            f"source-name: {self._source_name}\n"
+            f"document-type: {self._document_type}\n"
             f"task count: {len(self._tasks)}\n"
+            f"payload: {'<*** ' + str(len(self._payload)) + ' ***>' if self._payload else 'Empty'}\n"
+            f"extended-options: {self._extended_options}\n"
             f"{task_info}"
         )
 
@@ -120,7 +124,6 @@ class JobSpec:
         """
         print(f"Tasks Type: {type(d['tasks'])}")
         print(f"Tasks: {d['tasks']}")
-        breakpoint()
         js = JobSpec(
             payload=d["job_payload"]["content"],
             tasks=Task.from_dict(d["tasks"]),

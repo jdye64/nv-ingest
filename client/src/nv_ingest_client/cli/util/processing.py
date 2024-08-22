@@ -401,6 +401,7 @@ def create_and_process_jobs(
             futures_dict = client.fetch_job_result_async(job_ids, timeout=timeout, data_only=False)
 
             for future in as_completed(futures_dict.keys()):
+                breakpoint()
                 retry = False
                 job_id = futures_dict[future]
                 try:

@@ -403,14 +403,18 @@ class NvIngestClient:
             If submitting the job fails.
         """
 
+        print(f"Checking job_state. ..")
         job_state = self._get_and_check_job_state(
             job_id, required_state=[JobStateEnum.PENDING, JobStateEnum.SUBMITTED_ASYNC]
         )
+        print(f"JobState: {job_state}")
 
         job_spec_str = json.dumps(job_state.job_spec.to_dict())
+        print(f"job_spec_st: {job_spec_str}")
         response_channel = f"response_{job_id}"
 
         try:
+            print(f"Submitting job_spec_str: {job_spec_str} to job_queue_id: {job_queue_id}")
             self._message_client.submit_message(job_queue_id, job_spec_str)
             job_state.response_channel = response_channel
             job_state.state = JobStateEnum.SUBMITTED
