@@ -5,12 +5,15 @@ from typing import Type
 from typing import Union
 
 from .caption import CaptionTask
+from .embed import EmbedTask
 from .extract import ExtractTask
+from .filter import FilterTask
 from .split import SplitTask
 from .store import StoreTask
 from .task_base import Task
 from .task_base import TaskType
 from .task_base import is_valid_task_type
+from .vdb_upload import VdbUploadTask
 
 
 class TaskUnimplemented(Task):
@@ -26,12 +29,13 @@ class TaskUnimplemented(Task):
 # Mapping of TaskType to Task classes, arranged alphabetically by task type
 _TASK_MAP: Dict[TaskType, Callable] = {
     TaskType.CAPTION: CaptionTask,
-    TaskType.EMBED: TaskUnimplemented,
+    TaskType.EMBED: EmbedTask,
     TaskType.EXTRACT: ExtractTask,
-    TaskType.FILTER: TaskUnimplemented,
+    TaskType.FILTER: FilterTask,
     TaskType.SPLIT: SplitTask,
     TaskType.STORE: StoreTask,
     TaskType.TRANSFORM: TaskUnimplemented,
+    TaskType.VDB_UPLOAD: VdbUploadTask,
 }
 
 

@@ -183,6 +183,7 @@ tags
 .conda-bld
 .Dockerfile
 .tmp
+.volumes
 *.dirlock
 *.engine
 *.lock

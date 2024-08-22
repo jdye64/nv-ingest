@@ -61,8 +61,6 @@ RUN source activate morpheus \
     && rm -rf dist
 
 RUN source activate morpheus \
-    && pip install ./client/dist/*.whl \
-    && rm -rf client/dist \
     && rm -rf src requirements.txt test-requirements.txt util-requirements.txt
 
 # Interim pyarrow backport until folded into upstream dependency tree
@@ -71,6 +69,10 @@ RUN source activate morpheus \
 
 FROM base AS runtime
 
+RUN source activate morpheus \
+    && pip install ./client/dist/*.whl \
+    && rm -rf client/dist
+
 COPY src/pipeline.py ./
 COPY pyproject.toml ./
 COPY ./docker/scripts/entrypoint_source_ext.sh /opt/docker/bin/entrypoint_source
@@ -78,5 +80,8 @@ COPY ./docker/scripts/entrypoint_source_ext.sh /opt/docker/bin/entrypoint_source
 CMD ["python", "/workspace/pipeline.py"]
 
 FROM base AS development
+
+RUN source activate morpheus && \
+    pip install -e ./client
 
 CMD ["/bin/bash"]

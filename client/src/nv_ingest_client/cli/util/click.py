@@ -20,16 +20,20 @@ import click
 from nv_ingest_client.cli.util.processing import check_schema
 from nv_ingest_client.primitives.tasks import CaptionTask
 from nv_ingest_client.primitives.tasks import DedupTask
+from nv_ingest_client.primitives.tasks import EmbedTask
 from nv_ingest_client.primitives.tasks import ExtractTask
 from nv_ingest_client.primitives.tasks import FilterTask
 from nv_ingest_client.primitives.tasks import SplitTask
 from nv_ingest_client.primitives.tasks import StoreTask
+from nv_ingest_client.primitives.tasks import VdbUploadTask
 from nv_ingest_client.primitives.tasks.caption import CaptionTaskSchema
 from nv_ingest_client.primitives.tasks.dedup import DedupTaskSchema
+from nv_ingest_client.primitives.tasks.embed import EmbedTaskSchema
 from nv_ingest_client.primitives.tasks.extract import ExtractTaskSchema
 from nv_ingest_client.primitives.tasks.filter import FilterTaskSchema
 from nv_ingest_client.primitives.tasks.split import SplitTaskSchema
 from nv_ingest_client.primitives.tasks.store import StoreTaskSchema
+from nv_ingest_client.primitives.tasks.vdb_upload import VdbUploadTaskSchema
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +130,14 @@ def click_validate_task(ctx, param, value):
                 task_options = check_schema(FilterTaskSchema, options, task_id, json_options)
                 new_task_id = f"{task_id}"
                 new_task = FilterTask(**task_options.dict())
+            elif task_id == "embed":
+                task_options = check_schema(EmbedTaskSchema, options, task_id, json_options)
+                new_task_id = f"{task_id}"
+                new_task = EmbedTask(**task_options.dict())
+            elif task_id == "vdb_upload":
+                task_options = check_schema(VdbUploadTaskSchema, options, task_id, json_options)
+                new_task_id = f"{task_id}"
+                new_task = VdbUploadTask(**task_options.dict())
 
             else:
                 raise ValueError(f"Unsupported task type: {task_id}")

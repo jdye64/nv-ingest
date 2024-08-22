@@ -37,7 +37,7 @@ def test_task_factory_success():
 # Test handling of unimplemented tasks
 def test_task_factory_unimplemented():
     with pytest.raises(NotImplementedError):
-        task_factory(TaskType.EMBED)
+        task_factory(TaskType.TRANSFORM)
 
 
 # Test invalid task type handling

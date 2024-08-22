@@ -68,9 +68,7 @@ def test_upload_images(mock_minio):
             ],
         }
     )
-    params = {
-        "content_type": "image",
-    }
+    params = {"content_types": {"image": True, "structured": True}}
 
     gdf = cudf.from_pandas(df)
     msg = ControlMessage()
@@ -82,4 +80,4 @@ def test_upload_images(mock_minio):
 
     result = upload_images(df, params)
     uploaded_image_url = result.iloc[1]["metadata"]["image_metadata"]["uploaded_image_url"]
-    assert uploaded_image_url == "http://localhost:9000/nv-ingest/foo/1.png"
+    assert uploaded_image_url == "http://minio:9000/nv-ingest/foo/1.png"
