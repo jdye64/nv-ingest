@@ -7,6 +7,9 @@ fastparquet==2024.2.0
 fsspec
 minio~=7.2.5
 more_itertools
+nltk==3.8
+onnx==1.15.0
+openai==1.40.6
 olefile==0.47
 onnx==1.15.0
 opencv-python==4.10.0.84

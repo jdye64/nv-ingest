@@ -306,6 +306,12 @@ def create_job_specs_for_batch(files_batch: List[str], tasks: Dict, client: NvIn
         if "filter" in tasks:
             job_spec.add_task(tasks["filter"])
 
+        if "embed" in tasks:
+            job_spec.add_task(tasks["embed"])
+
+        if "vdb_upload" in tasks:
+            job_spec.add_task(tasks["vdb_upload"])
+
         job_id = client.add_job(job_spec)
         job_ids.append(job_id)
 

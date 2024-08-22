@@ -1,5 +1,6 @@
 from .caption import CaptionTask
 from .dedup import DedupTask
+from .embed import EmbedTask
 from .extract import ExtractTask
 from .filter import FilterTask
 from .split import SplitTask
@@ -8,6 +9,7 @@ from .task_base import Task
 from .task_base import TaskType
 from .task_base import is_valid_task_type
 from .task_factory import task_factory
+from .vdb_upload import VdbUploadTask
 
 __all__ = [
     "CaptionTask",
@@ -20,4 +22,6 @@ __all__ = [
     "TaskType",
     "DedupTask",
     "FilterTask",
+    "EmbedTask",
+    "VdbUploadTask",
 ]

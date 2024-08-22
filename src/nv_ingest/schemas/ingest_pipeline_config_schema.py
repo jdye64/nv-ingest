@@ -23,5 +23,6 @@ class IngestPipelineConfigSchema(BaseModel):
     redis_task_sink: RedisTaskSinkSchema = {}
     redis_task_source: RedisTaskSourceSchema = {}
     text_splitting_module: DocSplitterSchema = {}
+    # embed_extractions_module: EmbedExtractionsSchema = {}
 
     # TODO docx_extractor: DocxExtractorSchema = {}

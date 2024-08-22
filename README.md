@@ -131,6 +131,16 @@ see [here](https://gitlab-master.nvidia.com/help/user/profile/personal_access_to
   - **Description**: The endpoint for the OpenTelemetry exporter, used for sending telemetry data.
   - **Example**: `http://otel-collector:4317`
 
+- **`NGC_API_KEY`**:
+
+  - **Description**: An authorized NGC API key, used to interact with hosted NIMs and can be generated here: https://org.ngc.nvidia.com/setup/personal-keys.
+  - **Example**: `hFFVc4XzxR***********WUzKYOCtZE`
+
+- **`MINIO_BUCKET`**:
+
+  - **Description**: Name of MinIO bucket, used to store image, table, and chart extractions.
+  - **Example**: `nv-ingest`
+
 - **`INGEST_LOG_LEVEL`**:
 
   - **Description**: The log level for the ingest service, which controls the verbosity of the logging output.
@@ -148,9 +158,24 @@ see [here](https://gitlab-master.nvidia.com/help/user/profile/personal_access_to
 # Redis is our message broker for the ingest service, always required.
 docker compose up -d redis
 
+# `yolox`, `deplot`, `cached`, and `paddle` are NIMs used to perform table and chart extraction.
+docker compose up -d yolox deplot cached paddle
+
+# Optional (MinIO) is an opject store to store extracted images, tables, and charts, by default it is commented out in the docker compose file.
+# The `store` task will not be functional without this service or external s3 compliant object store.
+docker compose up -d minio
+
+# Optional (Milvus) is a vector database to embeddings for multi-model extractions, by default it is commented out in the docker compose file.
+# The `vdb_upload` task will not be functional without this serivce or external Milvus database.
+docker compose up -d etcd minio milvus attu
+
 # Optional (Telemetry services)
 # TODO: Add examples for telemetry services
 docker compose up -d otel-collector prometheus grafana zipkin
+
+# Optional (Embedding NIM) Stand up `nv-embedqa-e5-v5` NIM to calculate embeddings for extracted content.
+# The `embed` task will not be functional without this service.
+docker compose up -d embedding
 
 # Optional (Triton) See below for Triton setup we need Triton for any model inference
 # This is only needed for captioning or ECLAIR based extraction.

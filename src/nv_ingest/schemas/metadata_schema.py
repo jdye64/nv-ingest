@@ -289,6 +289,7 @@ class InfoMessageMetadataSchema(BaseModelNoExt):
 # Main metadata schema
 class MetadataSchema(BaseModelNoExt):
     content: str = ""
+    embedding: Optional[List[float]] = None
     source_metadata: Optional[SourceMetadataSchema] = None
     content_metadata: Optional[ContentMetadataSchema] = None
     text_metadata: Optional[TextMetadataSchema] = None

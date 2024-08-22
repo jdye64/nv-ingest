@@ -25,7 +25,7 @@ def check_cuda_driver():
 
 def check_adobe_import():
     try:
-        import adobe.pdfservices
+        pass
 
         return True
     except ImportError:

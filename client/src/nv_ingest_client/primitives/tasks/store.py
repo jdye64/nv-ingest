@@ -22,21 +22,16 @@ from .task_base import Task
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_CONTENT_TYPE = "image"
 _DEFAULT_STORE_METHOD = "minio"
 
 
 class StoreTaskSchema(BaseModel):
-    content_type: str = None
     store_method: str = None
 
     @root_validator(pre=True)
     def set_default_store_method(cls, values):
-        content_type = values.get("content_type")
         store_method = values.get("store_method")
 
-        if content_type is None:
-            values["content_type"] = _DEFAULT_CONTENT_TYPE
         if store_method is None:
             values["store_method"] = _DEFAULT_STORE_METHOD
         return values
@@ -56,7 +51,8 @@ class StoreTask(Task):
 
     def __init__(
         self,
-        content_type: _Type_Content_Type = None,
+        structured: bool = True,
+        images: bool = False,
         store_method: _Type_Store_Method = None,
         **extra_params,
     ) -> None:
@@ -65,7 +61,8 @@ class StoreTask(Task):
         """
         super().__init__()
 
-        self._content_type = content_type or "image"
+        self._structured = structured
+        self._images = images
         self._store_method = store_method or "minio"
         self._extra_params = extra_params
 
@@ -75,7 +72,8 @@ class StoreTask(Task):
         """
         info = ""
         info += "Store Task:\n"
-        info += f"  content type: {self._content_type}\n"
+        info += f"  store structured types: {self._structured}\n"
+        info += f"  store image types: {self._images}\n"
         info += f"  store method: {self._store_method}\n"
         for key, value in self._extra_params.items():
             info += f"  {key}: {value}\n"
@@ -87,7 +85,8 @@ class StoreTask(Task):
         """
         task_properties = {
             "method": self._store_method,
-            "content_type": self._content_type,
+            "structured": self._structured,
+            "images": self._images,
             "params": self._extra_params,
         }
 

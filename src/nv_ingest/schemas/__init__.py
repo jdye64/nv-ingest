@@ -22,6 +22,7 @@ from .redis_client_schema import RedisClientSchema
 from .redis_task_sink_schema import RedisTaskSinkSchema
 from .redis_task_source_schema import RedisTaskSourceSchema
 from .task_injection_schema import TaskInjectionSchema
+from .vdb_task_sink_schema import VdbTaskSinkSchema
 
 __all__ = [
     "DocumentSplitterSchema",
@@ -34,6 +35,7 @@ __all__ = [
     "RedisClientSchema",
     "RedisTaskSinkSchema",
     "RedisTaskSourceSchema",
+    "VdbTaskSinkSchema",
     "TaskInjectionSchema",
     "validate_ingest_job",
     "validate_metadata",

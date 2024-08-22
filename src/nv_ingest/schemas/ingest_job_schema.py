@@ -49,6 +49,7 @@ class TaskTypeEnum(str, Enum):
     filter = "filter"
     split = "split"
     store = "store"
+    vdb_upload = "vdb_upload"
 
 
 class FilterTypeEnum(str, Enum):
@@ -91,22 +92,9 @@ class IngestTaskExtractSchema(BaseModelNoExt):
 
 
 class IngestTaskStoreSchema(BaseModelNoExt):
-    content_type: ContentTypeEnum
+    structured: bool = True
+    images: bool = False
     method: str
-    params: dict
-
-    @validator("content_type", pre=True)
-    def case_insensitive_content_type(cls, v):
-        if isinstance(v, str):
-            v = v.lower()
-        try:
-            return ContentTypeEnum(v)
-        except ValueError:
-            raise ValueError(f"{v} is not a valid ContentTypeEnum value")
-
-
-class IngestTaskEmbedSchema(BaseModelNoExt):
-    model: str
     params: dict
 
 
@@ -136,6 +124,15 @@ class IngestTaskDedupSchema(BaseModelNoExt):
     params: IngestTaskDedupParams = IngestTaskDedupParams()
 
 
+class IngestTaskEmbedSchema(BaseModelNoExt):
+    text: bool = True
+    tables: bool = True
+
+
+class IngestTaskVdbUploadSchema(BaseModelNoExt):
+    filter_errors: bool = True
+
+
 class IngestTaskSchema(BaseModelNoExt):
     type: TaskTypeEnum
     task_properties: Union[
@@ -146,6 +143,7 @@ class IngestTaskSchema(BaseModelNoExt):
         IngestTaskCaptionSchema,
         IngestTaskDedupSchema,
         IngestTaskFilterSchema,
+        IngestTaskVdbUploadSchema,
     ]
     raise_on_failure: bool = False
 
@@ -161,6 +159,7 @@ class IngestTaskSchema(BaseModelNoExt):
                 TaskTypeEnum.filter: IngestTaskFilterSchema,  # Extend this mapping as necessary
                 TaskTypeEnum.split: IngestTaskSplitSchema,
                 TaskTypeEnum.store: IngestTaskStoreSchema,
+                TaskTypeEnum.vdb_upload: IngestTaskVdbUploadSchema,
             }.get(task_type.lower())
 
             # logger.debug(f"Checking task_properties type for task type '{task_type}'")
