@@ -31,11 +31,14 @@ def detect_language(text):
         A value from `LanguageEnum` detected language code.
     """
 
-    language = langdetect.detect(text)
+    try:
+        language = langdetect.detect(text)
 
-    if LanguageEnum.has_value(language):
-        language = LanguageEnum[language.upper().replace("-", "_")]
-    else:
+        if LanguageEnum.has_value(language):
+            language = LanguageEnum[language.upper().replace("-", "_")]
+        else:
+            language = LanguageEnum.UNKNOWN
+    except langdetect.lang_detect_exception.LangDetectException:
         language = LanguageEnum.UNKNOWN
 
     return language

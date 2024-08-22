@@ -120,6 +120,7 @@ class JobSpec:
         """
         print(f"Tasks Type: {type(d['tasks'])}")
         print(f"Tasks: {d['tasks']}")
+        breakpoint()
         js = JobSpec(
             payload=d["job_payload"]["content"],
             tasks=Task.from_dict(d["tasks"]),

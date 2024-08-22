@@ -38,7 +38,7 @@ ADOBE_CLIENT_ID = os.environ.get("ADOBE_CLIENT_ID", None)
 ADOBE_CLIENT_SECRET = os.environ.get("ADOBE_CLIENT_SECRET", None)
 
 _DEFAULT_EXTRACTOR_MAP = {
-    "pdf": "pymupdf",
+    "pdf": "pdfium",
     "docx": "python_docx",
     "pptx": "python_pptx",
     "html": "beautifulsoup",
@@ -49,7 +49,7 @@ _DEFAULT_EXTRACTOR_MAP = {
 }
 
 _Type_Extract_Method_PDF = Literal[
-    "pymupdf",
+    "pdfium",
     "eclair",
     "haystack",
     "tika",
@@ -68,7 +68,7 @@ _Type_Extract_Method_Map = {
     "pptx": get_args(_Type_Extract_Method_PPTX),
 }
 
-_Type_Extract_Tables_Method_PDF = Literal["yolox", "pymupdf"]
+_Type_Extract_Tables_Method_PDF = Literal["yolox", "pdfium"]
 
 _Type_Extract_Tables_Method_DOCX = Literal["python_docx",]
 
@@ -141,7 +141,7 @@ class ExtractTask(Task):
     def __init__(
         self,
         document_type,
-        extract_method: _Type_Extract_Method_PDF = "pymupdf",
+        extract_method: _Type_Extract_Method_PDF = "pdfium",
         extract_text: bool = False,
         extract_images: bool = False,
         extract_tables: bool = False,

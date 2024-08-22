@@ -44,7 +44,7 @@ def load_images_from_json(json_file_path):
 
     images = []
     for item in data:  # Assuming the JSON is a list of objects
-        if item["document_type"] == "image":
+        if item["document_type"] in ("image", "structured"):
             image_data = base64.b64decode(item["metadata"]["content"])
             image = Image.open(BytesIO(image_data))
             images.append(image)

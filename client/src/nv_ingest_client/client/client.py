@@ -176,6 +176,7 @@ class NvIngestClient:
             raise ValueError(f"Cannot create Job with ID {job_id}: already exists")
 
         job_spec.job_id = job_id
+        print(f"!!!!Add job_id: {job_id} to self._job_states: {self._job_states}")
         self._job_states[job_id] = JobState(job_spec=job_spec)
 
         return job_id

@@ -7,23 +7,23 @@ fastparquet==2024.2.0
 fsspec
 minio~=7.2.5
 more_itertools
+nltk==3.8
 onnx==1.15.0
+openai==1.40.6
+olefile==0.47
+onnx==1.15.0
+opencv-python==4.10.0.84
+opentelemetry-api
+opentelemetry-exporter-otlp
+opentelemetry-sdk
 pandas~=1.5.3
 pydantic==1.10.14
 pyinstrument
-PyMuPDF==1.23.21 # required for pdf extraction, post 1.23.22 fails parsing some govdocs pdfs
-redis~=5.0.1
-sentence_transformers==2.3.1
-setuptools
-unstructured-client==0.23.3
-python-Levenshtein==0.25.0
+pypdfium2
 python-docx
 python-pptx==0.6.23
-olefile==0.47
-opentelemetry-api
-opentelemetry-sdk
-opentelemetry-exporter-otlp
-pdfservices-sdk~=4.0.0
+redis~=5.0.1
+setuptools
 tabulate
 torchvision==0.18.0
 opencv-python==4.10.0.84
@@ -33,3 +33,4 @@ gunicorn==21.2.0
 # We want to move this to a common module soon to prevent this
 # this is the crawl step for stop gap for now to prevent reimplmenting the same classes.
 nv_ingest_client
+unstructured-client==0.23.3

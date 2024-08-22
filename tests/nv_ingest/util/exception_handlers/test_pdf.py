@@ -6,12 +6,12 @@ import pytest
 from nv_ingest.schemas.metadata_schema import StatusEnum
 from nv_ingest.schemas.metadata_schema import TaskTypeEnum
 from nv_ingest.util.exception_handlers.pdf import create_exception_tag
-from nv_ingest.util.exception_handlers.pdf import pymupdf_exception_handler
+from nv_ingest.util.exception_handlers.pdf import pdfium_exception_handler
 
 MODULE_UNDER_TEST = "nv_ingest.util.exception_handlers.pdf"
 
 
-@pymupdf_exception_handler(descriptor="PyMuPDF Error")
+@pdfium_exception_handler(descriptor="pdfium Error")
 def sample_func():
     raise Exception("Sample error")
 
@@ -22,10 +22,10 @@ def mock_logger():
         yield mock
 
 
-def test_pymupdf_exception_handler(mock_logger):
+def test_pdfium_exception_handler(mock_logger):
     result = sample_func()
     assert result == [], "The function should return an empty list on exception."
-    mock_logger.warning.assert_called_once_with("PyMuPDF Error:sample_func error:Sample error")
+    mock_logger.warning.assert_called_once_with("pdfium Error:sample_func error:Sample error")
 
 
 def test_create_exception_tag_with_source_id():

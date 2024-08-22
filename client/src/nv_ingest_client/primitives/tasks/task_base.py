@@ -27,6 +27,7 @@ class TaskType(Enum):
     SPLIT = auto()
     TRANSFORM = auto()
     STORE = auto()
+    VDB_UPLOAD = auto()
 
 
 def is_valid_task_type(task_type_str: str) -> bool:

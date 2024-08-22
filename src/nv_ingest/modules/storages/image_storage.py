@@ -39,9 +39,10 @@ logger = logging.getLogger(__name__)
 MODULE_NAME = "image_storage"
 MODULE_NAMESPACE = "nv_ingest"
 
-_DEFAULT_ENDPOINT = os.environ.get("MINIO_INTERNAL_ADDRESS", "localhost:9000")
-_DEFAULT_READ_ADDRESS = os.environ.get("MINIO_PUBLIC_ADDRESS", "http://localhost:9000")
-_DEFAULT_BUCKET_NAME = "nv-ingest"
+# TODO: Move these into pipeline.py to populate the stage and validate them using the pydantic schema on startup.
+_DEFAULT_ENDPOINT = os.environ.get("MINIO_INTERNAL_ADDRESS", "minio:9000")
+_DEFAULT_READ_ADDRESS = os.environ.get("MINIO_PUBLIC_ADDRESS", "http://minio:9000")
+_DEFAULT_BUCKET_NAME = os.environ.get("MINIO_BUCKET", "nv-ingest")
 
 ImageStorageLoaderFactory = ModuleLoaderFactory(MODULE_NAME, MODULE_NAMESPACE, ImageStorageModuleSchema)
 
@@ -51,7 +52,7 @@ def upload_images(df: pd.DataFrame, params: Dict[str, Any]) -> pd.DataFrame:
     Identify contents (e.g., images) within a dataframe and uploads the data to MinIO.
     The image metadata in the metadata column is updated with the URL of the uploaded data.
     """
-    content_type = params.get("content_type", ContentTypeEnum.IMAGE)
+    content_types = params.get("content_types")
     endpoint = params.get("endpoint", _DEFAULT_ENDPOINT)
     bucket_name = params.get("bucket_name", _DEFAULT_BUCKET_NAME)
 
@@ -72,17 +73,17 @@ def upload_images(df: pd.DataFrame, params: Dict[str, Any]) -> pd.DataFrame:
         logger.debug("Bucket %s already exists", bucket_name)
 
     for idx, row in df.iterrows():
-        if row["document_type"] != content_type:
+        if row["document_type"] not in content_types.keys():
             continue
 
-        metadata = row["metadata"]
+        metadata = row["metadata"].copy()
 
         content = base64.b64decode(metadata["content"].encode())
 
         source_id = metadata["source_metadata"]["source_id"]
 
         image_type = "png"
-        if content_type == ContentTypeEnum.IMAGE:
+        if row["document_type"] == ContentTypeEnum.IMAGE:
             image_type = metadata.get("image_metadata").get("image_type", "png")
 
         # URL-encode source_id and image_type to ensure they are safe for the URL path
@@ -100,19 +101,19 @@ def upload_images(df: pd.DataFrame, params: Dict[str, Any]) -> pd.DataFrame:
         )
 
         metadata["source_metadata"]["source_location"] = f"{_DEFAULT_READ_ADDRESS}/{bucket_name}/{destination_file}"
-        if content_type == ContentTypeEnum.IMAGE:
+        if row["document_type"] == ContentTypeEnum.IMAGE:
             logger.debug("Storing image data to Minio")
             metadata["image_metadata"][
                 "uploaded_image_url"
             ] = f"{_DEFAULT_READ_ADDRESS}/{bucket_name}/{destination_file}"
-        elif content_type == ContentTypeEnum.STRUCTURED:
+        elif row["document_type"] == ContentTypeEnum.STRUCTURED:
             logger.debug("Storing structured image data to Minio")
             metadata["table_metadata"][
                 "uploaded_image_url"
             ] = f"{_DEFAULT_READ_ADDRESS}/{bucket_name}/{destination_file}"
 
         # TODO: validate metadata before putting it back in.
-        df.loc[idx]["metadata"] = metadata
+        df.at[idx, "metadata"] = metadata
 
     return df
 
@@ -129,22 +130,29 @@ def _storage_images(builder: mrc.Builder):
     )
     def on_data(ctrl_msg: ControlMessage):
         try:
-            task_props = ctrl_msg.get_tasks().get("store").pop()
+            task_props = ctrl_msg.remove_task("store")
+            store_structured = task_props.get("structured", True)
+            store_images = task_props.get("images", False)
 
-            content_type = task_props.get("content_type", ContentTypeEnum.IMAGE)
+            content_types = {}
+            if store_structured:
+                content_types[ContentTypeEnum.STRUCTURED] = store_structured
+            if store_images:
+                content_types[ContentTypeEnum.IMAGE] = store_images
+
             params = task_props.get("params", {})
-            params["content_type"] = content_type
+
+            params["content_types"] = content_types
 
             # TODO(Matt) validate this resolves to the right filter criteria....
             logger.debug(f"Processing storage task with parameters: {params}")
-            content_type = params.get("content_type", ContentTypeEnum.IMAGE)
 
             with ctrl_msg.payload().mutable_dataframe() as mdf:
                 df = mdf.to_pandas()
 
-            storage_obj_mask = df["document_type"] == content_type
+            storage_obj_mask = df["document_type"].isin(list(content_types.keys()))
             if (~storage_obj_mask).all():  # if there are no images, return immediately.
-                logger.debug(f"No storage objects for '{content_type}' found in the dataframe.")
+                logger.debug(f"No storage objects for '{content_types}' found in the dataframe.")
                 return ctrl_msg
 
             df = upload_images(df, params)
@@ -155,7 +163,7 @@ def _storage_images(builder: mrc.Builder):
             ctrl_msg.payload(msg_meta)
         except Exception as e:
             traceback.print_exc()
-            raise ValueError(f"Failed to split documents: {e}")
+            raise ValueError(f"Failed to store extracted objects: {e}")
 
         return ctrl_msg
 

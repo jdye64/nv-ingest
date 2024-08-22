@@ -10,16 +10,14 @@
 
 from nv_ingest.extraction_workflows.pdf.adobe_helper import adobe
 from nv_ingest.extraction_workflows.pdf.eclair_helper import eclair
-from nv_ingest.extraction_workflows.pdf.haystack_helper import haystack
 from nv_ingest.extraction_workflows.pdf.llama_parse_helper import llama_parse
-from nv_ingest.extraction_workflows.pdf.pymupdf_helper import pymupdf
+from nv_ingest.extraction_workflows.pdf.pdfium_helper import pdfium
 from nv_ingest.extraction_workflows.pdf.tika_helper import tika
 from nv_ingest.extraction_workflows.pdf.unstructured_io_helper import unstructured_io
 
 __all__ = [
-    "haystack",
     "llama_parse",
-    "pymupdf",
+    "pdfium",
     "tika",
     "unstructured_io",
     "eclair",

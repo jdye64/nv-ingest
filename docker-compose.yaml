@@ -19,15 +19,17 @@ services:
     ports:
       - "9998:9998"
 
-  triton:
-    image: "nvcr.io/nvidia/tritonserver:24.06-py3"
-    command: bash -c "tritonserver --model-repository=/models --exit-on-error=false --model-control-mode=explicit --load-model yolox"
+  yolox:
+    # NIM ON
+    image: "nvcr.io/nvstaging/nim/nv-yolox:24.07-17583450"
     ports:
       - "8000:8000"
       - "8001:8001"
       - "8002:8002"
-    volumes:
-      - ${NV_INGEST_ROOT}/models/yolox:/models/yolox
+    environment:
+      - NIM_HTTP_API_PORT=8000
+      - NIM_TRITON_LOG_VERBOSE=1
+      - NGC_API_KEY=$NIM_NGC_API_KEY
     deploy:
       resources:
         reservations:
@@ -35,18 +37,37 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+    runtime: nvidia
+
+    # NIM OFF
+    # image: "nvcr.io/nvidia/tritonserver:24.06-py3"
+    # command: bash -c "tritonserver --model-repository=/models --exit-on-error=false --model-control-mode=explicit --load-model yolox"
+    # ports:
+    #   - "8000:8000"
+    #   - "8001:8001"
+    #   - "8002:8002"
+    # volumes:
+    #   - ${NV_INGEST_ROOT}/models/yolox:/models/yolox
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    # runtime: nvidia
 
   deplot:
-    image: nvcr.io/nvidian/nemo-llm/nemo-retriever-triton:0.0.4
-    shm_size: 2gb
-    command: bash -c "tritonserver --model-repository=/models --exit-on-error=false --model-control-mode=explicit --load-model deplot"
+    # NIM ON
+    image: "gitlab-master.nvidia.com:5005/nim/nim-factory/google-deplot:24.07-17654435"
     ports:
       - "8003:8000"
       - "8004:8001"
       - "8005:8002"
-    volumes:
-      - ${NV_INGEST_ROOT}/models/deplot:/models/deplot
-    privileged: true
+    environment:
+      - NIM_HTTP_API_PORT=8000
+      - NIM_TRITON_LOG_VERBOSE=1
+      - NGC_API_KEY=$NIM_NGC_API_KEY
     deploy:
       resources:
         reservations:
@@ -56,17 +77,39 @@ services:
               capabilities: [gpu]
     runtime: nvidia
 
+    # NIM OFF
+    # image: nvcr.io/nvidian/nemo-llm/nemo-retriever-triton:0.0.4
+    # shm_size: 2gb
+    # command: bash -c "tritonserver --model-repository=/models --exit-on-error=false --model-control-mode=explicit --load-model deplot"
+    # ports:
+    #   - "8003:8000"
+    #   - "8004:8001"
+    #   - "8005:8002"
+    # volumes:
+    #   - ${NV_INGEST_ROOT}/models/deplot:/models/deplot
+    # privileged: true
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    # runtime: nvidia
+
   cached:
-    image: nvcr.io/nvidian/nemo-llm/nemo-retriever-triton-mmdet:0.0.1
+    # NIM ON
+    image: nvcr.io/nvstaging/nim/cached:24.07-17586292
     shm_size: 2gb
-    command: bash -c "tritonserver --model-repository=/models --exit-on-error=false --model-control-mode=explicit --load-model cached"
     ports:
       - "8006:8000"
       - "8007:8001"
       - "8008:8002"
-    volumes:
-      - ${NV_INGEST_ROOT}/models/cached:/models/cached
     privileged: true
+    environment:
+      - NIM_HTTP_API_PORT=8000
+      - NIM_TRITON_LOG_VERBOSE=1
+      - NGC_API_KEY=$NIM_NGC_API_KEY
     deploy:
       resources:
         reservations:
@@ -76,17 +119,80 @@ services:
               capabilities: [gpu]
     runtime: nvidia
 
+    # NIM OFF
+    # image: nvcr.io/nvstaging/nim/cached:24.07-17586292
+    # shm_size: 2gb
+    # command: bash -c "tritonserver --model-repository=/models --exit-on-error=false --model-control-mode=explicit --load-model cached"
+    # ports:
+    #   - "8006:8000"
+    #   - "8007:8001"
+    #   - "8008:8002"
+    # volumes:
+    #   - ${NV_INGEST_ROOT}/models/cached:/models/cached
+    # privileged: true
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    # runtime: nvidia
+
   paddle:
-    image: nvcr.io/nvidian/nemo-llm/nemo-retriever-triton-mmdet:0.0.1
+    # NIM ON
+    image: nvcr.io/nvstaging/nim/paddleocr:24.07-17586069
     shm_size: 2gb
-    command: bash -c "tritonserver --model-repository=/models --exit-on-error=false --model-control-mode=explicit --load-model paddle"
     ports:
       - "8009:8000"
       - "8010:8001"
       - "8011:8002"
-    volumes:
-      - ${NV_INGEST_ROOT}/models/paddle:/models/paddle
     privileged: true
+    environment:
+      - NIM_HTTP_API_PORT=8000
+      - NIM_TRITON_LOG_VERBOSE=1
+      - NGC_API_KEY=$NIM_NGC_API_KEY
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    runtime: nvidia
+
+    # NIM OFF
+    # image: nvcr.io/nvidian/nemo-llm/nemo-retriever-triton-mmdet:0.0.1
+    # shm_size: 2gb
+    # command: bash -c "tritonserver --model-repository=/models --exit-on-error=false --model-control-mode=explicit --load-model paddle"
+    # ports:
+    #   - "8009:8000"
+    #   - "8010:8001"
+    #   - "8011:8002"
+    # volumes:
+    #   - ${NV_INGEST_ROOT}/models/paddle:/models/paddle
+    # privileged: true
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    # runtime: nvidia
+
+  embedding:
+    # NIM ON
+    image: nvcr.io/nim/nvidia/nv-embedqa-e5-v5:1.0.0
+    shm_size: 16gb
+    ports:
+      - "8012:8000"
+      - "8013:8001"
+      - "8014:8002"
+    environment:
+      - NIM_HTTP_API_PORT=8000
+      - NIM_TRITON_LOG_VERBOSE=1
+      - NGC_API_KEY=$NIM_NGC_API_KEY
     deploy:
       resources:
         reservations:
@@ -114,9 +220,11 @@ services:
       - REDIS_MORPHEUS_TASK_QUEUE=morpheus_task_queue
       - ECLAIR_GRPC_TRITON=triton-eclair:8001
       - OTEL_EXPORTER_OTLP_ENDPOINT=otel-collector:4317
-      - INGEST_LOG_LEVEL=DEBUG
-      - CAPTION_CLASSIFIER_GRPC_TRITON=triton:8001
-      - TABLE_DETECTION_GRPC_TRITON=triton:8001
+      - INGEST_LOG_LEVEL=INFO
+      - CAPTION_CLASSIFIER_GRPC_TRITON=yolox:8001
+      - TABLE_DETECTION_GRPC_TRITON=yolox:8001
+      - NGC_API_KEY=${NGC_API_KEY:-ngcapikey}
+      - MINIO_BUCKET=${MINIO_BUCKET:-nv-ingest}
     deploy:
       resources:
         reservations:
@@ -134,6 +242,8 @@ services:
     volumes:
       - ${DATASET_ROOT}:/workspace/data
       - ${NV_INGEST_ROOT}/src:/workspace/src
+      - ${NV_INGEST_ROOT}/client:/workspace/client
+      - ${NV_INGEST_ROOT}/tests:/workspace/tests
     stdin_open: true
     tty: true
     cap_add:
@@ -142,9 +252,13 @@ services:
       - MESSAGE_CLIENT_HOST=redis
       - MESSAGE_CLIENT_PORT=6379
       - REDIS_MORPHEUS_TASK_QUEUE=morpheus_task_queue
-      - ECLAIR_TRITON_HOST=triton
-      - ECLAIR_TRITON_PORT=8001
+      - ECLAIR_GRPC_TRITON=triton-eclair:8001
       - OTEL_EXPORTER_OTLP_ENDPOINT=otel-collector:4317
+      - INGEST_LOG_LEVEL=INFO
+      - CAPTION_CLASSIFIER_GRPC_TRITON=yolox:8001
+      - TABLE_DETECTION_GRPC_TRITON=yolox:8001
+      - NGC_API_KEY=${NGC_API_KEY:-ngcapikey}
+      - MINIO_BUCKET=${MINIO_BUCKET:-nv-ingest}
     deploy:
       resources:
         reservations:
@@ -199,3 +313,82 @@ services:
     image: grafana/grafana
     ports:
       - "3000:3000"
+#  etcd:
+#    # Turn on to leverage the `vdb_upload` task
+#    restart: always
+#    container_name: milvus-etcd
+#    image: quay.io/coreos/etcd:v3.5.5
+#    environment:
+#      - ETCD_AUTO_COMPACTION_MODE=revision
+#      - ETCD_AUTO_COMPACTION_RETENTION=1000
+#      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+#      - ETCD_SNAPSHOT_COUNT=50000
+#    volumes:
+#      - ./.volumes/etcd:/etcd
+#    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+#    healthcheck:
+#      test: ["CMD", "etcdctl", "endpoint", "health"]
+#      interval: 30s
+#      timeout: 20s
+#      retries: 3
+
+#  minio:
+#    # Turn on to leverage the `store` and `vdb_upload` task
+#    restart: always
+#    container_name: minio
+#    hostname: minio
+#    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+#    environment:
+#      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+#      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+#    ports:
+#      - "9001:9001"
+#      - "9000:9000"
+#    volumes:
+#      - ./.volumes/minio:/minio_data
+#    command: minio server /minio_data --console-address ":9001"
+#    healthcheck:
+#      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+#      interval: 30s
+#      timeout: 20s
+#      retries: 3
+
+#  milvus:
+#    # Turn on to leverage the `vdb_upload` task
+#    restart: always
+#    container_name: milvus-standalone
+#    image: milvusdb/milvus:v2.3.5
+#    command: ["milvus", "run", "standalone"]
+#    hostname: milvus
+#    security_opt:
+#      - seccomp:unconfined
+#    environment:
+#      ETCD_ENDPOINTS: etcd:2379
+#      MINIO_ADDRESS: minio:9000
+#    volumes:
+#      - ./.volumes/milvus:/var/lib/milvus
+#    healthcheck:
+#      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+#      interval: 30s
+#      start_period: 90s
+#      timeout: 20s
+#      retries: 3
+#    ports:
+#      - "19530:19530"
+#      - "9091:9091"
+#    depends_on:
+#      - "etcd"
+#      - "minio"
+
+#  attu:
+#    # Turn on to leverage the `vdb_upload` task
+#    restart: always
+#    container_name: milvus-attu
+#    image: zilliz/attu:v2.3.5
+#    hostname: attu
+#    environment:
+#      MILVUS_URL: http://milvus:19530
+#    ports:
+#      - "3001:3000"
+#    depends_on:
+#      - "milvus"

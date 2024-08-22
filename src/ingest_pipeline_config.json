@@ -7,4 +7,6 @@
   "redis_task_source": {},
   "text_splitting_module": {},
   "otel_meter_module": {},
+  "embed_extractions_module": {},
+  "vdb_task_sink_module": {}
 }

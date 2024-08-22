@@ -121,6 +121,8 @@ Example:
   --task 'extract:{"document_type":"pdf", "extract_method":"unstructured_io"}'
   --task 'extract:{"document_type":"docx", "extract_text":true, "extract_images":true}'
   --task 'store:{"content_type":"image", "store_method":"minio", "endpoint":"minio:9000"}'
+  --task 'embed:{"text":true, "tables":true}'
+  --task 'vdb_upload'
   --task 'caption:{}'
 
 \b
@@ -144,7 +146,8 @@ Tasks and Options:
 \b
 - store: Stores any images extracted from documents.
     Options:
-    - content_type (str): Content type ('image', ). Required.
+    - structured (bool): Flag to write extracted charts and tables to object store.
+    - images (bool): Flag to write extracted images to object store.
     - store_method (str): Storage type ('minio', ). Required.
 \b
 - caption: Attempts to extract captions for images extracted from documents. Note: this is not generative, but rather a
@@ -152,18 +155,25 @@ Tasks and Options:
     Options:
       N/A
 \b
-- dedup: Idenfities and optionally filters duplicate images in extraction.
+- dedup: Identifies and optionally filters duplicate images in extraction.
     Options:
       - content_type (str): Content type to deduplicate ('image')
       - filter (bool): When set to True, duplicates will be filtered, otherwise, an info message will be added.
 \b
-- filter: Idenfities and optionally filters images above or below scale thresholds.
+- filter: Identifies and optionally filters images above or below scale thresholds.
     Options:
       - content_type (str): Content type to deduplicate ('image')
       - min_size: (Union[float, int]): Minimum allowable size of extracted image.
       - max_aspect_ratio: (Union[float, int]): Maximum allowable aspect ratio of extracted image.
       - min_aspect_ratio: (Union[float, int]): Minimum allowable aspect ratio of extracted image.
       - filter (bool): When set to True, duplicates will be filtered, otherwise, an info message will be added.
+\b
+- embed: Computes embeddings on multimodal extractions.
+    Options:
+    - text (bool): Flag to create embeddings for text extractions. Optional.
+    - tables (bool): Flag to creae embeddings for table extractions. Optional.
+\b
+- vdb_upload: Uploads extraction embeddings to vector database.
 \b
 Note: The 'extract_method' automatically selects the optimal method based on 'document_type' if not explicitly stated.
 """,

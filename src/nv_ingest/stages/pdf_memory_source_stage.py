@@ -100,7 +100,7 @@ class PdfMemoryFileSource(PreallocatorMixin, SingleOutputSource):
                     {
                         "type": "extract",
                         "task_properties": {
-                            "method": "pymupdf",
+                            "method": "pdfium",
                             "document_type": "pdf",
                             "params": {
                                 "extract_text": True,

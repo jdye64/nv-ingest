@@ -43,7 +43,7 @@ def job_payload():
                         "params": {},
                     },
                 },
-                {"type": "embed", "task_properties": {"model": "bert", "params": {}}},
+                {"type": "embed", "task_properties": {"text": True, "tables": True}},
             ],
         }
     )

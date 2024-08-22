@@ -29,10 +29,12 @@ from pydantic import ValidationError
 
 from nv_ingest.modules.injectors.metadata_injector import MetadataInjectorLoaderFactory
 from nv_ingest.modules.sinks.redis_task_sink import RedisTaskSinkLoaderFactory
+from nv_ingest.modules.sinks.vdb_task_sink import VDBTaskSinkLoaderFactory
 from nv_ingest.modules.sources.redis_task_source import RedisTaskSourceLoaderFactory
 from nv_ingest.modules.telemetry.job_counter import JobCounterLoaderFactory
 from nv_ingest.modules.telemetry.otel_meter import OpenTelemetryMeterLoaderFactory
 from nv_ingest.modules.telemetry.otel_tracer import OpenTelemetryTracerLoaderFactory
+from nv_ingest.modules.transforms.embed_extractions import EmbedExtractionsLoaderFactory
 from nv_ingest.modules.transforms.nemo_doc_splitter import NemoDocSplitterLoaderFactory
 from nv_ingest.schemas.ingest_pipeline_config_schema import IngestPipelineConfigSchema
 from nv_ingest.stages.docx_extractor_stage import generate_docx_extractor_stage
@@ -83,7 +85,7 @@ def get_triton_service_caption_classifier():
 def get_triton_service_table_detection():
     triton_service_table_detection = os.environ.get(
         "TABLE_DETECTION_GRPC_TRITON",
-        "triton:8001",
+        "yolox:8001",
     )
     triton_service_table_detection_model_name = os.environ.get(
         "TABLE_DETECTION_MODEL_NAME",
@@ -282,6 +284,29 @@ def add_image_caption_stage(pipe, morpheus_pipeline_config, ingest_config, defau
     return image_caption_stage
 
 
+def add_embed_extractions_stage(pipe, morpheus_pipeline_config, ingest_config):
+    api_key = os.getenv("NGC_API_KEY", "ngc_api_key")
+    embedding_nim_endpoint = os.getenv("EMBEDDING_NIM_ENDPOINT", "http://embedding:8000/v1")
+
+    embed_extractions_loader = EmbedExtractionsLoaderFactory.get_instance(
+        module_name="embed_extractions",
+        module_config=ingest_config.get(
+            "embed_extractions_module", {"api_key": api_key, "embedding_nim_endpoint": embedding_nim_endpoint}
+        ),
+    )
+    embed_extractions_stage = pipe.add_stage(
+        LinearModulesStage(
+            morpheus_pipeline_config,
+            embed_extractions_loader,
+            input_type=ControlMessage,
+            output_type=ControlMessage,
+            input_port_name="input",
+            output_port_name="output",
+        )
+    )
+    return embed_extractions_stage
+
+
 def add_image_storage_stage(pipe, morpheus_pipeline_config):
     image_storage_stage = pipe.add_stage(ImageStorageStage(morpheus_pipeline_config))
 
@@ -393,6 +418,33 @@ def add_completed_job_counter_stage(pipe, morpheus_pipeline_config, ingest_confi
     return completed_job_counter_stage
 
 
+def add_vdb_task_sink_stage(pipe, morpheus_pipeline_config, ingest_config):
+    milvus_endpoint = os.getenv("MILVUS_ENDPOINT", "http://milvus:19530")
+
+    vdb_task_sink_loader = VDBTaskSinkLoaderFactory.get_instance(
+        module_name="vdb_task_sink",
+        module_config=ingest_config.get(
+            "vdb_task_sink_module",
+            {
+                "service_kwargs": {
+                    "uri": milvus_endpoint,
+                }
+            },
+        ),
+    )
+    vdb_task_sink_stage = pipe.add_stage(
+        LinearModulesStage(
+            morpheus_pipeline_config,
+            vdb_task_sink_loader,
+            input_type=ControlMessage,
+            output_type=ControlMessage,
+            input_port_name="input",
+            output_port_name="output",
+        )
+    )
+    return vdb_task_sink_stage
+
+
 def setup_ingestion_pipeline(
     pipe: Pipeline, morpheus_pipeline_config: Config, ingest_config: typing.Dict[str, typing.Any]
 ):
@@ -418,13 +470,14 @@ def setup_ingestion_pipeline(
 
     # Transforms and data synthesis
     nemo_splitter_stage = add_nemo_splitter_stage(pipe, morpheus_pipeline_config, ingest_config)
-    image_caption_stage = add_image_caption_stage(pipe, morpheus_pipeline_config, ingest_config, default_cpu_count)
+    embed_extractions_stage = add_embed_extractions_stage(pipe, morpheus_pipeline_config, ingest_config)
 
     # Storage and output
     image_storage_stage = add_image_storage_stage(pipe, morpheus_pipeline_config)
     sink_stage = add_sink_stage(
         pipe, morpheus_pipeline_config, ingest_config, message_provider_host, message_provider_port
     )
+    vdb_task_sink_stage = add_vdb_task_sink_stage(pipe, morpheus_pipeline_config, ingest_config)
 
     # Telemetry (Note: everything after the sync stage is out of the hot path, please keep it that way)
     otel_tracer_stage = add_otel_tracer_stage(pipe, morpheus_pipeline_config, ingest_config)
@@ -442,9 +495,10 @@ def setup_ingestion_pipeline(
     pipe.add_edge(pptx_extractor_stage, image_dedup_stage)
     pipe.add_edge(image_dedup_stage, image_filter_stage)
     pipe.add_edge(image_filter_stage, nemo_splitter_stage)
-    pipe.add_edge(nemo_splitter_stage, image_caption_stage)
-    pipe.add_edge(image_caption_stage, image_storage_stage)
-    pipe.add_edge(image_storage_stage, sink_stage)
+    pipe.add_edge(nemo_splitter_stage, embed_extractions_stage)
+    pipe.add_edge(embed_extractions_stage, image_storage_stage)
+    pipe.add_edge(image_storage_stage, vdb_task_sink_stage)
+    pipe.add_edge(vdb_task_sink_stage, sink_stage)
     pipe.add_edge(sink_stage, otel_meter_stage)
     pipe.add_edge(otel_meter_stage, otel_tracer_stage)
     pipe.add_edge(otel_tracer_stage, completed_job_counter_stage)

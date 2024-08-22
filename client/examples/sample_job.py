@@ -40,7 +40,7 @@ _DEFAULT_SPLIT_MAX_CHARACTER_LENGTH = 1900
 _DEFAULT_SPLIT_SENTENCE_WINDOW_SIZE = 0
 
 # extract config
-_DEFAULT_EXTRACT_METHOD = "pymupdf"
+_DEFAULT_EXTRACT_METHOD = "pdfium"
 
 
 # Note: You will need to deploy the nv-ingest service for this example to work.

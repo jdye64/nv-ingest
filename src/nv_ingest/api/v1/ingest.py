@@ -56,7 +56,10 @@ INGEST_SERVICE_T = Annotated[IngestServiceMeta, Depends(_get_ingest_service)]
 )
 async def submit_job(job_spec_json: dict, ingest_service: INGEST_SERVICE_T):
     try:
+        print(f"^^^ JobSpecJson: {job_spec_json}")
         job_spec = JobSpec.from_dict(job_spec_json)
+        breakpoint()
+        print(f"@@@ Received JobSpec: {job_spec}")
         submitted_job_id = await ingest_service.submit_job(job_spec)
         print(f"Submitted Job_Id: {submitted_job_id}")
         return submitted_job_id
@@ -82,6 +85,9 @@ async def fetch_job(job_id: str, ingest_service: INGEST_SERVICE_T):
     print(f"!!!! Entering fetch_job endpoint: {job_id}")
     try:
         job_response = await ingest_service.fetch_job(job_id)
+        print(f"Job Reponse: {job_response}")
         return job_response
     except Exception as ex:
+        print(f"Exception: {ex}")
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Nv-Ingest Internal Server Error: {str(ex)}")

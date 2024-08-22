@@ -29,38 +29,43 @@ import random
 import time
 import uuid
 import zipfile
-from datetime import datetime
 
-import fitz
 import pandas as pd
-from adobe.pdfservices.operation.auth.service_principal_credentials import ServicePrincipalCredentials
-from adobe.pdfservices.operation.exception.exceptions import SdkException
-from adobe.pdfservices.operation.exception.exceptions import ServiceApiException
-from adobe.pdfservices.operation.exception.exceptions import ServiceUsageException
-from adobe.pdfservices.operation.io.cloud_asset import CloudAsset
-from adobe.pdfservices.operation.io.stream_asset import StreamAsset
-from adobe.pdfservices.operation.pdf_services import PDFServices
-from adobe.pdfservices.operation.pdf_services_media_type import PDFServicesMediaType
-from adobe.pdfservices.operation.pdfjobs.jobs.extract_pdf_job import ExtractPDFJob
-from adobe.pdfservices.operation.pdfjobs.params.extract_pdf.extract_element_type import ExtractElementType
-from adobe.pdfservices.operation.pdfjobs.params.extract_pdf.extract_pdf_params import ExtractPDFParams
-from adobe.pdfservices.operation.pdfjobs.params.extract_pdf.extract_renditions_element_type import \
-    ExtractRenditionsElementType  # fmt: skip
-from adobe.pdfservices.operation.pdfjobs.params.extract_pdf.table_structure_type import TableStructureType
-from adobe.pdfservices.operation.pdfjobs.result.extract_pdf_result import ExtractPDFResult
+import pypdfium2 as pdfium
 
 from nv_ingest.schemas.metadata_schema import AccessLevelEnum
 from nv_ingest.schemas.metadata_schema import ContentTypeEnum
 from nv_ingest.schemas.metadata_schema import ImageTypeEnum
-from nv_ingest.schemas.metadata_schema import SourceTypeEnum
 from nv_ingest.schemas.metadata_schema import StdContentDescEnum
 from nv_ingest.schemas.metadata_schema import TableFormatEnum
 from nv_ingest.schemas.metadata_schema import TextTypeEnum
 from nv_ingest.schemas.metadata_schema import validate_metadata
 from nv_ingest.util.converters import bytetools
-from nv_ingest.util.converters import datetools
-from nv_ingest.util.detectors.language import detect_language
+from nv_ingest.util.pdf.metadata_aggregators import construct_text_metadata
+from nv_ingest.util.pdf.metadata_aggregators import extract_pdf_metadata
 
+ADOBE_INSTALLED = True
+try:
+    from adobe.pdfservices.operation.auth.service_principal_credentials import ServicePrincipalCredentials
+    from adobe.pdfservices.operation.exception.exceptions import SdkException
+    from adobe.pdfservices.operation.exception.exceptions import ServiceApiException
+    from adobe.pdfservices.operation.exception.exceptions import ServiceUsageException
+    from adobe.pdfservices.operation.io.cloud_asset import CloudAsset
+    from adobe.pdfservices.operation.io.stream_asset import StreamAsset
+    from adobe.pdfservices.operation.pdf_services import PDFServices
+    from adobe.pdfservices.operation.pdf_services_media_type import PDFServicesMediaType
+    from adobe.pdfservices.operation.pdfjobs.jobs.extract_pdf_job import ExtractPDFJob
+    from adobe.pdfservices.operation.pdfjobs.params.extract_pdf import extract_renditions_element_type
+    from adobe.pdfservices.operation.pdfjobs.params.extract_pdf.extract_element_type import ExtractElementType
+    from adobe.pdfservices.operation.pdfjobs.params.extract_pdf.extract_pdf_params import ExtractPDFParams
+    from adobe.pdfservices.operation.pdfjobs.params.extract_pdf.table_structure_type import TableStructureType
+    from adobe.pdfservices.operation.pdfjobs.result.extract_pdf_result import ExtractPDFResult
+
+    ExtractRenditionsElementType = (
+        extract_renditions_element_type.ExtractRenditionsElementType
+    )  # black / isort conflict
+except ImportError:
+    ADOBE_INSTALLED = False
 logger = logging.getLogger(__name__)
 
 
@@ -100,6 +105,14 @@ def adobe(
     """
 
     logger.info("Extracting PDF with Adobe backend.")
+    if not ADOBE_INSTALLED:
+        err_msg = (
+            "Adobe SDK not installed -- cannot extract PDF.\r\nTo install the adobe SDK please review the "
+            "license agreement at https://github.com/adobe/pdfservices-python-sdk?tab=License-1-ov-file and"
+            "re-launch the nv-ingest microservice with -e INSTALL_ADOBE_SDK=True."
+        )
+        logger.error(err_msg)
+        raise RuntimeError(err_msg)
 
     # get adobe api key
     client_id = kwargs.get("adobe_client_id", None)
@@ -144,154 +157,99 @@ def adobe(
         "access_level": access_level,
     }
 
-    with fitz.open(stream=pdf_stream, filetype="pdf") as doc:
-        page_count = doc.page_count
+    doc = pdfium.PdfDocument(pdf_stream)
+    pdf_metadata = extract_pdf_metadata(doc, source_id)
 
-        # last_modified
-        last_modified = doc.metadata.get("modDate", None)
-        if last_modified in (
-            None,
-            "",
-        ):
-            last_modified = datetools.remove_tz(datetime.now()).isoformat()
-        else:
-            last_modified = datetools.datetimefrompdfmeta(last_modified)
+    document_metadata = {
+        "source_type": pdf_metadata.source_type,
+        "date_created": pdf_metadata.date_created,
+        "last_modified": pdf_metadata.last_modified,
+    }
 
-        # date_created
-        date_created = doc.metadata.get("creationDate", None)
-        if date_created in (
-            None,
-            "",
-        ):
-            date_created = datetools.remove_tz(datetime.now()).isoformat()
-        else:
-            date_created = datetools.datetimefrompdfmeta(date_created)
+    source_metadata.update(document_metadata)
 
-        # keywords
-        doc.metadata.get("keywords", [])
-        # source_type
-        source_type = doc.metadata.get("format", SourceTypeEnum.PDF)
+    retry_delay = 1
+    max_delay = 50
+    while True:
+        try:
+            # Initial setup, create credentials instance
+            credentials = ServicePrincipalCredentials(
+                client_id=client_id,
+                client_secret=client_secret,
+            )
 
-        pymupdf_metadata = {
-            "source_type": source_type,
-            "date_created": date_created,
-            "last_modified": last_modified,
-        }
+            # Creates a PDF Services instance
+            pdf_services = PDFServices(credentials=credentials)
 
-        source_metadata.update(pymupdf_metadata)
+            # Creates an asset(s) from source file(s) and upload
+            input_asset = pdf_services.upload(input_stream=pdf_stream, mime_type=PDFServicesMediaType.PDF)
 
-        retry_delay = 1
-        max_delay = 50
-        while True:
-            try:
-                # Initial setup, create credentials instance
-                credentials = ServicePrincipalCredentials(
-                    client_id=client_id,
-                    client_secret=client_secret,
-                )
+            # Create parameters for the job
+            elements_to_extract = []
+            if extract_text:
+                elements_to_extract.append(ExtractElementType.TEXT)
+            if extract_tables:
+                elements_to_extract.append(ExtractElementType.TABLES)
 
-                # Creates a PDF Services instance
-                pdf_services = PDFServices(credentials=credentials)
+            extract_pdf_params = ExtractPDFParams(
+                table_structure_type=TableStructureType.CSV,
+                elements_to_extract=elements_to_extract,
+                elements_to_extract_renditions=[ExtractRenditionsElementType.FIGURES] if extract_images else [],
+            )
 
-                # Creates an asset(s) from source file(s) and upload
-                input_asset = pdf_services.upload(input_stream=pdf_stream, mime_type=PDFServicesMediaType.PDF)
+            # Creates a new job instance
+            extract_pdf_job = ExtractPDFJob(input_asset=input_asset, extract_pdf_params=extract_pdf_params)
 
-                # Create parameters for the job
-                elements_to_extract = []
-                if extract_text:
-                    elements_to_extract.append(ExtractElementType.TEXT)
-                if extract_tables:
-                    elements_to_extract.append(ExtractElementType.TABLES)
+            # Submit the job and gets the job result
+            location = pdf_services.submit(extract_pdf_job)
+            pdf_services_response = pdf_services.get_job_result(location, ExtractPDFResult)
 
-                extract_pdf_params = ExtractPDFParams(
-                    table_structure_type=TableStructureType.CSV,
-                    elements_to_extract=elements_to_extract,
-                    elements_to_extract_renditions=[ExtractRenditionsElementType.FIGURES] if extract_images else [],
-                )
+            # Get content from the resulting asset(s)
+            result_asset: CloudAsset = pdf_services_response.get_result().get_resource()
+            stream_asset: StreamAsset = pdf_services.get_content(result_asset)
 
-                # Creates a new job instance
-                extract_pdf_job = ExtractPDFJob(input_asset=input_asset, extract_pdf_params=extract_pdf_params)
+            archive = zipfile.ZipFile(io.BytesIO(stream_asset.get_input_stream()))
+            jsonentry = archive.open("structuredData.json")
+            jsondata = jsonentry.read()
+            data = json.loads(jsondata)
 
-                # Submit the job and gets the job result
-                location = pdf_services.submit(extract_pdf_job)
-                pdf_services_response = pdf_services.get_job_result(location, ExtractPDFResult)
+            # Request successful
+            break
 
-                # Get content from the resulting asset(s)
-                result_asset: CloudAsset = pdf_services_response.get_result().get_resource()
-                stream_asset: StreamAsset = pdf_services.get_content(result_asset)
+        except (ServiceApiException, ServiceUsageException, SdkException) as e:
+            if isinstance(e, ServiceUsageException) and (retry_delay * 1.1) < max_delay:
+                time.sleep(retry_delay)
+                retry_delay *= 1.1
+                retry_delay += random.uniform(0, 1)
+                logging.error(f"Exception encountered while executing operation: {e}, retrying in {int(retry_delay)}s.")
+            else:
+                logging.exception(f"Exception encountered while executing operation: {e}")
+                return []
 
-                archive = zipfile.ZipFile(io.BytesIO(stream_asset.get_input_stream()))
-                jsonentry = archive.open("structuredData.json")
-                jsondata = jsonentry.read()
-                data = json.loads(jsondata)
+    extracted_data = []
+    accumulated_text = []
+    page_idx = 0
 
-                # Request successful
-                break
+    page_nearby_blocks = {
+        "text": {"content": [], "bbox": []},
+        "images": {"content": [], "bbox": []},
+        "structured": {"content": [], "bbox": []},
+    }
 
-            except (ServiceApiException, ServiceUsageException, SdkException) as e:
-                if isinstance(e, ServiceUsageException) and (retry_delay * 1.1) < max_delay:
-                    time.sleep(retry_delay)
-                    retry_delay *= 1.1
-                    retry_delay += random.uniform(0, 1)
-                    logging.error(
-                        f"Exception encountered while executing operation: {e}, retrying in {int(retry_delay)}s."
-                    )
-                else:
-                    logging.exception(f"Exception encountered while executing operation: {e}")
-                    return []
-
-        extracted_data = []
-        accumulated_text = []
-        page_idx = 0
-
-        page_nearby_blocks = {
-            "text": {"content": [], "bbox": []},
-            "images": {"content": [], "bbox": []},
-            "structured": {"content": [], "bbox": []},
-        }
-
-        for block_idx, item in enumerate(data["elements"]):
-            # Extract text
-            if extract_text and "Text" in item and "Table" not in item["Path"] and "Figure" not in item["Path"]:
-                if item["Page"] != page_idx:
-                    if text_depth == TextTypeEnum.PAGE:
-                        text_extraction = _construct_text_metadata(
-                            accumulated_text,
-                            page_count,
-                            page_idx,
-                            block_idx,
-                            text_depth,
-                            source_metadata,
-                            base_unified_metadata,
-                            bbox=(0, 0, data["pages"][page_idx]["width"], data["pages"][page_idx]["height"]),
-                        )
-
-                        if len(text_extraction) > 0:
-                            extracted_data.append(text_extraction)
-
-                        accumulated_text = []
-
-                    page_nearby_blocks = {
-                        "text": {"content": [], "bbox": []},
-                        "images": {"content": [], "bbox": []},
-                        "structured": {"content": [], "bbox": []},
-                    }
-                    page_idx = item["Page"]
-
-                accumulated_text.append(item["Text"].strip())
-
-                if text_depth == TextTypeEnum.BLOCK:
-                    bounds = item["Bounds"]
-
-                    text_extraction = _construct_text_metadata(
+    for block_idx, item in enumerate(data["elements"]):
+        # Extract text
+        if extract_text and "Text" in item and "Table" not in item["Path"] and "Figure" not in item["Path"]:
+            if item["Page"] != page_idx:
+                if text_depth == TextTypeEnum.PAGE:
+                    text_extraction = construct_text_metadata(
                         accumulated_text,
-                        page_count,
-                        item["Page"],
+                        pdf_metadata.page_count,
+                        page_idx,
                         block_idx,
                         text_depth,
                         source_metadata,
                         base_unified_metadata,
-                        bbox=(bounds[0], bounds[1], bounds[2], bounds[3]),
+                        bbox=(0, 0, data["pages"][page_idx]["width"], data["pages"][page_idx]["height"]),
                     )
 
                     if len(text_extraction) > 0:
@@ -299,140 +257,114 @@ def adobe(
 
                     accumulated_text = []
 
-                if (extract_images and identify_nearby_objects) and (len(item["Text"]) > 0):
-                    bounds = item["Bounds"]
-                    page_nearby_blocks["text"]["content"].append(" ".join(item["Text"].strip()))
-                    page_nearby_blocks["text"]["bbox"].append((bounds[0], bounds[1], bounds[2], bounds[3]))
+                page_nearby_blocks = {
+                    "text": {"content": [], "bbox": []},
+                    "images": {"content": [], "bbox": []},
+                    "structured": {"content": [], "bbox": []},
+                }
+                page_idx = item["Page"]
 
-            # Extract images
-            if extract_images and item["Path"].endswith("/Figure"):
+            accumulated_text.append(item["Text"].strip())
+
+            if text_depth == TextTypeEnum.BLOCK:
                 bounds = item["Bounds"]
 
-                try:
-                    figure = archive.open(item["filePaths"][0])
-                    base64_img = bytetools.base64frombytes(figure.read())
-                except KeyError:
-                    base64_img = ""
-
-                image_extraction = _construct_image_metadata(
-                    base64_img,
-                    item.get("Text", ""),
-                    page_count,
+                text_extraction = construct_text_metadata(
+                    accumulated_text,
+                    pdf_metadata.page_count,
                     item["Page"],
                     block_idx,
-                    source_metadata,
-                    base_unified_metadata,
-                    page_nearby_blocks,
-                    bbox=(bounds[0], bounds[1], bounds[2], bounds[3]),
-                )
-
-                extracted_data.append(image_extraction)
-
-            # Extract tables
-            if extract_tables and item["Path"].endswith("/Table"):
-                bounds = item["Bounds"]
-
-                try:
-                    df = pd.read_csv(archive.open(item["filePaths"][0]), delimiter=",")
-                except KeyError:
-                    df = pd.DataFrame()
-
-                table_extraction = _construct_table_metadata(
-                    df.to_markdown(),
-                    page_count,
-                    item["Page"],
-                    block_idx,
+                    text_depth,
                     source_metadata,
                     base_unified_metadata,
                     bbox=(bounds[0], bounds[1], bounds[2], bounds[3]),
                 )
 
-                extracted_data.append(table_extraction)
+                if len(text_extraction) > 0:
+                    extracted_data.append(text_extraction)
 
-        if text_depth == TextTypeEnum.PAGE:
-            text_extraction = _construct_text_metadata(
-                accumulated_text,
-                page_count,
-                page_idx,
+                accumulated_text = []
+
+            if (extract_images and identify_nearby_objects) and (len(item["Text"]) > 0):
+                bounds = item["Bounds"]
+                page_nearby_blocks["text"]["content"].append(" ".join(item["Text"].strip()))
+                page_nearby_blocks["text"]["bbox"].append((bounds[0], bounds[1], bounds[2], bounds[3]))
+
+        # Extract images
+        if extract_images and item["Path"].endswith("/Figure"):
+            bounds = item["Bounds"]
+
+            try:
+                figure = archive.open(item["filePaths"][0])
+                base64_img = bytetools.base64frombytes(figure.read())
+            except KeyError:
+                base64_img = ""
+
+            image_extraction = _construct_image_metadata(
+                base64_img,
+                item.get("Text", ""),
+                pdf_metadata.page_count,
+                item["Page"],
                 block_idx,
-                text_depth,
                 source_metadata,
                 base_unified_metadata,
-                bbox=(0, 0, data["pages"][page_idx]["width"], data["pages"][page_idx]["height"]),
+                page_nearby_blocks,
+                bbox=(bounds[0], bounds[1], bounds[2], bounds[3]),
             )
 
-            if len(text_extraction) > 0:
-                extracted_data.append(text_extraction)
+            extracted_data.append(image_extraction)
 
-        if extract_text and text_depth == TextTypeEnum.DOCUMENT:
-            text_extraction = _construct_text_metadata(
-                accumulated_text,
-                page_count,
-                -1,
-                -1,
-                text_depth,
+        # Extract tables
+        if extract_tables and item["Path"].endswith("/Table"):
+            bounds = item["Bounds"]
+
+            try:
+                df = pd.read_csv(archive.open(item["filePaths"][0]), delimiter=",")
+            except KeyError:
+                df = pd.DataFrame()
+
+            table_extraction = _construct_table_metadata(
+                df.to_markdown(),
+                pdf_metadata.page_count,
+                item["Page"],
+                block_idx,
                 source_metadata,
                 base_unified_metadata,
+                bbox=(bounds[0], bounds[1], bounds[2], bounds[3]),
             )
 
-            if len(text_extraction) > 0:
-                extracted_data.append(text_extraction)
+            extracted_data.append(table_extraction)
 
-        return extracted_data
+    if text_depth == TextTypeEnum.PAGE:
+        text_extraction = construct_text_metadata(
+            accumulated_text,
+            pdf_metadata.page_count,
+            page_idx,
+            block_idx,
+            text_depth,
+            source_metadata,
+            base_unified_metadata,
+            # bbox=(0, 0, data["pages"][page_idx]["width"], data["pages"][page_idx]["height"]),
+        )
 
+        if len(text_extraction) > 0:
+            extracted_data.append(text_extraction)
 
-def _construct_text_metadata(
-    accumulated_text,
-    page_count,
-    page_idx,
-    block_idx,
-    text_depth,
-    source_metadata,
-    base_unified_metadata,
-    bbox=(-1, -1, -1, -1),
-):
-    if len(accumulated_text) < 1:
-        return []
+    if extract_text and text_depth == TextTypeEnum.DOCUMENT:
+        text_extraction = construct_text_metadata(
+            accumulated_text,
+            pdf_metadata.page_count,
+            -1,
+            -1,
+            text_depth,
+            source_metadata,
+            base_unified_metadata,
+        )
 
-    extracted_text = " ".join(accumulated_text)
+        if len(text_extraction) > 0:
+            extracted_data.append(text_extraction)
 
-    content_metadata = {
-        "type": ContentTypeEnum.TEXT,
-        "description": StdContentDescEnum.PDF_TEXT,
-        "page_number": page_idx,
-        "hierarchy": {
-            "page_count": page_count,
-            "page": page_idx,
-            "block": block_idx,
-            "line": -1,
-            "span": -1,
-        },
-    }
-
-    language = detect_language(extracted_text)
-
-    text_metadata = {
-        "text_type": text_depth,
-        "summary": "",
-        "keywords": "",
-        "language": language,
-        "text_location": bbox,
-    }
-
-    ext_unified_metadata = base_unified_metadata.copy()
-
-    ext_unified_metadata.update(
-        {
-            "content": extracted_text,
-            "source_metadata": source_metadata,
-            "content_metadata": content_metadata,
-            "text_metadata": text_metadata,
-        }
-    )
-
-    validated_unified_metadata = validate_metadata(ext_unified_metadata)
-
-    return [ContentTypeEnum.TEXT.value, validated_unified_metadata.dict(), str(uuid.uuid4())]
+    return extracted_data
 
 
 def _construct_image_metadata(
