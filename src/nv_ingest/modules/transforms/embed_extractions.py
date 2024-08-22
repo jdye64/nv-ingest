@@ -235,7 +235,7 @@ def _concatenate_extractions(ctrl_msg, dataframes, masks):
         if idx == 0:
             unified_mask = mask
         else:
-            unified_mask = unified_mask & mask
+            unified_mask = unified_mask | mask
 
     with ctrl_msg.payload().mutable_dataframe() as mdf:
         df_no_text = mdf.loc[~unified_mask].to_pandas()
