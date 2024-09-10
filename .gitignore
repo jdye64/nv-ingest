@@ -209,3 +209,6 @@ triton_models/**/*.onnx
 tests/benchmarks/.benchmarks/
 
 helm/charts/*
+
+# Ignore output from standard examples
+processed_docs

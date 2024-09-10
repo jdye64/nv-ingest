@@ -36,6 +36,7 @@ from nv_ingest.stages.filters import generate_dedup_stage
 from nv_ingest.stages.filters import generate_image_filter_stage
 from nv_ingest.stages.pdf_extractor_stage import generate_pdf_extractor_stage
 from nv_ingest.stages.pptx_extractor_stage import generate_pptx_extractor_stage
+from nv_ingest.stages.video_extractor_stage import generate_video_extractor_stage
 from nv_ingest.stages.storages.image_storage_stage import ImageStorageStage
 from nv_ingest.stages.transforms.image_caption_extraction import generate_caption_extraction_stage
 from nv_ingest.util.converters.containers import merge_dict
@@ -283,6 +284,18 @@ def add_pptx_extractor_stage(pipe, morpheus_pipeline_config, default_cpu_count):
         )
     )
     return pptx_extractor_stage
+
+
+def add_video_extractor_stage(pipe, morpheus_pipeline_config, default_cpu_count):
+    video_extractor_stage = pipe.add_stage(
+        generate_video_extractor_stage(
+            morpheus_pipeline_config,
+            pe_count=1,
+            task="extract",
+            task_desc="video_content_extractor",
+        )
+    )
+    return video_extractor_stage
 
 
 def add_image_dedup_stage(pipe, morpheus_pipeline_config, ingest_config, default_cpu_count):
@@ -533,6 +546,7 @@ def setup_ingestion_pipeline(
     pdf_extractor_stage = add_pdf_extractor_stage(pipe, morpheus_pipeline_config, ingest_config, default_cpu_count)
     docx_extractor_stage = add_docx_extractor_stage(pipe, morpheus_pipeline_config, default_cpu_count)
     pptx_extractor_stage = add_pptx_extractor_stage(pipe, morpheus_pipeline_config, default_cpu_count)
+    video_extractor_stage = add_video_extractor_stage(pipe, morpheus_pipeline_config, default_cpu_count)
 
     # Post-processing
     image_dedup_stage = add_image_dedup_stage(pipe, morpheus_pipeline_config, ingest_config, default_cpu_count)
