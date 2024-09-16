@@ -20,7 +20,7 @@ from .v1.ingest import router as IngestApiRouter
 # Set up the tracer provider and add a processor for exporting traces
 trace.set_tracer_provider(TracerProvider())
 tracer_provider = trace.get_tracer_provider()
-exporter = OTLPSpanExporter(endpoint="http://localhost:4317")
+exporter = OTLPSpanExporter(endpoint="otel-collector:4317", insecure=True)
 span_processor = BatchSpanProcessor(exporter)
 tracer_provider.add_span_processor(span_processor)
 

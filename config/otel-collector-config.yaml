@@ -7,6 +7,7 @@ receivers:
   otlp:
     protocols:
       grpc:
+        endpoint: 0.0.0.0:4317
 
 exporters:
   # NOTE: Prior to v0.86.0 use `logging` instead of `debug`.

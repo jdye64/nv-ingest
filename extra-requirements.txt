@@ -1,0 +1,3 @@
+# We want to move this to a common module soon to prevent this
+# this is the crawl step for stop gap for now to prevent reimplmenting the same classes.
+nv_ingest_client
