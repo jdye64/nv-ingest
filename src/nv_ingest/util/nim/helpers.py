@@ -135,38 +135,38 @@ def call_image_inference_model(client, model_name: str, image_data):
             raise RuntimeError(f"An error occurred during inference: {e}")
 
 
-# Perform inference and return predictions
-def perform_model_inference(client, model_name: str, input_array: np.ndarray):
-    """
-    Perform inference using the provided model and input data.
+# # Perform inference and return predictions
+# def perform_model_inference(client, model_name: str, input_array: np.ndarray):
+#     """
+#     Perform inference using the provided model and input data.
 
-    Parameters
-    ----------
-    client : grpcclient.InferenceServerClient
-        The gRPC client to use for inference.
-    model_name : str
-        The name of the model to use for inference.
-    input_array : np.ndarray
-        The input data to feed into the model, formatted as a numpy array.
+#     Parameters
+#     ----------
+#     client : grpcclient.InferenceServerClient
+#         The gRPC client to use for inference.
+#     model_name : str
+#         The name of the model to use for inference.
+#     input_array : np.ndarray
+#         The input data to feed into the model, formatted as a numpy array.
 
-    Returns
-    -------
-    np.ndarray
-        The output of the model as a numpy array.
+#     Returns
+#     -------
+#     np.ndarray
+#         The output of the model as a numpy array.
 
-    Examples
-    --------
-    >>> client = create_inference_client("http://localhost:8000")
-    >>> input_array = np.random.rand(2, 3, 1024, 1024).astype(np.float32)
-    >>> output = perform_model_inference(client, "my_model", input_array)
-    >>> output.shape
-    (2, 1000)
-    """
-    input_tensors = [grpcclient.InferInput("input", input_array.shape, datatype="FP32")]
-    input_tensors[0].set_data_from_numpy(input_array)
+#     Examples
+#     --------
+#     >>> client = create_inference_client("http://localhost:8000")
+#     >>> input_array = np.random.rand(2, 3, 1024, 1024).astype(np.float32)
+#     >>> output = perform_model_inference(client, "my_model", input_array)
+#     >>> output.shape
+#     (2, 1000)
+#     """
+#     input_tensors = [grpcclient.InferInput("input", input_array.shape, datatype="FP32")]
+#     input_tensors[0].set_data_from_numpy(input_array)
 
-    outputs = [grpcclient.InferRequestedOutput("output")]
-    query_response = client.infer(model_name=model_name, inputs=input_tensors, outputs=outputs)
-    logger.debug(query_response)
+#     outputs = [grpcclient.InferRequestedOutput("output")]
+#     query_response = client.infer(model_name=model_name, inputs=input_tensors, outputs=outputs)
+#     logger.debug(query_response)
 
-    return query_response.as_numpy("output")
+#     return query_response.as_numpy("output")

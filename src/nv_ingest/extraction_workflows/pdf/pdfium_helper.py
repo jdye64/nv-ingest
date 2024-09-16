@@ -141,7 +141,8 @@ def extract_tables_and_charts_using_image_ensemble(
             original_image_shapes = [image.shape for image in original_images]
             input_array = prepare_images_for_inference(original_images)
 
-            output_array = perform_model_inference(yolox_client, "yolox", input_array)
+            # output_array = perform_model_inference(yolox_client, "yolox", input_array)
+            output_array = call_image_inference_model(yolox_client, "yolox", input_array)
             results = process_inference_results(
                 output_array, original_image_shapes, num_classes, conf_thresh, iou_thresh, min_score
             )
