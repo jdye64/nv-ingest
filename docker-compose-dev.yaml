@@ -8,6 +8,29 @@ services:
     ports:
       - "6379:6379"
 
+  yolox:
+    image: nvcr.io/ohlfw0olaadg/ea-participants/nv-yolox-structured-images-v1:0.1.0
+    ports:
+      - "8000:8000"
+      - "8001:8001"
+      - "8002:8002"
+    volumes:
+      - ${HOME}/.cache:/home/nvs/.cache
+    user: root
+    environment:
+      - NIM_HTTP_API_PORT=8000
+      - NIM_TRITON_LOG_VERBOSE=1
+      - NGC_API_KEY=$NIM_NGC_API_KEY
+      - CUDA_VISIBLE_DEVICES=0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    runtime: nvidia
+
   nv-ingest-ms-runtime:
     image: nvcr.io/ohlfw0olaadg/ea-participants/nv-ingest:24.08
     build:
@@ -18,9 +41,11 @@ services:
       - ${DATASET_ROOT}:/workspace/data
     ports:
       - "7670:7670"
+      - "5678:5678"  # Expose port for remote debugger
     cap_add:
       - sys_nice
     environment:
+      - REMOTE_DEBUG_ENABLED=true
       - CACHED_GRPC_ENDPOINT=cached:8001
       - CACHED_HTTP_ENDPOINT=""
       - DEPLOT_GRPC_ENDPOINT=""
@@ -41,8 +66,7 @@ services:
       - REDIS_MORPHEUS_TASK_QUEUE=morpheus_task_queue
       - TABLE_DETECTION_GRPC_TRITON=yolox:8001
       - TABLE_DETECTION_HTTP_TRITON=""
-      - YOLOX_GRPC_ENDPOINT=""
-      - YOLOX_HTTP_ENDPOINT="https://api.nvcf.nvidia.com/v2/nvcf/pexec/functions/a03a1ddc-5d4e-49cc-86f2-0b389faab786"
+      # - TABLE_DETECTION_HTTP_TRITON="https://api.nvcf.nvidia.com/v2/nvcf/pexec/functions/a03a1ddc-5d4e-49cc-86f2-0b389faab786"
       - CUDA_VISIBLE_DEVICES=3
     deploy:
       resources:

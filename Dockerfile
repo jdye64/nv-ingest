@@ -70,8 +70,9 @@ RUN chmod +x ./ci/scripts/build_pip_packages.sh \
 RUN source activate morpheus \
     && pip install ./dist/*.whl
 
-RUN source activate morpheus \
-    && rm -rf src requirements.txt test-requirements.txt util-requirements.txt
+# Do not remove the src code. Otherwise we cannot remote debug
+# RUN source activate morpheus \
+#     && rm -rf src requirements.txt extra-requirements.txt test-requirements.txt util-requirements.txt
 
 # Interim pyarrow backport until folded into upstream dependency tree
 RUN source activate morpheus \
@@ -93,6 +94,8 @@ COPY ./docker/scripts/entrypoint_source_ext.sh /opt/docker/bin/entrypoint_source
 
 # Start both the core nv-ingest pipeline service and teh FastAPI microservice in parallel
 CMD ["sh", "-c", "python /workspace/pipeline.py & uvicorn nv_ingest.main:app --workers 32 --host 0.0.0.0 --port 7670 & wait"]
+# For remote debugging we can't have --workers set to 32 or their are port conflicts
+# CMD ["sh", "-c", "python -O -m debugpy --listen 0.0.0.0:5678 --wait-for-client --log-to debugpy.log /workspace/pipeline.py & uvicorn nv_ingest.main:app --host 0.0.0.0 --port 7670 & wait"]
 
 FROM base AS development
 

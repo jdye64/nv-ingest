@@ -10,8 +10,23 @@
 
 from fastapi import FastAPI
 from fastapi import status
+import os
+
+# # Remote debugging
+# import debugpy
 
 from .api.main import app as app_v1
+
+# # Remote debugging configuration
+# print(f'REMOTE_DEBUG_ENABLED value: {os.getenv("REMOTE_DEBUG_ENABLED")}')
+# if os.getenv("REMOTE_DEBUG_ENABLED", "").lower() in ['true', '1', 'yes', 'on']:
+#     # Set the host and port for remote debugger
+#     debugpy.listen(("0.0.0.0", 5678))
+#     print("Waiting for debugger to attach on port 5678 ...")
+#     debugpy.wait_for_client()
+#     print("Debugger attached. Continuing execution...")
+# else:
+#     print("Remote debugging is not enabled")
 
 app = FastAPI(
     title="NV-Ingest Microservice",

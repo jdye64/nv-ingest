@@ -257,8 +257,6 @@ redis:
 ## @skip envVars.CACHED_HTTP_ENDPOINT
 ## @skip envVars.PADDLE_GRPC_ENDPOINT
 ## @skip envVars.PADDLE_HTTP_ENDPOINT
-## @skip envVars.YOLOX_GRPC_ENDPOINT
-## @skip envVars.YOLOX_HTTP_ENDPOINT
 ## @skip envVars.DEPLOT_GRPC_ENDPOINT
 ## @skip envVars.DEPLOT_HTTP_ENDPOINT
 envVars:
@@ -278,8 +276,6 @@ envVars:
   CACHED_HTTP_ENDPOINT: ""
   PADDLE_GRPC_ENDPOINT: nv-ingest-paddle:8001
   PADDLE_HTTP_ENDPOINT: ""
-  YOLOX_GRPC_ENDPOINT: nv-ingest-yolox:8001
-  YOLOX_HTTP_ENDPOINT: ""
   DEPLOT_GRPC_ENDPOINT: ""
   DEPLOT_HTTP_ENDPOINT: http://nv-ingest-deplot:8000/v1/chat/completions
 

@@ -13,7 +13,8 @@ olefile==0.47
 onnx==1.16.0
 opencv-python==4.10.0.84
 opentelemetry-api
-opentelemetry-exporter-otlp
+# opentelemetry-exporter-otlp
+opentelemetry-exporter-otlp-proto-grpc>=1.20.0
 opentelemetry-instrumentation
 opentelemetry-instrumentation-fastapi
 opentelemetry-sdk
@@ -31,3 +32,4 @@ unstructured-client==0.23.3
 fastapi==0.109.0
 uvicorn==0.24.0-post.1
 gunicorn==21.2.0
+ngcsdk

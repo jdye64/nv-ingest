@@ -4,8 +4,10 @@
 
 import io
 import logging
+from typing import Callable
 from typing import Optional
 from typing import Tuple
+# from ngcsdk import Client
 
 import numpy as np
 import requests
@@ -135,38 +137,50 @@ def call_image_inference_model(client, model_name: str, image_data):
             raise RuntimeError(f"An error occurred during inference: {e}")
 
 
-# # Perform inference and return predictions
-# def perform_model_inference(client, model_name: str, input_array: np.ndarray):
-#     """
-#     Perform inference using the provided model and input data.
+# Perform inference and return predictions
+def perform_model_inference(client, model_name: str, input_array: np.ndarray):
+    """
+    Perform inference using the provided model and input data.
 
-#     Parameters
-#     ----------
-#     client : grpcclient.InferenceServerClient
-#         The gRPC client to use for inference.
-#     model_name : str
-#         The name of the model to use for inference.
-#     input_array : np.ndarray
-#         The input data to feed into the model, formatted as a numpy array.
+    Parameters
+    ----------
+    client : grpcclient.InferenceServerClient
+        The gRPC client to use for inference.
+    model_name : str
+        The name of the model to use for inference.
+    input_array : np.ndarray
+        The input data to feed into the model, formatted as a numpy array.
 
-#     Returns
-#     -------
-#     np.ndarray
-#         The output of the model as a numpy array.
+    Returns
+    -------
+    np.ndarray
+        The output of the model as a numpy array.
 
-#     Examples
-#     --------
-#     >>> client = create_inference_client("http://localhost:8000")
-#     >>> input_array = np.random.rand(2, 3, 1024, 1024).astype(np.float32)
-#     >>> output = perform_model_inference(client, "my_model", input_array)
-#     >>> output.shape
-#     (2, 1000)
-#     """
-#     input_tensors = [grpcclient.InferInput("input", input_array.shape, datatype="FP32")]
-#     input_tensors[0].set_data_from_numpy(input_array)
+    Examples
+    --------
+    >>> client = create_inference_client("http://localhost:8000")
+    >>> input_array = np.random.rand(2, 3, 1024, 1024).astype(np.float32)
+    >>> output = perform_model_inference(client, "my_model", input_array)
+    >>> output.shape
+    (2, 1000)
+    """
 
-#     outputs = [grpcclient.InferRequestedOutput("output")]
-#     query_response = client.infer(model_name=model_name, inputs=input_tensors, outputs=outputs)
-#     logger.debug(query_response)
+    input_tensors = [grpcclient.InferInput("input", input_array.shape, datatype="FP32")]
+    input_tensors[0].set_data_from_numpy(input_array)
 
-#     return query_response.as_numpy("output")
+    outputs = [grpcclient.InferRequestedOutput("output")]
+    query_response = client.infer(model_name=model_name, inputs=input_tensors, outputs=outputs)
+    logger.debug(query_response)
+
+    return query_response.as_numpy("output")
+
+    # input_tensors = [grpcclient.InferInput("input", input_array.shape, datatype="FP32")]
+
+    # def add(x: int, y: int) -> int:
+    #     return x + y
+
+    # client = Client()
+    # client.configure(api_key="OThjaDdxbDFnOHBzODllNDRkOXV1a3A2amY6NDVlNWQ2YmQtNWQ4OC00ZGFiLTg1NjEtZGMxYTlhMzVkMDkx", org_name="0509760257338000", team_name="no-team", ace_name="no-ace")
+    # result = client.cloud_function.functions.invoke_grpc("a03a1ddc-5d4e-49cc-86f2-0b389faab786", "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", input_tensors, add)
+    # print(f"Result: {result}")
+    # return result

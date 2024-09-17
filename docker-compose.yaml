@@ -142,6 +142,7 @@ services:
     cap_add:
       - sys_nice
     environment:
+      - REMOTE_DEBUG_ENABLED="False"
       - CACHED_GRPC_ENDPOINT=cached:8001
       - CACHED_HTTP_ENDPOINT=""
       - DEPLOT_GRPC_ENDPOINT=""
@@ -162,8 +163,6 @@ services:
       - REDIS_MORPHEUS_TASK_QUEUE=morpheus_task_queue
       - TABLE_DETECTION_GRPC_TRITON=yolox:8001
       - TABLE_DETECTION_HTTP_TRITON=""
-      - YOLOX_GRPC_ENDPOINT=yolox:8001
-      - YOLOX_HTTP_ENDPOINT=""
       - CUDA_VISIBLE_DEVICES=3
     deploy:
       resources:

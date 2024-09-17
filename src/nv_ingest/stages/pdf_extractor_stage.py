@@ -9,6 +9,7 @@ import io
 import logging
 from typing import Any
 from typing import Dict
+import traceback
 
 import pandas as pd
 from morpheus.config import Config
@@ -130,6 +131,7 @@ def process_pdf_bytes(df, task_props, validated_config):
         return extracted_df
 
     except Exception as e:
+        traceback.print_exc()
         err_msg = f"Unhandled exception in process_pdf_bytes: {e}"
         logger.error(err_msg)
 
