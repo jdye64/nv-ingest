@@ -58,26 +58,26 @@ class RestClient(MessageClientBase):
         The HTTP client instance used for operations.
     """
 
-    def __init__(
-            self,
-            host: str,
-            port: int,
-            max_retries: int = 0,
-            max_backoff: int = 32,
-            connection_timeout: int = 300,
-            http_allocator: Any = httpx.AsyncClient,
-    ):
-        self._host = host
-        self._port = port
-        self._max_retries = max_retries
-        self._max_backoff = max_backoff
-        self._connection_timeout = connection_timeout
-        self._http_allocator = http_allocator
-        self._client = self._http_allocator()
-        self._retries = 0
+    # def __init__(
+    #         self,
+    #         host: str,
+    #         port: int,
+    #         max_retries: int = 0,
+    #         max_backoff: int = 32,
+    #         connection_timeout: int = 300,
+    #         http_allocator: Any = httpx.AsyncClient,
+    # ):
+    #     self._host = host
+    #     self._port = port
+    #     self._max_retries = max_retries
+    #     self._max_backoff = max_backoff
+    #     self._connection_timeout = connection_timeout
+    #     self._http_allocator = http_allocator
+    #     self._client = self._http_allocator()
+    #     self._retries = 0
 
-        self._submit_endpoint = "/v1/submit_job"
-        self._fetch_endpoint = "/v1/fetch_job"
+    #     self._submit_endpoint = "/v1/submit_job"
+    #     self._fetch_endpoint = "/v1/fetch_job"
 
     def _connect(self) -> None:
         """
