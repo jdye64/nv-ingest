@@ -41,12 +41,6 @@ class LogLevel(str, Enum):
     CRITICAL = "CRITICAL"
 
 
-class ClientType(str, Enum):
-    REST = "REST"
-    REDIS = "REDIS"
-    KAFKA = "KAFKA"
-
-
 # Example TaskId validation set
 VALID_TASK_IDS = {"task1", "task2", "task3"}
 

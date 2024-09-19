@@ -312,7 +312,6 @@ Here are the options provided by the CLI, explained:
 - `--batch_size`: Specifies the number of documents to process in a single batch. Default is 10. Must be 1 or more.
 - `--doc`: Adds a new document to be processed. Supports multiple entries. Files must exist.
 - `--dataset`: Specifies the path to a dataset definition file.
-- `--client`: Sets the client type with choices including REST, Redis, Kafka. Default is Redis.
 - `--client_host`: Specifies the DNS name or URL for the endpoint.
 - `--client_port`: Sets the port number for the client endpoint.
 - `--client_kwargs`: Provides additional arguments to pass to the client. Default is `{}`.

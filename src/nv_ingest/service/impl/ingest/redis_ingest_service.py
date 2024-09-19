@@ -15,8 +15,6 @@ import uuid
 from json import JSONDecodeError
 from typing import Any
 
-from redis import RedisError
-
 from nv_ingest.schemas import validate_ingest_job
 from nv_ingest.schemas.message_wrapper_schema import MessageWrapper
 from nv_ingest.service.meta.ingest.ingest_service_meta import IngestServiceMeta
@@ -26,9 +24,9 @@ logger = logging.getLogger("uvicorn")
 
 
 class RedisIngestService(IngestServiceMeta):
-    """Submits Jobs to via Redis"""
+    """Submits Jobs via Redis"""
 
-    _concurrency_level = os.getenv("CONCURRENCY_LEVEL", 10)
+    _concurrency_level = os.getenv("CONCURRENCY_LEVEL", "10")
     _client_kwargs = "{}"
     __shared_instance = None
 

@@ -11,7 +11,6 @@ from typing import List
 
 import click
 import pkg_resources
-from nv_ingest_client.cli.util.click import ClientType
 from nv_ingest_client.cli.util.click import LogLevel
 from nv_ingest_client.cli.util.click import click_match_and_validate_files
 from nv_ingest_client.cli.util.click import click_validate_batch_size
@@ -219,11 +218,9 @@ def main(
             logging.debug(
                 f"Creating REST message client: {client_host} and port: {client_port} -> {client_kwargs}"
             )
-            
-            client_allocator = RestClient
 
             ingest_client = NvIngestClient(
-                message_client_allocator=client_allocator,
+                message_client_allocator=RestClient,
                 message_client_hostname=client_host,
                 message_client_port=client_port,
                 message_client_kwargs=json.loads(client_kwargs),
