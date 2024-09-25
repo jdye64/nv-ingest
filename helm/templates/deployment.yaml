@@ -32,18 +32,6 @@ spec:
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
 
-      initContainers:
-        - name: verify-tmpdir-permissions
-          image: busybox
-          command:
-            - "sh"
-            - "-c"
-            - "mkdir -p /scratch/.cache /scratch/tmp && chown -R {{ .Values.nemo.userID }}:{{ .Values.nemo.groupID }} /scratch"
-          volumeMounts:
-            - name: ephemeral
-              subPath: scratch
-              mountPath: /scratch
-
       containers:
         - name: {{ .Chart.Name }}
           securityContext:
@@ -67,7 +55,7 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: ngc-api
-                  key: NGC_CLI_API_KEY
+                  key: NGC_API_KEY
 
             - name: HF_HOME
               value: /scratch/.cache
@@ -144,18 +132,6 @@ spec:
           {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-          volumeMounts:
-            - mountPath: /dev/shm
-              name: dshm
-            - name: ephemeral
-              subPath: scratch
-              mountPath: /scratch
-          {{- if .Values.extraVolumeMounts }}
-          {{- range $k, $v := .Values.extraVolumeMounts }}
-            - name: {{ $k }}
-              {{- toYaml $v | nindent 12 }}
-          {{- end }}
-          {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

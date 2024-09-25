@@ -532,3 +532,7 @@ nemo:
 
 ## @skip containerArgs
 containerArgs: []
+##containerArgs:
+##  - /bin/sh
+##  - -c 
+##  - sleep 3600
