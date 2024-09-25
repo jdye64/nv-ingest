@@ -67,7 +67,7 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: ngc-api
-                  key: NGC_API_KEY
+                  key: NGC_CLI_API_KEY
 
             - name: HF_HOME
               value: /scratch/.cache

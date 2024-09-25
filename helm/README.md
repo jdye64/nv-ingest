@@ -25,6 +25,12 @@ NAMESPACE=nv-ingest
 kubectl create namespace ${NAMESPACE}
 ```
 
+- Install Helm repositories
+
+```bash
+helm repo add ngc "https://helm.ngc.nvidia.com/ohlfw0olaadg/ea-participants" --username '$oauthtoken' --password "${NGC_API_KEY}"
+```
+
 - Install the chart
 
 ```bash
