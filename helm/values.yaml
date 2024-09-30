@@ -262,8 +262,8 @@ redis:
 ## @skip envVars.DEPLOT_GRPC_ENDPOINT
 ## @skip envVars.DEPLOT_HTTP_ENDPOINT
 envVars:
-  MESSAGE_CLIENT_HOST: "nv-ingest-ms-runtime"
-  MESSAGE_CLIENT_PORT: "7670"
+  MESSAGE_CLIENT_HOST: "nv-ingest-redis-master"
+  MESSAGE_CLIENT_PORT: "6379"
   REDIS_MORPHEUS_TASK_QUEUE: "morpheus_task_queue"
   NV_INGEST_DEFAULT_TIMEOUT_MS: "1234"
 

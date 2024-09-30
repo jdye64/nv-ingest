@@ -137,11 +137,18 @@ class RestClient(MessageClientBase):
         Returns:
             str: Fully validated URL
         """
+        
         if not re.match(r'^https?://', user_provided_url):
             # Add the default `http://` if its not already present in the URL
-            user_provided_url = f"http://{user_provided_url}:{user_provided_port}"
+            user_provided_url = f"http://{user_provided_url}"
         else:
+            user_provided_url = f"{user_provided_url}"
+
+        # If a port number is less than or equal to 0 it means a proxy is taking care
+        # of this and the port number should not be specified
+        if user_provided_port > 0:
             user_provided_url = f"{user_provided_url}:{user_provided_port}"
+
         return user_provided_url
 
     def fetch_message(self, job_id: str, timeout: float = 10) -> Optional[str]:

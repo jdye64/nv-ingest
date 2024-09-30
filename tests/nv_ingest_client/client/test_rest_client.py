@@ -41,6 +41,9 @@ def test_generate_url(rest_client):
     assert rest_client.generate_url("localhost", 7670) == "http://localhost:7670"
     assert rest_client.generate_url("http://localhost", 7670) == "http://localhost:7670"
     assert rest_client.generate_url("https://localhost", 7670) == "https://localhost:7670"
+    assert rest_client.generate_url("https://nginx-prod-server", 0) == "https://nginx-prod-server"
+    assert rest_client.generate_url("https://nginx-prod-server", -1) == "https://nginx-prod-server"
+    assert rest_client.generate_url("https://nginx-prod-server", 7670) == "https://nginx-prod-server:7670"
     
     # A few more complicated and possible tricks
     assert rest_client.generate_url("localhost-https-else", 7670) == "http://localhost-https-else:7670"
