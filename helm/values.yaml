@@ -71,12 +71,16 @@ replicaCount: 1
 ## @extra resources.limits."nvidia.com/gpu" Specify number of GPUs to present to the running service.
 ## @param resources.limits.memory [default: 32Gi] Specify limit for memory
 ## @param resources.requests.memory [default: 16Gi] Specify request for memory
+## @param resources.limits.cpu [default: 24000m] Specify limit for CPU
+## @param resources.requests.cpu [default: 12000m] Specify request for CPU
 resources:
   limits:
     memory: 32Gi
+    cpu: "24000m"
     nvidia.com/gpu: 1
   requests:
     memory: 16Gi
+    cpu: "12000m"
 
 
 ## @param tmpDirSize [default: 8Gi] Specify the amount of space to reserve for temporary storage
