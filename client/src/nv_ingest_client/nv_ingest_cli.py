@@ -11,7 +11,6 @@ from typing import List
 
 import click
 import pkg_resources
-from nv_ingest_client.cli.util.click import ClientType
 from nv_ingest_client.cli.util.click import LogLevel
 from nv_ingest_client.cli.util.click import click_match_and_validate_files
 from nv_ingest_client.cli.util.click import click_validate_batch_size
@@ -167,6 +166,9 @@ Tasks and Options:
 Note: The 'extract_method' automatically selects the optimal method based on 'document_type' if not explicitly stated.
 """,
 )
+@click.option("--profile", is_flag=True, help="""
+
+""")
 @click.option("--version", is_flag=True, help="Show version.")
 @click.pass_context
 def main(
@@ -185,6 +187,7 @@ def main(
     output_directory: str,
     shuffle_dataset: bool,
     task: [str],
+    profile: bool,
     version: [bool],
 ):
     if version:
