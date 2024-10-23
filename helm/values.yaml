@@ -224,6 +224,14 @@ autoscaling:
   minReplicas: 1
   metrics: []
 
+## @section Prometheus configurations
+## @descriptionStart
+## Include any prometheus configuration that you'd like with the deployed Prometheus
+## Find values at https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus
+## @descriptionEnd
+## @param prometheusDeployed [default: true] Whether to deploy Prometheus from this helm chart
+prometheusDeployed: true
+
 
 ## @section Redis configurations
 ## @descriptionStart

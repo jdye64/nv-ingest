@@ -171,6 +171,10 @@ helm repo add \
 helm repo add \
   bitnami \
   https://charts.bitnami.com/bitnami
+
+helm repo add \
+  prometheus-community \
+  https://prometheus-community.github.io/helm-charts
 ```
 
 For the full list of repositories, see the `dependencies` section in [this project's Chart.yaml](../../helm/Chart.yaml).
