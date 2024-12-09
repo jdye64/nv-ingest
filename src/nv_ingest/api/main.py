@@ -39,6 +39,7 @@ app = FastAPI()
 
 app.include_router(IngestApiRouter)
 app.include_router(HealthApiRouter)
+app.include_router(MetricsApiRouter)
 
 # Instrument FastAPI with OpenTelemetry
 FastAPIInstrumentor.instrument_app(app)
