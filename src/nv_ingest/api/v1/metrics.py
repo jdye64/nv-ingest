@@ -136,9 +136,14 @@ async def websocket_endpoint(websocket: WebSocket):
                 "disk_io": f"{random.randint(1, 100)} MB/s",
                 "bullshit": "bullshit",
                 "more_bullshit": "bullshittest",
-                "more_bullshit": "bullshittest"
+                "more_bullshit": "bullshittest",
+                "extra": "extra",
+                "more": "more"
             }
             await websocket.send_json(metrics)
             await asyncio.sleep(1)  # Update every second
-    except WebSocketDisconnect:
+    except WebSocketDisconnect as wse:
+        print(f"!!!!!Exception: {wse}")
         print("Client disconnected")
+    # except websockets.exceptions.ConnectionClosedOK:
+    #     print("WebSocket closed gracefully.")

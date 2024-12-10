@@ -118,7 +118,4 @@ FROM nv_ingest_install AS development
 # Copy custom entrypoint script
 COPY ./docker/scripts/entrypoint_dev.sh /workspace/docker/entrypoint_dev.sh
 
-# Copy all src code to container
-COPY src/nv_ingest nv_ingest
-
 ENTRYPOINT ["/opt/conda/envs/nv_ingest_runtime/bin/tini", "--", "/workspace/docker/entrypoint_dev.sh"]

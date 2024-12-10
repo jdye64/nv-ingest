@@ -199,7 +199,7 @@ services:
       dockerfile: "./Dockerfile"
       target: development
     volumes:
-      - ${DATASET_ROOT:-/src/nv_ingest}:/workspace/src/nv_ingest
+      - ${NV_INGEST_ROOT}:/workspace/nv_ingest_dev
     ports:
       # HTTP API
       - "7670:7670"
