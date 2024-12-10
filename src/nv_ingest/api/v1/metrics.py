@@ -133,12 +133,7 @@ async def websocket_endpoint(websocket: WebSocket):
             metrics = {
                 "cpu_usage": f"{random.randint(1, 100)}%",
                 "memory_usage": f"{random.randint(1, 100)}%",
-                "disk_io": f"{random.randint(1, 100)} MB/s",
-                "bullshit": "bullshit",
-                "more_bullshit": "bullshittest",
-                "more_bullshit": "bullshittest",
-                "extra": "extra",
-                "more": "more"
+                "disk_io": f"{random.randint(1, 100)} MB/s"
             }
             await websocket.send_json(metrics)
             await asyncio.sleep(1)  # Update every second
