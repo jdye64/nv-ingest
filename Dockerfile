@@ -79,6 +79,8 @@ ENV NV_INGEST_CLIENT_VERSION_OVERRIDE=${NV_INGEST_VERSION_OVERRIDE}
 
 SHELL ["/bin/bash", "-c"]
 
+# Copy the static html files to the root workspace
+COPY src/nv_ingest/api/v1/static static
 COPY tests tests
 COPY data data
 COPY client client
@@ -110,7 +112,13 @@ ENTRYPOINT ["/opt/conda/envs/nv_ingest_runtime/bin/tini", "--", "/workspace/dock
 
 FROM nv_ingest_install AS development
 
-RUN source activate nv_ingest && \
-    pip install -e ./client
+# RUN source activate nv_ingest_runtime && \
+#     pip install -e ./client
 
-CMD ["/bin/bash"]
+# Copy custom entrypoint script
+COPY ./docker/scripts/entrypoint_dev.sh /workspace/docker/entrypoint_dev.sh
+
+# Copy all src code to container
+COPY src/nv_ingest nv_ingest
+
+ENTRYPOINT ["/opt/conda/envs/nv_ingest_runtime/bin/tini", "--", "/workspace/docker/entrypoint_dev.sh"]

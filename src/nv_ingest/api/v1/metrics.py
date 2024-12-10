@@ -26,7 +26,7 @@ from fastapi import (
     WebSocketDisconnect,
     Query,
 )
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 logger = logging.getLogger("uvicorn")
 
@@ -119,7 +119,7 @@ html = """
     response_class=HTMLResponse
 )
 async def get_metrics():
-    return html
+    return FileResponse("static/metrics.html")
 
 
 # WebSocket endpoint
@@ -133,7 +133,10 @@ async def websocket_endpoint(websocket: WebSocket):
             metrics = {
                 "cpu_usage": f"{random.randint(1, 100)}%",
                 "memory_usage": f"{random.randint(1, 100)}%",
-                "disk_io": f"{random.randint(1, 100)} MB/s"
+                "disk_io": f"{random.randint(1, 100)} MB/s",
+                "bullshit": "bullshit",
+                "more_bullshit": "bullshittest",
+                "more_bullshit": "bullshittest"
             }
             await websocket.send_json(metrics)
             await asyncio.sleep(1)  # Update every second

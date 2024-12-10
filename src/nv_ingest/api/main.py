@@ -46,9 +46,6 @@ app.include_router(MetricsApiRouter)
 # Instrument FastAPI with OpenTelemetry
 FastAPIInstrumentor.instrument_app(app)
 
-# Mount the static directory at the root URL
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
-
 @app.middleware("http")
 async def add_trace_id_header(request, call_next):
     with tracer.start_as_current_span("uvicorn-endpoint"):
