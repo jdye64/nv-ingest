@@ -11,6 +11,7 @@
 import logging
 import os
 
+from fastapi.staticfiles import StaticFiles
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource
@@ -21,6 +22,7 @@ from fastapi import FastAPI
 
 from .v1.health import router as HealthApiRouter
 from .v1.ingest import router as IngestApiRouter
+from .v1.metrics import router as MetricsApiRouter
 
 # Set up the tracer provider and add a processor for exporting traces
 resource = Resource(attributes={"service.name": "nv-ingest"})
@@ -44,6 +46,8 @@ app.include_router(MetricsApiRouter)
 # Instrument FastAPI with OpenTelemetry
 FastAPIInstrumentor.instrument_app(app)
 
+# Mount the static directory at the root URL
+app.mount("/", StaticFiles(directory="static", html=True), name="static")
 
 @app.middleware("http")
 async def add_trace_id_header(request, call_next):
