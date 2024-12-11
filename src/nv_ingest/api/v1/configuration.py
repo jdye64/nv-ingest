@@ -47,6 +47,9 @@ templates = Jinja2Templates(directory=BASE_DIR / "templates")
     response_class=HTMLResponse
 )
 async def gather_configurations(request: Request):
+    # TODO: While I would love to return all of the env variables this might be risky. Lets move this to
+    # just return a list of pre determined env variables and place a note in docker-compose noting that 
+    # if a new variable is added there it should be included here as well
     env_vars = dict(os.environ)
     sorted_env_vars = dict(sorted(env_vars.items()))
     del sorted_env_vars['NGC_API_KEY']
