@@ -10,6 +10,7 @@
 
 import logging
 import os
+from pathlib import Path
 
 from fastapi.staticfiles import StaticFiles
 from opentelemetry import trace
@@ -23,6 +24,7 @@ from fastapi import FastAPI
 from .v1.health import router as HealthApiRouter
 from .v1.ingest import router as IngestApiRouter
 from .v1.metrics import router as MetricsApiRouter
+from .v1.configuration import router as ConfigurationApiRouter
 
 # Set up the tracer provider and add a processor for exporting traces
 resource = Resource(attributes={"service.name": "nv-ingest"})
@@ -42,9 +44,17 @@ app = FastAPI()
 app.include_router(IngestApiRouter)
 app.include_router(HealthApiRouter)
 app.include_router(MetricsApiRouter)
+app.include_router(ConfigurationApiRouter)
 
 # Instrument FastAPI with OpenTelemetry
 FastAPIInstrumentor.instrument_app(app)
+
+# Get the directory of the current script
+BASE_DIR = Path(__file__).resolve().parent
+
+# Mount static files
+app.mount("/static", StaticFiles(directory=BASE_DIR / "v1/static"), name="static")
+
 
 @app.middleware("http")
 async def add_trace_id_header(request, call_next):

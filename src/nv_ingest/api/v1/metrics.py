@@ -108,37 +108,35 @@ html = """
 """
 
 
-@router.get(
-    "/metrics",
-    tags=["Metrics"],
-    summary="Provides a summary of metrics information about the system",
-    description="""
-        Provide visibility into the running system and its performance.
-    """,
-    status_code=status.HTTP_200_OK,
-    response_class=HTMLResponse
-)
-async def get_metrics():
-    return FileResponse("static/metrics.html")
+# @router.get(
+#     "/metrics",
+#     tags=["Metrics"],
+#     summary="Provides a summary of metrics information about the system",
+#     description="""
+#         Provide visibility into the running system and its performance.
+#     """,
+#     status_code=status.HTTP_200_OK,
+#     response_class=HTMLResponse
+# )
+# async def get_metrics():
+#     return FileResponse("static/metrics.html")
 
 
-# WebSocket endpoint
-@router.websocket("/ws/metrics")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    try:
-        while True:
-            # Simulate dynamic metric updates (replace with actual data source)
-            import random
-            metrics = {
-                "cpu_usage": f"{random.randint(1, 100)}%",
-                "memory_usage": f"{random.randint(1, 100)}%",
-                "disk_io": f"{random.randint(1, 100)} MB/s"
-            }
-            await websocket.send_json(metrics)
-            await asyncio.sleep(1)  # Update every second
-    except WebSocketDisconnect as wse:
-        print(f"!!!!!Exception: {wse}")
-        print("Client disconnected")
-    # except websockets.exceptions.ConnectionClosedOK:
-    #     print("WebSocket closed gracefully.")
+# # WebSocket endpoint
+# @router.websocket("/ws/metrics")
+# async def websocket_endpoint(websocket: WebSocket):
+#     await websocket.accept()
+#     try:
+#         while True:
+#             # Simulate dynamic metric updates (replace with actual data source)
+#             import random
+#             metrics = {
+#                 "cpu_usage": f"{random.randint(1, 100)}%",
+#                 "memory_usage": f"{random.randint(1, 100)}%",
+#                 "disk_io": f"{random.randint(1, 100)} MB/s"
+#             }
+#             await websocket.send_json(metrics)
+#             await asyncio.sleep(1)  # Update every second
+#     except WebSocketDisconnect as wse:
+#         print(f"!!!!!Exception: {wse}")
+#         print("Client disconnected")
