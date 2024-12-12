@@ -3,118 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 services:
-  redis:
-    image: "redis/redis-stack"
-    ports:
-      - "6379:6379"
-
-  yolox:
-    image: ${YOLOX_IMAGE:-nvcr.io/ohlfw0olaadg/ea-participants/nv-yolox-structured-images-v1}:${YOLOX_TAG:-0.2.0}
-    ports:
-      - "8000:8000"
-      - "8001:8001"
-      - "8002:8002"
-    user: root
-    environment:
-      - NIM_HTTP_API_PORT=8000
-      - NIM_TRITON_LOG_VERBOSE=1
-      - NGC_API_KEY=${NIM_NGC_API_KEY:-${NGC_API_KEY:-ngcapikey}}
-      - CUDA_VISIBLE_DEVICES=0
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ["1"]
-              capabilities: [gpu]
-    runtime: nvidia
-
-  deplot:
-    image: ${DEPLOT_IMAGE:-nvcr.io/ohlfw0olaadg/ea-participants/deplot}:${DEPLOT_TAG:-1.0.0}
-    ports:
-      - "8003:8000"
-      - "8004:8001"
-      - "8005:8002"
-    user: root
-    environment:
-      - NIM_HTTP_API_PORT=8000
-      - NIM_TRITON_LOG_VERBOSE=1
-      - NGC_API_KEY=${NIM_NGC_API_KEY:-${NGC_API_KEY:-ngcapikey}}
-      - CUDA_VISIBLE_DEVICES=0
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ["0"]
-              capabilities: [gpu]
-    runtime: nvidia
-
-  cached:
-    image: ${CACHED_IMAGE:-nvcr.io/ohlfw0olaadg/ea-participants/cached}:${CACHED_TAG:-0.2.0}
-    shm_size: 2gb
-    ports:
-      - "8006:8000"
-      - "8007:8001"
-      - "8008:8002"
-    user: root
-    environment:
-      - NIM_HTTP_API_PORT=8000
-      - NIM_TRITON_LOG_VERBOSE=1
-      - NGC_API_KEY=${NIM_NGC_API_KEY:-${NGC_API_KEY:-ngcapikey}}
-      - CUDA_VISIBLE_DEVICES=0
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ["1"]
-              capabilities: [gpu]
-    runtime: nvidia
-
-  paddle:
-    image: ${PADDLE_IMAGE:-nvcr.io/ohlfw0olaadg/ea-participants/paddleocr}:${PADDLE_TAG:-0.2.0}
-    shm_size: 2gb
-    ports:
-      - "8009:8000"
-      - "8010:8001"
-      - "8011:8002"
-    user: root
-    environment:
-      - NIM_HTTP_API_PORT=8000
-      - NIM_TRITON_LOG_VERBOSE=1
-      - NGC_API_KEY=${NIM_NGC_API_KEY:-${NGC_API_KEY:-ngcapikey}}
-      - CUDA_VISIBLE_DEVICES=0
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ["1"]
-              capabilities: [gpu]
-    runtime: nvidia
-
-  embedding:
-    # NIM ON
-    image: ${EMBEDDING_IMAGE:-nvcr.io/nim/nvidia/nv-embedqa-e5-v5}:${EMBEDDING_TAG:-1.1.0}
-    shm_size: 16gb
-    ports:
-      - "8012:8000"
-      - "8013:8001"
-      - "8014:8002"
-    environment:
-      - NIM_HTTP_API_PORT=8000
-      - NIM_TRITON_LOG_VERBOSE=1
-      - NGC_API_KEY=${NIM_NGC_API_KEY:-${NGC_API_KEY:-ngcapikey}}
-      - CUDA_VISIBLE_DEVICES=0
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ["1"]
-              capabilities: [gpu]
-    runtime: nvidia
 
   nv-ingest-ms-runtime:
     image: nvcr.io/ohlfw0olaadg/ea-participants/nv-ingest:24.10.1
@@ -132,133 +20,53 @@ services:
     cap_add:
       - sys_nice
     environment:
-      # Self-hosted cached endpoints.
-      - CACHED_GRPC_ENDPOINT=cached:8001
-      - CACHED_HTTP_ENDPOINT=http://cached:8000/v1/infer
-      - CACHED_INFER_PROTOCOL=grpc
-      # build.nvidia.com hosted cached endpoints.
-      #- CACHED_HTTP_ENDPOINT=https://ai.api.nvidia.com/v1/cv/university-at-buffalo/cached
-      #- CACHED_INFER_PROTOCOL=http
+    # Auth Keys
+      - NGC_API_KEY=${NGC_API_KEY:-ngcapikey}
+      - NVIDIA_BUILD_API_KEY=${NVIDIA_BUILD_API_KEY:-${NGC_API_KEY:-ngcapikey}}
+
+      # CUDA Related Configs
       - CUDA_VISIBLE_DEVICES=0
-      #- DEPLOT_GRPC_ENDPOINT=""
-      # Self-hosted deplot endpoints.
-      - DEPLOT_HTTP_ENDPOINT=http://deplot:8000/v1/chat/completions
-      # build.nvidia.com hosted deplot
-      #- DEPLOT_HTTP_ENDPOINT=https://ai.api.nvidia.com/v1/vlm/google/deplot
-      - DEPLOT_INFER_PROTOCOL=http
-      - DOUGHNUT_GRPC_TRITON=triton-doughnut:8001
-      - INGEST_LOG_LEVEL=DEFAULT
-      # Message client for development
-      #- MESSAGE_CLIENT_HOST=0.0.0.0
-      #- MESSAGE_CLIENT_PORT=7671
-      #- MESSAGE_CLIENT_TYPE=simple # Configure the ingest service to use the simple broker
-      # Message client for production
+
+      # Morpheus Runtime Configs
       - MESSAGE_CLIENT_HOST=redis
       - MESSAGE_CLIENT_PORT=6379
       - MESSAGE_CLIENT_TYPE=redis
-      - MINIO_BUCKET=${MINIO_BUCKET:-nv-ingest}
-      - MRC_IGNORE_NUMA_CHECK=1
-      - NGC_API_KEY=${NGC_API_KEY:-ngcapikey}
-      - NVIDIA_BUILD_API_KEY=${NVIDIA_BUILD_API_KEY:-${NGC_API_KEY:-ngcapikey}}
-      - OTEL_EXPORTER_OTLP_ENDPOINT=otel-collector:4317
-      # Self-hosted paddle endpoints.
-      - PADDLE_GRPC_ENDPOINT=paddle:8001
-      - PADDLE_HTTP_ENDPOINT=http://paddle:8000/v1/infer
-      - PADDLE_INFER_PROTOCOL=grpc
-      # build.nvidia.com hosted paddle endpoints.
-      #- PADDLE_HTTP_ENDPOINT=https://ai.api.nvidia.com/v1/cv/baidu/paddleocr
-      #- PADDLE_INFER_PROTOCOL=http
-      - READY_CHECK_ALL_COMPONENTS=True
       - REDIS_MORPHEUS_TASK_QUEUE=morpheus_task_queue
-      # Self-hosted redis endpoints.
-      - YOLOX_GRPC_ENDPOINT=yolox:8001
-      - YOLOX_HTTP_ENDPOINT=http://yolox:8000/v1/infer
-      - YOLOX_INFER_PROTOCOL=grpc
-      # build.nvidia.com hosted yolox endpoints.
-      #- YOLOX_HTTP_ENDPOINT=https://ai.api.nvidia.com/v1/cv/nvidia/nv-yolox-page-elements-v1
-      #- YOLOX_INFER_PROTOCOL=http
-      - VLM_CAPTION_ENDPOINT=https://ai.api.nvidia.com/v1/gr/meta/llama-3.2-90b-vision-instruct/chat/completions
-    healthcheck:
-      test: curl --fail http://nv-ingest-ms-runtime:7670/v1/health/ready || exit 1
-      interval: 10s
-      timeout: 5s
-      retries: 20
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ["1"]
-              capabilities: [gpu]
+      - MRC_IGNORE_NUMA_CHECK=1
 
-
-  nv-ingest-dev:
-    image: nvcr.io/ohlfw0olaadg/ea-participants/nv-ingest:24.10.1
-    build:
-      context: ${NV_INGEST_ROOT:-.}
-      dockerfile: "./Dockerfile"
-      target: development
-    volumes:
-      - ${NV_INGEST_ROOT}:/workspace/nv_ingest_dev
-    ports:
-      # HTTP API
-      - "7670:7670"
-      # Simple Broker
-      - "7671:7671"
-    cap_add:
-      - sys_nice
-    environment:
-      # Self-hosted cached endpoints.
-      - CACHED_GRPC_ENDPOINT=cached:8001
+      # Logging and Instrumentation Configs
+      - INGEST_LOG_LEVEL=DEFAULT # Default is INFO
+      - OTEL_EXPORTER_OTLP_ENDPOINT=otel-collector:4317
+      - READY_CHECK_ALL_COMPONENTS=True # If True nv-ingest boot will not complete until all NIMs report "ready"
+      
+      # Cached
       - CACHED_HTTP_ENDPOINT=http://cached:8000/v1/infer
-      - CACHED_INFER_PROTOCOL=grpc
-      # build.nvidia.com hosted cached endpoints.
-      #- CACHED_HTTP_ENDPOINT=https://ai.api.nvidia.com/v1/cv/university-at-buffalo/cached
-      #- CACHED_INFER_PROTOCOL=http
-      - CUDA_VISIBLE_DEVICES=0
-      #- DEPLOT_GRPC_ENDPOINT=""
-      # Self-hosted deplot endpoints.
+      - CACHED_GRPC_ENDPOINT=cached:8001
+      - CACHED_INFER_PROTOCOL=grpc # Use GRPC endpoint
+      
+      # Deplot
       - DEPLOT_HTTP_ENDPOINT=http://deplot:8000/v1/chat/completions
-      # build.nvidia.com hosted deplot
-      #- DEPLOT_HTTP_ENDPOINT=https://ai.api.nvidia.com/v1/vlm/google/deplot
-      - DEPLOT_INFER_PROTOCOL=http
+      - DEPLOT_GRPC_ENDPOINT=deplot:8004
+      - DEPLOT_INFER_PROTOCOL=http # Use HTTP endpoint
+      
+      # Doughnut
       - DOUGHNUT_GRPC_TRITON=triton-doughnut:8001
-      - INGEST_LOG_LEVEL=DEFAULT
-      # Message client for development
-      #- MESSAGE_CLIENT_HOST=0.0.0.0
-      #- MESSAGE_CLIENT_PORT=7671
-      #- MESSAGE_CLIENT_TYPE=simple # Configure the ingest service to use the simple broker
-      # Message client for production
-      - MESSAGE_CLIENT_HOST=redis
-      - MESSAGE_CLIENT_PORT=6379
-      - MESSAGE_CLIENT_TYPE=redis
+
+      # Minio
       - MINIO_BUCKET=${MINIO_BUCKET:-nv-ingest}
-      - MRC_IGNORE_NUMA_CHECK=1
-      - NGC_API_KEY=${NGC_API_KEY:-ngcapikey}
-      - NVIDIA_BUILD_API_KEY=${NVIDIA_BUILD_API_KEY:-${NGC_API_KEY:-ngcapikey}}
-      - OTEL_EXPORTER_OTLP_ENDPOINT=otel-collector:4317
-      # Self-hosted paddle endpoints.
-      - PADDLE_GRPC_ENDPOINT=paddle:8001
+      
+      # Paddle
       - PADDLE_HTTP_ENDPOINT=http://paddle:8000/v1/infer
-      - PADDLE_INFER_PROTOCOL=grpc
-      # build.nvidia.com hosted paddle endpoints.
-      #- PADDLE_HTTP_ENDPOINT=https://ai.api.nvidia.com/v1/cv/baidu/paddleocr
-      #- PADDLE_INFER_PROTOCOL=http
-      - READY_CHECK_ALL_COMPONENTS=True
-      - REDIS_MORPHEUS_TASK_QUEUE=morpheus_task_queue
-      # Self-hosted redis endpoints.
-      - YOLOX_GRPC_ENDPOINT=yolox:8001
+      - PADDLE_GRPC_ENDPOINT=paddle:8001
+      - PADDLE_INFER_PROTOCOL=grpc # Use GRPC endpoint
+      
+      # Yolox
       - YOLOX_HTTP_ENDPOINT=http://yolox:8000/v1/infer
+      - YOLOX_GRPC_ENDPOINT=yolox:8001
       - YOLOX_INFER_PROTOCOL=grpc
-      # build.nvidia.com hosted yolox endpoints.
-      #- YOLOX_HTTP_ENDPOINT=https://ai.api.nvidia.com/v1/cv/nvidia/nv-yolox-page-elements-v1
-      #- YOLOX_INFER_PROTOCOL=http
+      
+      # VLM
       - VLM_CAPTION_ENDPOINT=https://ai.api.nvidia.com/v1/gr/meta/llama-3.2-90b-vision-instruct/chat/completions
-    healthcheck:
-      test: curl --fail http://nv-ingest-ms-runtime:7670/v1/health/ready || exit 1
-      interval: 10s
-      timeout: 5s
-      retries: 20
     deploy:
       resources:
         reservations:

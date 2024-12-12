@@ -1,0 +1,85 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024, NVIDIA CORPORATION & AFFILIATES.
+# All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+services:
+
+  paddle:
+    image: ${PADDLE_IMAGE:-nvcr.io/ohlfw0olaadg/ea-participants/paddleocr}:${PADDLE_TAG:-0.2.0}
+    shm_size: 2gb
+    ports:
+      - "8009:8000"
+      - "8010:8001"
+      - "8011:8002"
+    user: root
+    environment:
+      - NIM_HTTP_API_PORT=8000
+      - NIM_TRITON_LOG_VERBOSE=1
+      - NGC_API_KEY=${NIM_NGC_API_KEY:-${NGC_API_KEY:-ngcapikey}}
+      - CUDA_VISIBLE_DEVICES=0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["1"]
+              capabilities: [gpu]
+    runtime: nvidia
+
+  deplot:
+    image: ${DEPLOT_IMAGE:-nvcr.io/ohlfw0olaadg/ea-participants/deplot}:${DEPLOT_TAG:-1.0.0}
+    ports:
+      - "8003:8000"
+      - "8004:8001"
+      - "8005:8002"
+    user: root
+    environment:
+      - NIM_HTTP_API_PORT=8000
+      - NIM_TRITON_LOG_VERBOSE=1
+      - NGC_API_KEY=${NIM_NGC_API_KEY:-${NGC_API_KEY:-ngcapikey}}
+      - CUDA_VISIBLE_DEVICES=0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    runtime: nvidia
+
+  embedding:
+    # NIM ON
+    image: ${EMBEDDING_IMAGE:-nvcr.io/nim/nvidia/nv-embedqa-e5-v5}:${EMBEDDING_TAG:-1.1.0}
+    shm_size: 16gb
+    ports:
+      - "8012:8000"
+      - "8013:8001"
+      - "8014:8002"
+    environment:
+      - NIM_HTTP_API_PORT=8000
+      - NIM_TRITON_LOG_VERBOSE=1
+      - NGC_API_KEY=${NIM_NGC_API_KEY:-${NGC_API_KEY:-ngcapikey}}
+      - CUDA_VISIBLE_DEVICES=0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["1"]
+              capabilities: [gpu]
+    runtime: nvidia
+
+  nv-ingest-ms-runtime:
+    image: nvcr.io/ohlfw0olaadg/ea-participants/nv-ingest:24.10.1
+    healthcheck:
+      test: curl --fail http://nv-ingest-ms-runtime:7670/v1/health/ready || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["1"]
+              capabilities: [gpu]
