@@ -83,6 +83,7 @@ COPY tests tests
 COPY data data
 COPY client client
 COPY src/nv_ingest src/nv_ingest
+COPY MANIFEST.in MANIFEST.in
 RUN rm -rf ./src/nv_ingest/dist ./client/dist
 
 COPY requirements.txt extra-requirements.txt test-requirements.txt util-requirements.txt ./
