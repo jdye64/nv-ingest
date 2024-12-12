@@ -23,5 +23,5 @@ prod:
 simple:
 	echo "Starting 'simple' nv-ingest environment"
 	docker compose down \
-		&& docker compose $(COMPOSE_SIMPLE_FILES) up --wait --remove-orphans \
+		&& docker compose $(COMPOSE_SIMPLE_FILES) up --build --wait --remove-orphans \
 		&& docker compose logs -f nv-ingest-ms-runtime
