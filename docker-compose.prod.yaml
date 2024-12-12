@@ -20,15 +20,15 @@ services:
       - NIM_TRITON_LOG_VERBOSE=1
       - NGC_API_KEY=${NIM_NGC_API_KEY:-${NGC_API_KEY:-ngcapikey}}
       - CUDA_VISIBLE_DEVICES=0
-      # NIM OpenTelemetry Settings
-      - NIM_OTEL_SERVICE_NAME=yolox
-      - NIM_OTEL_TRACES_EXPORTER=otlp
-      - NIM_OTEL_METRICS_EXPORTER=console
-      - NIM_OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
-      - NIM_ENABLE_OTEL=true
-      # Triton OpenTelemetry Settings
-      - TRITON_OTEL_URL=http://otel-collector:4318/v1/traces
-      - TRITON_OTEL_RATE=1
+      # # NIM OpenTelemetry Settings
+      # - NIM_OTEL_SERVICE_NAME=yolox
+      # - NIM_OTEL_TRACES_EXPORTER=otlp
+      # - NIM_OTEL_METRICS_EXPORTER=console
+      # - NIM_OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+      # - NIM_ENABLE_OTEL=true
+      # # Triton OpenTelemetry Settings
+      # - TRITON_OTEL_URL=http://otel-collector:4318/v1/traces
+      # - TRITON_OTEL_RATE=1
     deploy:
       resources:
         reservations:
