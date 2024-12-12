@@ -19,7 +19,7 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 
 from .v1.health import router as HealthApiRouter
 from .v1.ingest import router as IngestApiRouter

@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>File Upload with Options</title>
+    <style>
+        body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #ffffff;
+            color: #000000;
+            margin: 20px;
+        }
+        header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        header img {
+            height: 50px;
+            margin-right: 10px;
+        }
+        header h1 {
+            color: #76b900;
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+        }
+        .log {
+            margin-top: 20px;
+            border-top: 1px solid #ccc;
+            padding-top: 10px;
+        }
+        button {
+            background-color: #76b900;
+            color: #ffffff;
+            border: none;
+            padding: 10px 15px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background-color: #5d9400;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <img src="/v1/static/nvidia_logo.png" alt="NVIDIA Logo">
+        <h1>NVIDIA File Upload</h1>
+    </header>
+
+    <form id="uploadForm">
+        <label for="file">Select file to upload:</label>
+        <input type="file" id="file" name="file" required>
+        <br><br>
+
+        <div>
+            <label><input type="checkbox" id="extractText" name="extractText" checked> Extract Text</label>
+            <label><input type="checkbox" id="extractImages" name="extractImages" checked> Extract Images</label>
+            <label><input type="checkbox" id="extractTables" name="extractTables" checked> Extract Tables</label>
+        </div>
+
+        <div id="extractionMethodContainer" style="display: none; margin-top: 10px;">
+            <label for="extractionMethod">Extraction Method:</label>
+            <select id="extractionMethod" name="extractionMethod">
+                <option value="pdfium" selected>pdfium</option>
+                <option value="adobe">adobe</option>
+            </select>
+        </div>
+
+        <br>
+        <button type="submit">Submit</button>
+    </form>
+
+    <div class="log" id="log"></div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const form = document.getElementById('uploadForm');
+            const extractionMethodContainer = document.getElementById('extractionMethodContainer');
+            const logDiv = document.getElementById('log');
+
+            const toggleCheckboxes = ['extractText', 'extractImages', 'extractTables'];
+
+            toggleCheckboxes.forEach(id => {
+                document.getElementById(id).addEventListener('change', () => {
+                    const anyChecked = toggleCheckboxes.some(id => document.getElementById(id).checked);
+                    extractionMethodContainer.style.display = anyChecked ? 'block' : 'none';
+                });
+            });
+
+            form.addEventListener('submit', async (event) => {
+                event.preventDefault();
+
+                const fileInput = document.getElementById('file');
+                const extractText = document.getElementById('extractText').checked;
+                const extractImages = document.getElementById('extractImages').checked;
+                const extractTables = document.getElementById('extractTables').checked;
+                const extractionMethod = document.getElementById('extractionMethod').value;
+
+                if (!fileInput.files[0]) {
+                    log('No file selected. Please choose a file to upload.');
+                    return;
+                }
+
+                const file = fileInput.files[0];
+                const reader = new FileReader();
+
+                reader.onload = async () => {
+                    const base64Content = reader.result.split(',')[1]; // Extract base64 content
+
+                    //{'job_payload': {'source_name': ['Apmex_Silver_Coin_Order.pdf'], 'source_id': ['Apmex_Silver_Coin_Order.pdf'], 'content': ['<--- Redacted --->'], 'document_type': ['pdf']}, 'job_id': 'None', 'tasks': [{'type': 'extract', 'task_properties': {'method': 'pdfium', 'document_type': 'pdf', 'params': {'extract_text': True, 'extract_images': True, 'extract_tables': True, 'extract_tables_method': 'yolox', 'extract_charts': True, 'text_depth': 'document', 'paddle_output_format': 'pseudo_markdown'}}}, {'type': 'table_data_extract', 'task_properties': {'params': {}}}, {'type': 'chart_data_extract', 'task_properties': {'params': {}}}], 'tracing_options': {'trace': True, 'ts_send': 1734021375974947372}}
+
+                    // MessageWrapper instance in python
+                    const outer_payload = {
+                        // JobSpec instance in Python, must be named payload
+                        payload: JSON.stringify({
+                            job_payload: {
+                                source_name: ["input_file_name.pdf"],
+                                source_id: ["probably_source_id"],
+                                content: [base64Content],
+                                document_type: ["pdf"]
+                            },
+                            job_id: "None",
+                            tasks: [
+                                {
+                                    type: "extract",
+                                    task_properties: {
+                                        method: "pdfium",
+                                        document_type: "pdf",
+                                        params: {
+                                            extract_text: true,
+                                            extract_images: true,
+                                            extract_tables: true,
+                                            extract_tables_method: "yolox",
+                                            extract_charts: true,
+                                            text_depth: "document",
+                                            paddle_output_format: "pseudo_markdown"
+                                        }
+                                    }
+                                },
+                                {
+                                    type: "table_data_extract",
+                                    task_properties: {
+                                        params: {}
+                                    }
+                                },
+                                {
+                                    type: "chart_data_extract",
+                                    task_properties: {
+                                        params: {}
+                                    }
+                                }
+                            ],
+                            tracing_options: {
+                                trace: true,
+                                ts_send: 1734021208982459556
+                            }
+                        })
+                    };
+
+                    try {
+                        const response = await fetch('/v1/submit_job', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify(outer_payload)
+                        });
+
+                        if (response.status === 200) {
+                            const job_id = await response.json();
+                            console.log(job_id)
+                            <!-- const { job_id } = await response.json(); -->
+                            log(`Job submitted successfully. Job ID: ${job_id}`);
+
+                            const intervalId = setInterval(async () => {
+                                try {
+                                    const fetchResponse = await fetch(`/v1/fetch_job/${job_id}`);
+                                    log(`Fetch attempt made. Response code: ${fetchResponse.status}`);
+
+                                    if (fetchResponse.status === 200) {
+                                        const results = await fetchResponse.json();
+                                        log(`Job completed successfully. Results: ${JSON.stringify(results)}`);
+                                        clearInterval(intervalId);
+                                    }
+                                } catch (error) {
+                                    log(`Error during fetch attempt: ${error.message}`);
+                                }
+                            }, 2000);
+                        } else {
+                            log(`Error submitting job. Response code: ${response.status}`);
+                        }
+                    } catch (error) {
+                        log(`Error submitting job: ${error.message}`);
+                    }
+                };
+
+                reader.readAsDataURL(file);
+            });
+
+            function log(message) {
+                const logEntry = document.createElement('div');
+                logEntry.textContent = message;
+                logDiv.appendChild(logEntry);
+            }
+        });
+    </script>
+</body>
+</html>

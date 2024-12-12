@@ -109,6 +109,7 @@ async def submit_job_curl_friendly(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Nv-Ingest Internal Server Error: {str(ex)}")
 
+
 # POST /submit_job
 @router.post(
     "/submit_job",
@@ -122,6 +123,11 @@ async def submit_job_curl_friendly(
     operation_id="submit_job",
 )
 async def submit_job(job_spec: MessageWrapper, ingest_service: INGEST_SERVICE_T):
+    # message_wrapper = job_spec.copy().payload
+    # message_wrapper_job_spec = json.loads(message_wrapper)
+    # print(f"!!!!!!!!!!!!!!MessageWrapper Type: {type(message_wrapper_job_spec)}")
+    # message_wrapper_job_spec['job_payload']['content'][0] = "<--- Redacted --->"
+    # print(f"MessageWrapper: {message_wrapper_job_spec}")
     try:
         # Inject the x-trace-id into the JobSpec definition so that OpenTelemetry
         # will be able to trace across uvicorn -> morpheus
@@ -129,6 +135,7 @@ async def submit_job(job_spec: MessageWrapper, ingest_service: INGEST_SERVICE_T)
         
         job_spec_dict = json.loads(job_spec.payload)
         job_spec_dict['tracing_options']['trace_id'] = current_trace_id
+        
         updated_job_spec = MessageWrapper(
             payload=json.dumps(job_spec_dict)
         )
