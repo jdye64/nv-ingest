@@ -68,6 +68,7 @@ setup(
     name="nv_ingest",
     package_dir={"": "src"},
     packages=find_packages(where="src"),
+    include_package_data=True,
     python_requires=">=3.10",
     version=get_version(),
 )

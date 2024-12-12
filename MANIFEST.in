@@ -1,0 +1,2 @@
+recursive-include nv_ingest/api/v1/static *
+recursive-include nv_ingest/api/v1/templates *
