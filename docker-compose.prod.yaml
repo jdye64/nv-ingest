@@ -3,6 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 services:
+  redis:
+    image: "redis/redis-stack"
+    ports:
+      - "6379:6379"
 
   paddle:
     image: ${PADDLE_IMAGE:-nvcr.io/ohlfw0olaadg/ea-participants/paddleocr}:${PADDLE_TAG:-0.2.0}
