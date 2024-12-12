@@ -98,7 +98,7 @@ RUN source activate nv_ingest_runtime \
     && pip install ./dist/*.whl \
     && pip install ./client/dist/*.whl
 
-RUN rm -rf src
+# RUN rm -rf src
 
 FROM nv_ingest_install AS runtime
 
@@ -111,9 +111,6 @@ RUN chmod +x /workspace/docker/entrypoint.sh
 ENTRYPOINT ["/opt/conda/envs/nv_ingest_runtime/bin/tini", "--", "/workspace/docker/entrypoint.sh"]
 
 FROM nv_ingest_install AS development
-
-# RUN source activate nv_ingest_runtime && \
-#     pip install -e ./client
 
 # Copy custom entrypoint script
 COPY ./docker/scripts/entrypoint_dev.sh /workspace/docker/entrypoint_dev.sh

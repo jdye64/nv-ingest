@@ -8,7 +8,6 @@ services:
     ports:
       - "6379:6379"
 
-  nv-ingest-ms-runtime:
     build:
       context: ${NV_INGEST_ROOT:-.}
       dockerfile: "./Dockerfile"

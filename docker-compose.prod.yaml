@@ -52,7 +52,6 @@ services:
     runtime: nvidia
 
   embedding:
-    # NIM ON
     image: ${EMBEDDING_IMAGE:-nvcr.io/nim/nvidia/nv-embedqa-e5-v5}:${EMBEDDING_TAG:-1.1.0}
     shm_size: 16gb
     ports:
