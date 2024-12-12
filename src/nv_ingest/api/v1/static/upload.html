@@ -216,7 +216,7 @@
 
             function count_num_elements(results, element_type) {
                 let num_element = 0
-                jsonArray.forEach(result => {
+                results.forEach(result => {
                     console.log(`Type: ${result.document_type}`);
                     if (result.document_type === element_type) {
                         num_element++;
