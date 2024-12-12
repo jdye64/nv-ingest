@@ -71,8 +71,8 @@ setup(
     include_package_data=True,
     package_data={
         "nv_ingest": [
-            "nv_ingest/api/v1/static/**/*",
-            "nv_ingest/api/v1/templates/**/*",
+            "src/nv_ingest/api/v1/static/**/*",
+            "src/nv_ingest/api/v1/templates/**/*",
         ],  # Include all files under /nv_ingest/api/v1/static/ & templates/
     },
     python_requires=">=3.10",
