@@ -69,6 +69,12 @@ setup(
     package_dir={"": "src"},
     packages=find_packages(where="src"),
     include_package_data=True,
+    package_data={
+        "nv_ingest": [
+            "nv_ingest/api/v1/static/**/*",
+            "nv_ingest/api/v1/templates/**/*",
+        ],  # Include all files under /nv_ingest/api/v1/static/ & templates/
+    },
     python_requires=">=3.10",
     version=get_version(),
 )

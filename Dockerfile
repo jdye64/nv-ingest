@@ -79,8 +79,6 @@ ENV NV_INGEST_CLIENT_VERSION_OVERRIDE=${NV_INGEST_VERSION_OVERRIDE}
 
 SHELL ["/bin/bash", "-c"]
 
-# Copy the static html files to the root workspace
-COPY src/nv_ingest/api/v1/static static
 COPY tests tests
 COPY data data
 COPY client client
