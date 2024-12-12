@@ -16,7 +16,7 @@ dev:
 prod:
 	echo "Starting production nv-ingest environment"
 	docker compose down \
-		&& docker compose $(COMPOSE_PROD_FILES) up --wait --remove-orphans \
+		&& docker compose $(COMPOSE_PROD_FILES) up --build --wait --remove-orphans \
 		&& docker compose logs -f nv-ingest-ms-runtime
 
 # Create and start a "simple" environment
