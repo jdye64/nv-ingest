@@ -45,11 +45,11 @@
 <body>
     <header>
         <img src="/v1/static/nvidia_logo.png" alt="NVIDIA Logo">
-        <h1>NVIDIA File Upload</h1>
+        <h1>NV-Ingest File Ingestion</h1>
     </header>
 
     <form id="uploadForm">
-        <label for="file">Select file to upload:</label>
+        <label for="file">Select file to ingest:</label>
         <input type="file" id="file" name="file" required>
         <br><br>
 
@@ -70,6 +70,8 @@
         <br>
         <button type="submit">Submit</button>
     </form>
+
+    <div id="image-container"></div> <!-- Container for the image -->
 
     <div class="log" id="log"></div>
 
@@ -107,8 +109,6 @@
 
                 reader.onload = async () => {
                     const base64Content = reader.result.split(',')[1]; // Extract base64 content
-
-                    //{'job_payload': {'source_name': ['Apmex_Silver_Coin_Order.pdf'], 'source_id': ['Apmex_Silver_Coin_Order.pdf'], 'content': ['<--- Redacted --->'], 'document_type': ['pdf']}, 'job_id': 'None', 'tasks': [{'type': 'extract', 'task_properties': {'method': 'pdfium', 'document_type': 'pdf', 'params': {'extract_text': True, 'extract_images': True, 'extract_tables': True, 'extract_tables_method': 'yolox', 'extract_charts': True, 'text_depth': 'document', 'paddle_output_format': 'pseudo_markdown'}}}, {'type': 'table_data_extract', 'task_properties': {'params': {}}}, {'type': 'chart_data_extract', 'task_properties': {'params': {}}}], 'tracing_options': {'trace': True, 'ts_send': 1734021375974947372}}
 
                     // MessageWrapper instance in python
                     const outer_payload = {
@@ -182,6 +182,7 @@
                                         const results = await fetchResponse.json();
                                         log(`Job completed successfully. Results: ${JSON.stringify(results)}`);
                                         clearInterval(intervalId);
+                                        summarize_results(results)
                                     }
                                 } catch (error) {
                                     log(`Error during fetch attempt: ${error.message}`);
@@ -202,6 +203,27 @@
                 const logEntry = document.createElement('div');
                 logEntry.textContent = message;
                 logDiv.appendChild(logEntry);
+            }
+
+            function summarize_results(results) {
+                console.log("Summarizing results ....");
+                num_images = count_num_elements(results, "image");
+                num_structured = count_num_elements(results, "structured");
+                num_text = count_num_elements(results, "text");
+
+                console.log(`Text: ${num_text} - Images: ${num_images} - Structured: ${num_structured}`);
+            }
+
+            function count_num_elements(results, element_type) {
+                let num_element = 0
+                jsonArray.forEach(result => {
+                    console.log(`Type: ${result.document_type}`);
+                    if (result.document_type === element_type) {
+                        num_element++;
+                    }
+                });
+                console.log(`Number of ${element_type}: ${num_element}`);
+                return num_element;
             }
         });
     </script>

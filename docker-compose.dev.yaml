@@ -3,11 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 services:
+
   redis:
     image: "redis/redis-stack"
     ports:
       - "6379:6379"
 
+  nv-ingest-ms-runtime:
     build:
       context: ${NV_INGEST_ROOT:-.}
       dockerfile: "./Dockerfile"
@@ -18,18 +20,34 @@ services:
       # Bump logging for dev work
       - INGEST_LOG_LEVEL=DEBUG
 
-      # build.nvidia.com hosted cached endpoints.
-      - CACHED_HTTP_ENDPOINT=https://ai.api.nvidia.com/v1/cv/university-at-buffalo/cached
-      - CACHED_INFER_PROTOCOL=http
+      # # build.nvidia.com hosted cached endpoints.
+      # - CACHED_HTTP_ENDPOINT=https://ai.api.nvidia.com/v1/cv/university-at-buffalo/cached
+      # - CACHED_INFER_PROTOCOL=http
 
-      # build.nvidia.com hosted deplot
-      - DEPLOT_HTTP_ENDPOINT=https://ai.api.nvidia.com/v1/vlm/google/deplot
-      - DEPLOT_INFER_PROTOCOL=http
+      # # build.nvidia.com hosted deplot
+      # - DEPLOT_HTTP_ENDPOINT=https://ai.api.nvidia.com/v1/vlm/google/deplot
+      # - DEPLOT_INFER_PROTOCOL=http
 
-      # build.nvidia.com hosted paddle endpoints.
-      - PADDLE_HTTP_ENDPOINT=https://ai.api.nvidia.com/v1/cv/baidu/paddleocr
-      - PADDLE_INFER_PROTOCOL=http
+      # # build.nvidia.com hosted paddle endpoints.
+      # - PADDLE_HTTP_ENDPOINT=https://ai.api.nvidia.com/v1/cv/baidu/paddleocr
+      # - PADDLE_INFER_PROTOCOL=http
 
-      # build.nvidia.com hosted yolox endpoints.
-      - YOLOX_HTTP_ENDPOINT=https://ai.api.nvidia.com/v1/cv/nvidia/nv-yolox-page-elements-v1
-      - YOLOX_INFER_PROTOCOL=http
+      # # build.nvidia.com hosted yolox endpoints.
+      # - YOLOX_HTTP_ENDPOINT=https://ai.api.nvidia.com/v1/cv/nvidia/nv-yolox-page-elements-v1
+      # - YOLOX_INFER_PROTOCOL=http
+
+      # Cached
+      - CACHED_GRPC_ENDPOINT=10.63.129.110:8007
+      - CACHED_INFER_PROTOCOL=grpc # Use GRPC endpoint
+      
+      # Deplot
+      - DEPLOT_HTTP_ENDPOINT=http://10.63.129.110:8003/v1/chat/completions
+      - DEPLOT_INFER_PROTOCOL=http # Use HTTP endpoint
+      
+      # Paddle
+      - PADDLE_GRPC_ENDPOINT=10.63.129.110:8010
+      - PADDLE_INFER_PROTOCOL=grpc # Use GRPC endpoint
+      
+      # Yolox
+      - YOLOX_GRPC_ENDPOINT=10.63.129.110:8001
+      - YOLOX_INFER_PROTOCOL=grpc
