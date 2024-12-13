@@ -30,5 +30,5 @@ if [ "$#" -gt 0 ]; then
     # If a command is provided, run it
     exec "$@"
 else
-    uvicorn nv_ingest.main:app --workers 1 --host 0.0.0.0 --port 7670 --reload --app-dir /workspace/nv_ingest_dev/src
+    uvicorn nv_ingest.main:app --workers 3 --host 0.0.0.0 --port 7670 --reload --app-dir /workspace/nv_ingest_dev/src & python /workspace/microservice_entrypoint.py
 fi

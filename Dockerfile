@@ -99,9 +99,10 @@ RUN source activate nv_ingest_runtime \
 
 # RUN rm -rf src
 
+COPY src/microservice_entrypoint.py ./
+
 FROM nv_ingest_install AS runtime
 
-COPY src/microservice_entrypoint.py ./
 COPY pyproject.toml ./
 
 RUN chmod +x /workspace/docker/entrypoint.sh
