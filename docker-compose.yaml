@@ -72,7 +72,7 @@ services:
             - driver: nvidia
               device_ids: ["1"]
               capabilities: [gpu]
-  
+
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.91.0
     hostname: otel-collector
@@ -81,7 +81,7 @@ services:
       - ./config/otel-collector-config.yaml:/etc/otel-collector-config.yaml
     # command: /bin/bash -c "chmod -R 744 /etc"  # Set read permissions for all files in /etc in case the host OS has adjusted them 
     ports:
-      - "9988:8888" # Prometheus metrics exposed by the collector
+      - "9988:9988" # Prometheus metrics exposed by the collector
       - "8889:8889" # Prometheus exporter metrics
       - "13133:13133" # health_check extension
       - "9411" # Zipkin receiver
@@ -94,7 +94,7 @@ services:
   zipkin:
     image: openzipkin/zipkin
     environment:
-      JAVA_OPTS: "-Xms2g -Xmx2g -XX:+ExitOnOutOfMemoryError"
+      JAVA_OPTS: "-Xms4g -Xmx8g -XX:+ExitOnOutOfMemoryError"
     ports:
       - "9411:9411" # Zipkin UI and API
 
@@ -215,4 +215,3 @@ services:
       - "milvus"
     profiles:
       - retrieval
-
