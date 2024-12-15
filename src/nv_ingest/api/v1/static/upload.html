@@ -5,6 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>File Upload with Options</title>
     <style>
+        pre {
+            background-color: #f4f4f4;
+            padding: 10px;
+            border-radius: 5px;
+        }
         body {
             font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
             background-color: #ffffff;
@@ -73,8 +78,11 @@
 
     <div id="image-container"></div> <!-- Container for the image -->
 
+    <pre><code id="json-container" class="json"></code></pre>
+
     <div class="log" id="log"></div>
 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', () => {
             const form = document.getElementById('uploadForm');
@@ -180,9 +188,18 @@
 
                                     if (fetchResponse.status === 200) {
                                         const results = await fetchResponse.json();
-                                        log(`Job completed successfully. Results: ${JSON.stringify(results)}`);
+                                        //log(`Job completed successfully. Results: ${JSON.stringify(results)}`);
                                         clearInterval(intervalId);
-                                        summarize_results(results)
+
+                                        const jsonContainer = document.getElementById('json-container');
+                                        jsonContainer.textContent = JSON.stringify(results, null, 4);
+                                        hljs.highlightElement(jsonContainer);
+
+                                        try {
+                                            summarize_results(results)
+                                        } catch (error) {
+                                            log(``);
+                                        }
                                     }
                                 } catch (error) {
                                     log(`Error during fetch attempt: ${error.message}`);
@@ -216,14 +233,32 @@
 
             function count_num_elements(results, element_type) {
                 let num_element = 0
-                results.forEach(result => {
+                console.log(`Results["data"]: ${results["data"]}`)
+                results["data"].forEach(result => {
                     console.log(`Type: ${result.document_type}`);
                     if (result.document_type === element_type) {
                         num_element++;
+
+                        // If this is an image display it on the page
+                        if (element_type === "image") {
+                            display_image(result["metadata"]["content"])
+                        }
                     }
                 });
                 console.log(`Number of ${element_type}: ${num_element}`);
                 return num_element;
+            }
+
+            function display_image(base64Image) {
+                console.log('Displaying image');
+                const fullBase64Image = "data:image/png;base64," + base64Image;
+
+                // Create an <img> element
+                const imgElement = document.createElement('img');
+                imgElement.src = fullBase64Image;
+
+                // Add the image to the container
+                document.getElementById('image-container').appendChild(imgElement);
             }
         });
     </script>
