@@ -36,33 +36,33 @@ services:
       - INGEST_LOG_LEVEL=DEFAULT # Default is INFO
       - OTEL_EXPORTER_OTLP_ENDPOINT=otel-collector:4317
       - READY_CHECK_ALL_COMPONENTS=True # If True nv-ingest boot will not complete until all NIMs report "ready"
-      
+
       # Cached
       - CACHED_HTTP_ENDPOINT=http://cached:8000/v1/infer
       - CACHED_GRPC_ENDPOINT=cached:8001
       - CACHED_INFER_PROTOCOL=grpc # Use GRPC endpoint
-      
+
       # Deplot
       - DEPLOT_HTTP_ENDPOINT=http://deplot:8000/v1/chat/completions
       - DEPLOT_GRPC_ENDPOINT=deplot:8004
       - DEPLOT_INFER_PROTOCOL=http # Use HTTP endpoint
-      
+
       # Doughnut
       - DOUGHNUT_GRPC_TRITON=triton-doughnut:8001
 
       # Minio
       - MINIO_BUCKET=${MINIO_BUCKET:-nv-ingest}
-      
+
       # Paddle
       - PADDLE_HTTP_ENDPOINT=http://paddle:8000/v1/infer
       - PADDLE_GRPC_ENDPOINT=paddle:8001
       - PADDLE_INFER_PROTOCOL=grpc # Use GRPC endpoint
-      
+
       # Yolox
       - YOLOX_HTTP_ENDPOINT=http://yolox:8000/v1/infer
       - YOLOX_GRPC_ENDPOINT=yolox:8001
       - YOLOX_INFER_PROTOCOL=grpc
-      
+
       # VLM
       - VLM_CAPTION_ENDPOINT=https://ai.api.nvidia.com/v1/gr/meta/llama-3.2-90b-vision-instruct/chat/completions
     deploy:
@@ -79,7 +79,7 @@ services:
     command: ["--config=/etc/otel-collector-config.yaml"]
     volumes:
       - ./config/otel-collector-config.yaml:/etc/otel-collector-config.yaml
-    # command: /bin/bash -c "chmod -R 744 /etc"  # Set read permissions for all files in /etc in case the host OS has adjusted them 
+    # command: /bin/bash -c "chmod -R 744 /etc"  # Set read permissions for all files in /etc in case the host OS has adjusted them
     ports:
       - "9988:9988" # Prometheus metrics exposed by the collector
       - "8889:8889" # Prometheus exporter metrics
