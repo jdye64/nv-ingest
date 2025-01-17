@@ -1,0 +1,62 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024, NVIDIA CORPORATION & AFFILIATES.
+# All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+{% set data = load_setup_py_data() %}
+{% set name = data.get('name', 'nv_ingest_common') | lower %}
+{% set version = data.get('version') %}
+
+# Determine Git root, falling back to default path ../../.. if Git is not available or the directory is not a Git repo
+{% set git_root = environ.get('GIT_ROOT', '../../..') %}
+
+package:
+  name: {{ name }}
+  version: {{ version }}
+
+source:
+  path: {{ git_root }}
+
+build:
+  number: 0
+  script:
+    - {{ PYTHON }} -m pip install . --no-deps -vv
+
+requirements:
+  build:
+    - pip
+    - python==3.10
+    - setuptools>=58.2.0
+  run:
+    - azure-core>=1.32.0
+    - click>=8.1.7
+    - fsspec>=2024.10.0
+    - openai>=1.57.1
+    - pydantic>=2.0.0
+    - pypdfium2>=4.30.0
+    - pytest>=8.0.2
+    - pytest-mock>=3.14.0
+    - python>=3.10
+    - requests>=2.32.3
+    - setuptools>=58.2.0
+    - unstructured-client>=0.25.9
+
+  test:
+    commands:
+      - pytest ./tests
+
+about:
+  home: "https://github.com/NVIDIA/nv-ingest"
+  license: "Apache-2.0"
+  summary: "Python module supporting document ingestion."
+  description: "Python module supporting document ingestion."
+
+extra:
+  recipe-maintainers:
+    - jdyer@nvidia.com
+
+channels:
+  - nvidia/label/dev
+  - rapidsai
+  - nvidia
+  - conda-forge
+  - pytorch
