@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from nv_ingest.util.nim.yolox import YoloxPageElementsModelInterface
+from common.src.nv_ingest_common.nim.yolox import YoloxPageElementsModelInterface
 
 
 @pytest.fixture

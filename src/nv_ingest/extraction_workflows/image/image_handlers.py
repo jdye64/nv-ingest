@@ -30,7 +30,7 @@ from PIL import Image
 from math import log
 from wand.image import Image as WandImage
 
-import nv_ingest.util.nim.yolox as yolox_utils
+import common.src.nv_ingest_common.nim.yolox as yolox_utils
 from nv_ingest.extraction_workflows.pdf.doughnut_utils import crop_image
 from nv_ingest.schemas.image_extractor_schema import ImageConfigSchema
 from nv_ingest.schemas.metadata_schema import AccessLevelEnum
