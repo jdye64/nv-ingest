@@ -9,7 +9,7 @@ import pytest
 
 import requests
 
-from nv_ingest.util.nim.helpers import (
+from nv_ingest_common.nim.helpers import (
     NimClient,
     create_inference_client,
     preprocess_image_for_paddle,
@@ -19,7 +19,7 @@ from nv_ingest.util.nim.helpers import (
     get_version,
 )
 
-MODULE_UNDER_TEST = "nv_ingest.util.nim.helpers"
+MODULE_UNDER_TEST = "nv_ingest_common.nim.helpers"
 
 
 class MockModelInterface:

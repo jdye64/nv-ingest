@@ -35,7 +35,7 @@ from pptx.enum.shapes import PP_PLACEHOLDER
 from pptx.shapes.autoshape import Shape
 from pptx.slide import Slide
 
-from nv_ingest.extraction_workflows.image.image_handlers import (
+from nv_ingest_common.image.image_handlers import (
     load_and_preprocess_image,
     extract_tables_and_charts_from_images,
 )

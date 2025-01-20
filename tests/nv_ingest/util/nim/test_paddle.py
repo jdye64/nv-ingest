@@ -6,7 +6,7 @@ import pytest
 
 from nv_ingest_common.schemas.metadata_schema import TableFormatEnum
 from nv_ingest.util.image_processing.transforms import base64_to_numpy
-from nv_ingest.util.nim.helpers import preprocess_image_for_paddle
+from nv_ingest_common.nim.helpers import preprocess_image_for_paddle
 from nv_ingest.util.nim.paddle import PaddleOCRModelInterface
 
 _MODULE_UNDER_TEST = "nv_ingest.util.nim.paddle"

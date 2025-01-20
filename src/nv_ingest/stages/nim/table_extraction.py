@@ -17,9 +17,9 @@ from nv_ingest_common.schemas.table_extractor_schema import TableExtractorSchema
 from nv_ingest.stages.multiprocessing_stage import MultiProcessingBaseStage
 from nv_ingest.util.image_processing.transforms import base64_to_numpy
 from nv_ingest.util.image_processing.transforms import check_numpy_image_size
-from nv_ingest.util.nim.helpers import create_inference_client
-from nv_ingest.util.nim.helpers import NimClient
-from nv_ingest.util.nim.helpers import get_version
+from nv_ingest_common.nim.helpers import create_inference_client
+from nv_ingest_common.nim.helpers import NimClient
+from nv_ingest_common.nim.helpers import get_version
 from nv_ingest.util.nim.paddle import PaddleOCRModelInterface
 
 logger = logging.getLogger(f"morpheus.{__name__}")

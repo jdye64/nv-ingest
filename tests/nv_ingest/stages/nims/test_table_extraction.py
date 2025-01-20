@@ -12,7 +12,7 @@ from PIL import Image
 
 from nv_ingest.stages.nim.table_extraction import _extract_table_data
 from nv_ingest.stages.nim.table_extraction import _update_metadata
-from nv_ingest.util.nim.helpers import NimClient
+from nv_ingest_common.nim.helpers import NimClient
 from nv_ingest.util.nim.paddle import PaddleOCRModelInterface
 
 # Constants for minimum image size

@@ -17,8 +17,8 @@ from nv_ingest.stages.multiprocessing_stage import MultiProcessingBaseStage
 from nv_ingest.util.image_processing.table_and_chart import join_cached_and_deplot_output
 from nv_ingest.util.nim.cached import CachedModelInterface
 from nv_ingest.util.nim.deplot import DeplotModelInterface
-from nv_ingest.util.nim.helpers import create_inference_client
-from nv_ingest.util.nim.helpers import NimClient
+from nv_ingest_common.nim.helpers import create_inference_client
+from nv_ingest_common.nim.helpers import NimClient
 
 logger = logging.getLogger(f"morpheus.{__name__}")
 
