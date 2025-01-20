@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024, NVIDIA CORPORATION & AFFILIATES.
+# All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 import pytest
 from pydantic import ValidationError
 
@@ -50,5 +54,5 @@ def test_invalid_field_types():
         "prompt": 123,  # invalid type
         "raise_on_failure": "not_boolean",  # invalid type
     }
-    with pytest.raises(ValidationError) as exc_info:
+    with pytest.raises(ValidationError):
         ImageCaptionExtractionSchema(**invalid_data)
