@@ -16,7 +16,7 @@ from morpheus.config import Config
 
 from nv_ingest.extraction_workflows import pptx
 from nv_ingest.stages.multiprocessing_stage import MultiProcessingBaseStage
-from nv_ingest.schemas.pptx_extractor_schema import PPTXExtractorSchema
+from nv_ingest_common.schemas.pptx_extractor_schema import PPTXExtractorSchema
 from nv_ingest.util.exception_handlers.pdf import create_exception_tag
 
 logger = logging.getLogger(f"morpheus.{__name__}")

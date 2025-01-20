@@ -1,10 +1,10 @@
 import pytest
 from pydantic import ValidationError
 
-from nv_ingest.schemas.chart_extractor_schema import (
+from nv_ingest_common.schemas.chart_extractor_schema import (
     ChartExtractorConfigSchema,
 )  # Adjust the import as per your file structure
-from nv_ingest.schemas.chart_extractor_schema import ChartExtractorSchema
+from nv_ingest_common.schemas.chart_extractor_schema import ChartExtractorSchema
 
 
 # Test cases for ChartExtractorConfigSchema

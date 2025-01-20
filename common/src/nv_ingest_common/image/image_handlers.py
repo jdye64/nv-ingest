@@ -30,15 +30,15 @@ from PIL import Image
 from math import log
 from wand.image import Image as WandImage
 
-import common.src.nv_ingest_common.nim.yolox as yolox_utils
+import nv_ingest_common.nim.yolox as yolox_utils
 from nv_ingest.extraction_workflows.pdf.doughnut_utils import crop_image
-from nv_ingest.schemas.image_extractor_schema import ImageConfigSchema
-from nv_ingest.schemas.metadata_schema import AccessLevelEnum
+from nv_ingest_common.schemas.image_extractor_schema import ImageConfigSchema
+from nv_ingest_common.schemas.metadata_schema import AccessLevelEnum
 from nv_ingest.util.image_processing.transforms import numpy_to_base64
-from nv_ingest.util.nim.helpers import create_inference_client
-from nv_ingest.util.pdf.metadata_aggregators import CroppedImageWithContent
-from nv_ingest.util.pdf.metadata_aggregators import construct_image_metadata_from_base64
-from nv_ingest.util.pdf.metadata_aggregators import construct_table_and_chart_metadata
+from nv_ingest_common.nim.helpers import create_inference_client
+from nv_ingest_common.pdf.metadata_aggregators import CroppedImageWithContent
+from nv_ingest_common.pdf.metadata_aggregators import construct_image_metadata_from_base64
+from nv_ingest_common.pdf.metadata_aggregators import construct_table_and_chart_metadata
 
 logger = logging.getLogger(__name__)
 

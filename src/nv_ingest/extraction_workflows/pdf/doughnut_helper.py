@@ -28,23 +28,23 @@ import numpy as np
 import pypdfium2 as pdfium
 import tritonclient.grpc as grpcclient
 
-from nv_ingest.schemas.metadata_schema import AccessLevelEnum
-from nv_ingest.schemas.metadata_schema import ContentSubtypeEnum
-from nv_ingest.schemas.metadata_schema import ContentTypeEnum
-from nv_ingest.schemas.metadata_schema import StdContentDescEnum
-from nv_ingest.schemas.metadata_schema import TableFormatEnum
-from nv_ingest.schemas.metadata_schema import TextTypeEnum
-from nv_ingest.schemas.metadata_schema import validate_metadata
+from nv_ingest_common.schemas.metadata_schema import AccessLevelEnum
+from nv_ingest_common.schemas.metadata_schema import ContentSubtypeEnum
+from nv_ingest_common.schemas.metadata_schema import ContentTypeEnum
+from nv_ingest_common.schemas.metadata_schema import StdContentDescEnum
+from nv_ingest_common.schemas.metadata_schema import TableFormatEnum
+from nv_ingest_common.schemas.metadata_schema import TextTypeEnum
+from nv_ingest_common.schemas.metadata_schema import validate_metadata
 from nv_ingest.util.exception_handlers.pdf import pdfium_exception_handler
 from nv_ingest.util.image_processing.transforms import crop_image
 from nv_ingest.util.image_processing.transforms import numpy_to_base64
 from nv_ingest.util.nim import doughnut as doughnut_utils
-from nv_ingest.util.pdf.metadata_aggregators import Base64Image
-from nv_ingest.util.pdf.metadata_aggregators import LatexTable
-from nv_ingest.util.pdf.metadata_aggregators import construct_image_metadata_from_pdf_image
-from nv_ingest.util.pdf.metadata_aggregators import construct_text_metadata
-from nv_ingest.util.pdf.metadata_aggregators import extract_pdf_metadata
-from nv_ingest.util.pdf.pdfium import pdfium_pages_to_numpy
+from nv_ingest_common.pdf.metadata_aggregators import Base64Image
+from nv_ingest_common.pdf.metadata_aggregators import LatexTable
+from nv_ingest_common.pdf.metadata_aggregators import construct_image_metadata_from_pdf_image
+from nv_ingest_common.pdf.metadata_aggregators import construct_text_metadata
+from nv_ingest_common.pdf.metadata_aggregators import extract_pdf_metadata
+from nv_ingest_common.pdf.impl.pdfium import pdfium_pages_to_numpy
 
 logger = logging.getLogger(__name__)
 

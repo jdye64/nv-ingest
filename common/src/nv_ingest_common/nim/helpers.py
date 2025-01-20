@@ -18,8 +18,6 @@ from packaging import version as pkgversion
 
 from nv_ingest.util.image_processing.transforms import normalize_image
 from nv_ingest.util.image_processing.transforms import pad_image
-from nv_ingest.util.nim.decorators import multiprocessing_cache
-from nv_ingest.util.tracing.tagging import traceable_func
 
 logger = logging.getLogger(__name__)
 
@@ -158,7 +156,6 @@ class NimClient:
         else:
             raise ValueError("Invalid protocol specified. Must be 'grpc' or 'http'.")
 
-    @traceable_func(trace_name="{stage_name}::{model_name}")
     def infer(self, data: dict, model_name: str, **kwargs) -> Any:
         """
         Perform inference using the specified model and input data.
@@ -525,7 +522,6 @@ def is_ready(http_endpoint: str, ready_endpoint: str) -> bool:
         return False
 
 
-@multiprocessing_cache(max_calls=100)  # Cache results first to avoid redundant retries from backoff
 @backoff.on_predicate(backoff.expo, max_time=30)
 def get_version(http_endpoint: str, metadata_endpoint: str = "/v1/metadata", version_field: str = "version") -> str:
     """

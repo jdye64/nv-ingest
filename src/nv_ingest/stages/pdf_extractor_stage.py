@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from morpheus.config import Config
 
 from nv_ingest.extraction_workflows import pdf
-from nv_ingest.schemas.pdf_extractor_schema import PDFExtractorSchema
+from nv_ingest_common.schemas.pdf_extractor_schema import PDFExtractorSchema
 from nv_ingest.stages.multiprocessing_stage import MultiProcessingBaseStage
 
 logger = logging.getLogger(f"morpheus.{__name__}")

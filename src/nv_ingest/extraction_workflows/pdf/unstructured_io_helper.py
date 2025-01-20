@@ -29,15 +29,15 @@ from unstructured_client.models import shared
 from unstructured_client.utils import BackoffStrategy
 from unstructured_client.utils import RetryConfig
 
-from nv_ingest.schemas.metadata_schema import AccessLevelEnum
-from nv_ingest.schemas.metadata_schema import ContentTypeEnum
-from nv_ingest.schemas.metadata_schema import ImageTypeEnum
-from nv_ingest.schemas.metadata_schema import StdContentDescEnum
-from nv_ingest.schemas.metadata_schema import TableFormatEnum
-from nv_ingest.schemas.metadata_schema import TextTypeEnum
-from nv_ingest.schemas.metadata_schema import validate_metadata
-from nv_ingest.util.pdf.metadata_aggregators import construct_text_metadata
-from nv_ingest.util.pdf.metadata_aggregators import extract_pdf_metadata
+from nv_ingest_common.schemas.metadata_schema import AccessLevelEnum
+from nv_ingest_common.schemas.metadata_schema import ContentTypeEnum
+from nv_ingest_common.schemas.metadata_schema import ImageTypeEnum
+from nv_ingest_common.schemas.metadata_schema import StdContentDescEnum
+from nv_ingest_common.schemas.metadata_schema import TableFormatEnum
+from nv_ingest_common.schemas.metadata_schema import TextTypeEnum
+from nv_ingest_common.schemas.metadata_schema import validate_metadata
+from nv_ingest_common.pdf.metadata_aggregators import construct_text_metadata
+from nv_ingest_common.pdf.metadata_aggregators import extract_pdf_metadata
 
 logger = logging.getLogger(__name__)
 

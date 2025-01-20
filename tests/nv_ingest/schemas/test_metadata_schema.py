@@ -3,17 +3,17 @@ from datetime import datetime
 import pytest
 from pydantic import ValidationError
 
-from nv_ingest.schemas.metadata_schema import ChartMetadataSchema  # Adjust the import as per your file structure
-from nv_ingest.schemas.metadata_schema import ContentHierarchySchema
-from nv_ingest.schemas.metadata_schema import ContentMetadataSchema
-from nv_ingest.schemas.metadata_schema import ErrorMetadataSchema
-from nv_ingest.schemas.metadata_schema import ImageMetadataSchema
-from nv_ingest.schemas.metadata_schema import InfoMessageMetadataSchema
-from nv_ingest.schemas.metadata_schema import NearbyObjectsSchema
-from nv_ingest.schemas.metadata_schema import SourceMetadataSchema
-from nv_ingest.schemas.metadata_schema import TableFormatEnum
-from nv_ingest.schemas.metadata_schema import TableMetadataSchema
-from nv_ingest.schemas.metadata_schema import TextMetadataSchema
+from nv_ingest_common.schemas.metadata_schema import ChartMetadataSchema  # Adjust the import as per your file structure
+from nv_ingest_common.schemas.metadata_schema import ContentHierarchySchema
+from nv_ingest_common.schemas.metadata_schema import ContentMetadataSchema
+from nv_ingest_common.schemas.metadata_schema import ErrorMetadataSchema
+from nv_ingest_common.schemas.metadata_schema import ImageMetadataSchema
+from nv_ingest_common.schemas.metadata_schema import InfoMessageMetadataSchema
+from nv_ingest_common.schemas.metadata_schema import NearbyObjectsSchema
+from nv_ingest_common.schemas.metadata_schema import SourceMetadataSchema
+from nv_ingest_common.schemas.metadata_schema import TableFormatEnum
+from nv_ingest_common.schemas.metadata_schema import TableMetadataSchema
+from nv_ingest_common.schemas.metadata_schema import TextMetadataSchema
 
 
 # Test cases for SourceMetadataSchema

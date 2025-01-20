@@ -39,7 +39,7 @@ from nv_ingest.util.modules.config_validator import fetch_and_validate_module_co
 from nv_ingest.util.tracing import traceable
 
 # reuse pdf schema and exception handler for now (fixme)
-from nv_ingest.schemas.pdf_extractor_schema import PDFExtractorSchema  # isort: skip
+from nv_ingest_common.schemas.pdf_extractor_schema import PDFExtractorSchema  # isort: skip
 
 logger = logging.getLogger(__name__)
 

@@ -19,9 +19,9 @@ from mrc.core import operators as ops
 
 import cudf
 
-from nv_ingest.schemas.associate_nearby_text_schema import AssociateNearbyTextSchema
-from nv_ingest.schemas.metadata_schema import TextTypeEnum
-from nv_ingest.schemas.metadata_schema import validate_metadata
+from nv_ingest_common.schemas.associate_nearby_text_schema import AssociateNearbyTextSchema
+from nv_ingest_common.schemas.metadata_schema import TextTypeEnum
+from nv_ingest_common.schemas.metadata_schema import validate_metadata
 from nv_ingest.util.exception_handlers.decorators import nv_ingest_node_failure_context_manager
 from nv_ingest.util.flow_control import filter_by_task
 from nv_ingest.util.modules.config_validator import fetch_and_validate_module_config

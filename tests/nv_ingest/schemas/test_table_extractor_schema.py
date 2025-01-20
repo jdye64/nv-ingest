@@ -1,8 +1,8 @@
 import pytest
 from pydantic import ValidationError
 
-from nv_ingest.schemas.table_extractor_schema import TableExtractorConfigSchema
-from nv_ingest.schemas.table_extractor_schema import TableExtractorSchema
+from nv_ingest_common.schemas.table_extractor_schema import TableExtractorConfigSchema
+from nv_ingest_common.schemas.table_extractor_schema import TableExtractorSchema
 
 
 # Test cases for TableExtractorConfigSchema

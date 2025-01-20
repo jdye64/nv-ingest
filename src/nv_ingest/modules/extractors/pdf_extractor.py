@@ -25,7 +25,7 @@ from mrc.core.node import RoundRobinRouter
 import cudf
 
 from nv_ingest.extraction_workflows import pdf
-from nv_ingest.schemas.pdf_extractor_schema import PDFExtractorSchema
+from nv_ingest_common.schemas.pdf_extractor_schema import PDFExtractorSchema
 from nv_ingest.util.exception_handlers.decorators import nv_ingest_node_failure_context_manager
 from nv_ingest.util.exception_handlers.pdf import create_exception_tag
 from nv_ingest.util.flow_control import filter_by_task

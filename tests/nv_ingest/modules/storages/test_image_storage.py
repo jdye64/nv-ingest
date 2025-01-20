@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 from minio import Minio
 
-from nv_ingest.schemas.metadata_schema import ContentTypeEnum
+from nv_ingest_common.schemas.metadata_schema import ContentTypeEnum
 
 from ....import_checks import CUDA_DRIVER_OK
 from ....import_checks import MORPHEUS_IMPORT_OK

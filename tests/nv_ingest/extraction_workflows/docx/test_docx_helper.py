@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 from nv_ingest.extraction_workflows.docx.docx_helper import python_docx
-from nv_ingest.schemas.metadata_schema import ImageTypeEnum
+from nv_ingest_common.schemas.metadata_schema import ImageTypeEnum
 
 
 @pytest.fixture

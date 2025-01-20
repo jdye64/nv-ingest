@@ -14,7 +14,7 @@ from morpheus.utils.module_utils import register_module
 from pydantic import ValidationError
 
 from nv_ingest.modules.content_extractor_module import ContentExtractorLoaderFactory
-from nv_ingest.schemas.file_source_pipe_schema import FileSourcePipeSchema
+from nv_ingest_common.schemas.file_source_pipe_schema import FileSourcePipeSchema
 
 logger = logging.getLogger(__name__)
 

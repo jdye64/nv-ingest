@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 from nv_ingest.extraction_workflows.pdf.unstructured_io_helper import unstructured_io
-from nv_ingest.schemas.metadata_schema import TextTypeEnum
+from nv_ingest_common.schemas.metadata_schema import TextTypeEnum
 
 
 def requires_key():

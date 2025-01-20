@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from nv_ingest.schemas.ingest_job_schema import DocumentTypeEnum
-from nv_ingest.schemas.metadata_schema import ContentTypeEnum
+from nv_ingest_common.schemas.ingest_job_schema import DocumentTypeEnum
+from nv_ingest_common.schemas.metadata_schema import ContentTypeEnum
 
 DOC_TO_CONTENT_MAP = {
     DocumentTypeEnum.bmp: ContentTypeEnum.IMAGE,

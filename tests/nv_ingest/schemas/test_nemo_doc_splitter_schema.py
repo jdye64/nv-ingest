@@ -5,7 +5,7 @@
 import pytest
 from pydantic import ValidationError
 
-from nv_ingest.schemas import DocumentSplitterSchema
+from nv_ingest_common.schemas import DocumentSplitterSchema
 
 
 def test_document_splitter_schema_defaults():

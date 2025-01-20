@@ -105,7 +105,7 @@ def create_nvingest_schema(dense_dim: int = 1024, sparse: bool = False) -> Colle
     """
     Creates a schema for the nv-ingest produced data. This is currently setup to follow
     the default expected schema fields in nv-ingest. You can see more about the declared fields
-    in the `nv_ingest.schemas.vdb_task_sink_schema.build_default_milvus_config` function. This
+    in the `nv_ingest_common.schemas.vdb_task_sink_schema.build_default_milvus_config` function. This
     schema should have the fields declared in that function, at a minimum. To ensure proper
     data propagation to milvus.
 

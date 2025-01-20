@@ -16,8 +16,8 @@ from morpheus.utils.module_utils import register_module
 from opentelemetry.trace.span import format_trace_id
 from pydantic import BaseModel
 
-from nv_ingest.schemas import validate_ingest_job
-from nv_ingest.schemas.message_broker_source_schema import MessageBrokerTaskSourceSchema
+from nv_ingest_common.schemas import validate_ingest_job
+from nv_ingest_common.schemas.message_broker_source_schema import MessageBrokerTaskSourceSchema
 from nv_ingest.util.modules.config_validator import fetch_and_validate_module_config
 from nv_ingest.util.tracing.logging import annotate_cm
 

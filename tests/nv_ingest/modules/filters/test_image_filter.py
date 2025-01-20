@@ -6,11 +6,11 @@
 import pandas as pd
 import pytest
 
-from nv_ingest.schemas.metadata_schema import ContentTypeEnum
-from nv_ingest.schemas.metadata_schema import ImageTypeEnum
-from nv_ingest.schemas.metadata_schema import SourceTypeEnum
-from nv_ingest.schemas.metadata_schema import TextTypeEnum
-from nv_ingest.schemas.metadata_schema import validate_metadata
+from nv_ingest_common.schemas.metadata_schema import ContentTypeEnum
+from nv_ingest_common.schemas.metadata_schema import ImageTypeEnum
+from nv_ingest_common.schemas.metadata_schema import SourceTypeEnum
+from nv_ingest_common.schemas.metadata_schema import TextTypeEnum
+from nv_ingest_common.schemas.metadata_schema import validate_metadata
 
 from ....import_checks import CUDA_DRIVER_OK
 from ....import_checks import MORPHEUS_IMPORT_OK

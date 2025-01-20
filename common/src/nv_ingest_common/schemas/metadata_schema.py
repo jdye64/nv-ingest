@@ -14,7 +14,7 @@ from typing import Union
 
 from pydantic import field_validator, model_validator
 
-from nv_ingest.schemas.base_model_noext import BaseModelNoExt
+from nv_ingest_common.schemas.base_model_noext import BaseModelNoExt
 from nv_ingest.util.converters import datetools
 
 logger = logging.getLogger(__name__)

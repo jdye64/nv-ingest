@@ -13,7 +13,7 @@ import pandas as pd
 
 from morpheus.config import Config
 
-from nv_ingest.schemas.table_extractor_schema import TableExtractorSchema
+from nv_ingest_common.schemas.table_extractor_schema import TableExtractorSchema
 from nv_ingest.stages.multiprocessing_stage import MultiProcessingBaseStage
 from nv_ingest.util.image_processing.transforms import base64_to_numpy
 from nv_ingest.util.image_processing.transforms import check_numpy_image_size

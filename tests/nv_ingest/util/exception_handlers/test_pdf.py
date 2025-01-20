@@ -7,8 +7,8 @@ from unittest.mock import patch
 
 import pytest
 
-from nv_ingest.schemas.metadata_schema import StatusEnum
-from nv_ingest.schemas.metadata_schema import TaskTypeEnum
+from nv_ingest_common.schemas.metadata_schema import StatusEnum
+from nv_ingest_common.schemas.metadata_schema import TaskTypeEnum
 from nv_ingest.util.exception_handlers.pdf import create_exception_tag
 from nv_ingest.util.exception_handlers.pdf import pdfium_exception_handler
 

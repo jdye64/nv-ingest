@@ -15,11 +15,11 @@ from json import JSONDecodeError
 from typing import Any
 
 from typing import List
-from nv_ingest.schemas import validate_ingest_job
-from nv_ingest.schemas.message_wrapper_schema import MessageWrapper
+from nv_ingest_common.schemas import validate_ingest_job
+from nv_ingest_common.schemas.message_wrapper_schema import MessageWrapper
 from nv_ingest.service.meta.ingest.ingest_service_meta import IngestServiceMeta
 from nv_ingest.util.message_brokers.redis.redis_client import RedisClient
-from nv_ingest.schemas.processing_job_schema import ProcessingJob
+from nv_ingest_common.schemas.processing_job_schema import ProcessingJob
 
 logger = logging.getLogger("uvicorn")
 

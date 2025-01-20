@@ -15,11 +15,11 @@ from morpheus.utils.module_utils import register_module
 
 import cudf
 
-from nv_ingest.schemas.image_filter_schema import ImageFilterSchema
-from nv_ingest.schemas.metadata_schema import ContentTypeEnum
-from nv_ingest.schemas.metadata_schema import InfoMessageMetadataSchema
-from nv_ingest.schemas.metadata_schema import StatusEnum
-from nv_ingest.schemas.metadata_schema import TaskTypeEnum
+from nv_ingest_common.schemas.image_filter_schema import ImageFilterSchema
+from nv_ingest_common.schemas.metadata_schema import ContentTypeEnum
+from nv_ingest_common.schemas.metadata_schema import InfoMessageMetadataSchema
+from nv_ingest_common.schemas.metadata_schema import StatusEnum
+from nv_ingest_common.schemas.metadata_schema import TaskTypeEnum
 from nv_ingest.util.exception_handlers.decorators import nv_ingest_node_failure_context_manager
 from nv_ingest.util.flow_control import filter_by_task
 from nv_ingest.util.modules.config_validator import fetch_and_validate_module_config

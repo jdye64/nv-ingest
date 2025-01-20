@@ -1,8 +1,8 @@
 import pytest
 from pydantic import ValidationError
 
-from nv_ingest.schemas.image_extractor_schema import ImageConfigSchema
-from nv_ingest.schemas.image_extractor_schema import ImageExtractorSchema
+from nv_ingest_common.schemas.image_extractor_schema import ImageConfigSchema
+from nv_ingest_common.schemas.image_extractor_schema import ImageExtractorSchema
 
 
 def test_image_config_schema_valid():

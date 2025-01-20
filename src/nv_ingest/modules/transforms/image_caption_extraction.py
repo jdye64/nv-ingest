@@ -25,8 +25,8 @@ from transformers import AutoTokenizer
 
 import cudf
 
-from nv_ingest.schemas.image_caption_extraction_schema import ImageCaptionExtractionSchema
-from nv_ingest.schemas.metadata_schema import ContentTypeEnum
+from nv_ingest_common.schemas.image_caption_extraction_schema import ImageCaptionExtractionSchema
+from nv_ingest_common.schemas.metadata_schema import ContentTypeEnum
 from nv_ingest.util.exception_handlers.decorators import nv_ingest_node_failure_context_manager
 from nv_ingest.util.flow_control import filter_by_task
 from nv_ingest.util.modules.config_validator import fetch_and_validate_module_config

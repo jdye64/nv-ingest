@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from morpheus.config import Config
 
 import nv_ingest.extraction_workflows.image as image_helpers
-from nv_ingest.schemas.image_extractor_schema import ImageExtractorSchema
+from nv_ingest_common.schemas.image_extractor_schema import ImageExtractorSchema
 from nv_ingest.stages.multiprocessing_stage import MultiProcessingBaseStage
 
 logger = logging.getLogger(f"morpheus.{__name__}")

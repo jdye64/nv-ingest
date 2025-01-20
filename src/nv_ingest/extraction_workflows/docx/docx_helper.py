@@ -29,9 +29,9 @@ from typing import IO
 from typing import Union
 
 from nv_ingest.extraction_workflows.docx.docxreader import DocxReader
-from nv_ingest.schemas.metadata_schema import AccessLevelEnum
-from nv_ingest.schemas.metadata_schema import SourceTypeEnum
-from nv_ingest.schemas.metadata_schema import TextTypeEnum
+from nv_ingest_common.schemas.metadata_schema import AccessLevelEnum
+from nv_ingest_common.schemas.metadata_schema import SourceTypeEnum
+from nv_ingest_common.schemas.metadata_schema import TextTypeEnum
 
 logger = logging.getLogger(__name__)
 

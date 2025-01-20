@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from nv_ingest.schemas.otel_tracer_schema import OpenTelemetryTracerSchema
+from nv_ingest_common.schemas.otel_tracer_schema import OpenTelemetryTracerSchema
 
 
 def test_otel_tracer_schema_defaults():

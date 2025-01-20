@@ -9,7 +9,7 @@ import pandas as pd
 from packaging import version as pkgversion
 from sklearn.cluster import DBSCAN
 
-from nv_ingest.schemas.metadata_schema import TableFormatEnum
+from nv_ingest_common.schemas.metadata_schema import TableFormatEnum
 from nv_ingest.util.image_processing.transforms import base64_to_numpy
 from nv_ingest.util.nim.helpers import ModelInterface
 from nv_ingest.util.nim.helpers import preprocess_image_for_paddle

@@ -5,7 +5,7 @@
 import pytest
 from pydantic import ValidationError
 
-from nv_ingest.schemas import TaskInjectionSchema
+from nv_ingest_common.schemas import TaskInjectionSchema
 
 
 def test_task_injection_schema_default():

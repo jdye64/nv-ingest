@@ -22,7 +22,7 @@ from morpheus.pipeline.stage_schema import StageSchema
 
 import cudf
 
-from nv_ingest.schemas import validate_ingest_job
+from nv_ingest_common.schemas import validate_ingest_job
 
 logger = logging.getLogger(__name__)
 

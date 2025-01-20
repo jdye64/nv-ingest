@@ -5,9 +5,9 @@
 
 import logging
 
-from nv_ingest.schemas.metadata_schema import StatusEnum
-from nv_ingest.schemas.metadata_schema import TaskTypeEnum
-from nv_ingest.schemas.metadata_schema import validate_metadata
+from nv_ingest_common.schemas.metadata_schema import StatusEnum
+from nv_ingest_common.schemas.metadata_schema import TaskTypeEnum
+from nv_ingest_common.schemas.metadata_schema import validate_metadata
 
 logger = logging.getLogger(__name__)
 

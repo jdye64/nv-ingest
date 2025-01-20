@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from nv_ingest.schemas.job_counter_schema import JobCounterSchema
+from nv_ingest_common.schemas.job_counter_schema import JobCounterSchema
 
 
 def test_job_counter_schema_defaults():

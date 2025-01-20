@@ -13,3 +13,4 @@ class ImageCaptionExtractionSchema(BaseModel):
     model_name: str = "meta/llama-3.2-90b-vision-instruct"
     raise_on_failure: bool = False
     model_config = ConfigDict(extra="forbid")
+    model_config["protected_namespaces"] = ()

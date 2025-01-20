@@ -14,8 +14,8 @@ import requests
 from pydantic import BaseModel
 from morpheus.config import Config
 
-from nv_ingest.schemas.image_caption_extraction_schema import ImageCaptionExtractionSchema
-from nv_ingest.schemas.metadata_schema import ContentTypeEnum
+from nv_ingest_common.schemas.image_caption_extraction_schema import ImageCaptionExtractionSchema
+from nv_ingest_common.schemas.metadata_schema import ContentTypeEnum
 from nv_ingest.stages.multiprocessing_stage import MultiProcessingBaseStage
 from nv_ingest.util.image_processing.transforms import scale_image_to_encoding_size
 

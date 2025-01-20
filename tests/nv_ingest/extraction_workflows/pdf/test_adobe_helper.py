@@ -8,7 +8,7 @@ from io import BytesIO
 import pandas as pd
 import pytest
 
-from nv_ingest.schemas.metadata_schema import TextTypeEnum
+from nv_ingest_common.schemas.metadata_schema import TextTypeEnum
 
 from ....import_checks import ADOBE_IMPORT_OK
 

@@ -12,7 +12,7 @@ from typing import Tuple
 import pandas as pd
 from morpheus.config import Config
 
-from nv_ingest.schemas.chart_extractor_schema import ChartExtractorSchema
+from nv_ingest_common.schemas.chart_extractor_schema import ChartExtractorSchema
 from nv_ingest.stages.multiprocessing_stage import MultiProcessingBaseStage
 from nv_ingest.util.image_processing.table_and_chart import join_cached_and_deplot_output
 from nv_ingest.util.nim.cached import CachedModelInterface

@@ -48,15 +48,18 @@ from pandas import DataFrame
 
 from build.lib.nv_ingest.extraction_workflows.image.image_handlers import load_and_preprocess_image
 from nv_ingest.extraction_workflows.image.image_handlers import extract_tables_and_charts_from_images
-from nv_ingest.schemas.image_extractor_schema import ImageConfigSchema
-from nv_ingest.schemas.metadata_schema import ContentTypeEnum
-from nv_ingest.schemas.metadata_schema import ImageTypeEnum
-from nv_ingest.schemas.metadata_schema import StdContentDescEnum
-from nv_ingest.schemas.metadata_schema import TextTypeEnum
-from nv_ingest.schemas.metadata_schema import validate_metadata
+from nv_ingest_common.schemas.image_extractor_schema import ImageConfigSchema
+from nv_ingest_common.schemas.metadata_schema import ContentTypeEnum
+from nv_ingest_common.schemas.metadata_schema import ImageTypeEnum
+from nv_ingest_common.schemas.metadata_schema import StdContentDescEnum
+from nv_ingest_common.schemas.metadata_schema import TextTypeEnum
+from nv_ingest_common.schemas.metadata_schema import validate_metadata
 from nv_ingest.util.converters import bytetools
 from nv_ingest.util.detectors.language import detect_language
-from nv_ingest.util.pdf.metadata_aggregators import construct_table_and_chart_metadata, CroppedImageWithContent
+from common.src.nv_ingest_common.pdf.metadata_aggregators import (
+    construct_table_and_chart_metadata,
+    CroppedImageWithContent,
+)
 
 PARAGRAPH_FORMATS = ["text", "markdown"]
 TABLE_FORMATS = ["markdown", "markdown_light", "csv", "tag"]

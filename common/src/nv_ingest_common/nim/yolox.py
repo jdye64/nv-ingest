@@ -19,7 +19,7 @@ import torchvision
 from PIL import Image
 
 from nv_ingest.util.image_processing.transforms import scale_image_to_encoding_size
-from nv_ingest.util.nim.helpers import ModelInterface
+from nv_ingest_common.nim.helpers import ModelInterface
 
 logger = logging.getLogger(__name__)
 

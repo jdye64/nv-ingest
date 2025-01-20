@@ -25,24 +25,24 @@ from typing import Tuple
 
 import numpy as np
 import pypdfium2 as libpdfium
-import common.src.nv_ingest_common.nim.yolox as yolox_utils
+import nv_ingest_common.nim.yolox as yolox_utils
 
-from nv_ingest.schemas.metadata_schema import AccessLevelEnum
-from nv_ingest.schemas.metadata_schema import TableFormatEnum
-from nv_ingest.schemas.metadata_schema import TextTypeEnum
-from nv_ingest.schemas.pdf_extractor_schema import PDFiumConfigSchema
+from nv_ingest_common.schemas.metadata_schema import AccessLevelEnum
+from nv_ingest_common.schemas.metadata_schema import TableFormatEnum
+from nv_ingest_common.schemas.metadata_schema import TextTypeEnum
+from nv_ingest_common.schemas.pdf_extractor_schema import PDFiumConfigSchema
 from nv_ingest.util.image_processing.transforms import crop_image
 from nv_ingest.util.image_processing.transforms import numpy_to_base64
-from nv_ingest.util.nim.helpers import create_inference_client
-from nv_ingest.util.pdf.metadata_aggregators import Base64Image
-from nv_ingest.util.pdf.metadata_aggregators import CroppedImageWithContent
-from nv_ingest.util.pdf.metadata_aggregators import construct_image_metadata_from_pdf_image
-from nv_ingest.util.pdf.metadata_aggregators import construct_table_and_chart_metadata
-from nv_ingest.util.pdf.metadata_aggregators import construct_text_metadata
-from nv_ingest.util.pdf.metadata_aggregators import extract_pdf_metadata
-from nv_ingest.util.pdf.pdfium import PDFIUM_PAGEOBJ_MAPPING
-from nv_ingest.util.pdf.pdfium import pdfium_pages_to_numpy
-from nv_ingest.util.pdf.pdfium import pdfium_try_get_bitmap_as_numpy
+from nv_ingest_common.nim.helpers import create_inference_client
+from nv_ingest_common.pdf.metadata_aggregators import Base64Image
+from nv_ingest_common.pdf.metadata_aggregators import CroppedImageWithContent
+from nv_ingest_common.pdf.metadata_aggregators import construct_image_metadata_from_pdf_image
+from nv_ingest_common.pdf.metadata_aggregators import construct_table_and_chart_metadata
+from nv_ingest_common.pdf.metadata_aggregators import construct_text_metadata
+from nv_ingest_common.pdf.metadata_aggregators import extract_pdf_metadata
+from nv_ingest_common.pdf.impl.pdfium import PDFIUM_PAGEOBJ_MAPPING
+from nv_ingest_common.pdf.impl.pdfium import pdfium_pages_to_numpy
+from nv_ingest_common.pdf.impl.pdfium import pdfium_try_get_bitmap_as_numpy
 
 YOLOX_MAX_BATCH_SIZE = 8
 YOLOX_MAX_WIDTH = 1536

@@ -6,7 +6,7 @@
 import pytest
 from pydantic import ValidationError
 
-from nv_ingest.schemas.image_filter_schema import ImageFilterSchema
+from nv_ingest_common.schemas.image_filter_schema import ImageFilterSchema
 
 
 def valid_module_config():

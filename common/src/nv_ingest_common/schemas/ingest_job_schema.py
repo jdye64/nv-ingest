@@ -12,10 +12,10 @@ from typing import Literal
 from typing import Optional
 from typing import Union
 
-from pydantic import field_validator, model_validator, Field
+from pydantic import ConfigDict, field_validator, model_validator, Field
 
-from nv_ingest.schemas.base_model_noext import BaseModelNoExt
-from nv_ingest.schemas.metadata_schema import ContentTypeEnum
+from nv_ingest_common.schemas.base_model_noext import BaseModelNoExt
+from nv_ingest_common.schemas.metadata_schema import ContentTypeEnum
 from typing_extensions import Annotated
 
 logger = logging.getLogger(__name__)
@@ -106,6 +106,8 @@ class IngestTaskCaptionSchema(BaseModelNoExt):
     endpoint_url: Optional[str] = None
     prompt: Optional[str] = None
     model_name: Optional[str] = None
+    model_config = ConfigDict(extra="forbid")
+    model_config["protected_namespaces"] = ()
 
 
 class IngestTaskFilterParamsSchema(BaseModelNoExt):
