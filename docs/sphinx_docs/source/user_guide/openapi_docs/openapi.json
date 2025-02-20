@@ -1,0 +1,19 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "NV-Ingest Microservice",
+    "description": "Service for ingesting heterogenous datatypes",
+    "contact": {
+      "name": "NVIDIA Corporation",
+      "url": "https://nvidia.com/"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {},
+  "tags": [
+    {
+      "name": "Health",
+      "description": "Health checks"
+    }
+  ]
+}

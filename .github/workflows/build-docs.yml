@@ -43,6 +43,11 @@ jobs:
           . venv/bin/activate
           pip install -r docs/requirements.txt
 
+      - name: Generate OpenAPI JSON
+        run: |
+          . venv/bin/activate
+          PYTHONPATH=$(pwd)/src:$(pwd)/client/src python ./scripts/generate_openapi.py
+
       - name: Build Sphinx API Docs
         run: |
           . venv/bin/activate

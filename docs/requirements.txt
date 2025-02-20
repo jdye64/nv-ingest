@@ -11,3 +11,4 @@ mkdocs-site-urls
 sphinx
 sphinx-markdown-builder
 sphinx-rtd-theme
+sphinxcontrib-openapi

@@ -13,10 +13,8 @@ import time
 import traceback
 import uuid
 
-from fastapi import APIRouter, Request, Response
-from fastapi import Depends
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi import File, UploadFile, Form
-from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 from nv_ingest_client.primitives.jobs.job_spec import JobSpec
 from nv_ingest_client.primitives.tasks.extract import ExtractTask
@@ -47,6 +45,52 @@ async def _get_ingest_service() -> IngestServiceMeta:
 
 
 INGEST_SERVICE_T = Annotated[IngestServiceMeta, Depends(_get_ingest_service)]
+
+# Things needed for this rework ....
+# 1. Support for a CURL file upload
+# 2. Full support for all operations that are supported by the client codebase
+# 3. Flag for format that should be returned to the calling client.
+# 4. Accept an actual Pydantic model as the parameter. This will ensure docs are more clear as well
+
+
+@router.post(
+    "/ingest_docs",
+    deprecated=False,
+    responses={
+        200: {"description": "Submission was successful"},
+        500: {"description": "Error encountered during submission"},
+    },
+    tags=["Ingestion"],
+    summary="submit document to the core nv ingestion service for processing",
+    description="""
+    ## Create a New Item
+    This endpoint allows you to create an item.
+    - **Request Body:** JSON containing `name` and `price`
+    - **Response:** Returns the created item with an `id`
+    - **Example Request:**
+      ```json
+      {
+        "name": "Laptop",
+        "price": 999.99
+      }
+      ```
+    - **Example Response:**
+      ```json
+      {
+        "id": 1,
+        "name": "Laptop",
+        "price": 999.99
+      }
+      ```
+    """,
+    operation_id="ingest_docs",
+    status_code=status.HTTP_200_OK,
+)
+async def ingest_docs_base64_payload(
+    ingest_service: INGEST_SERVICE_T,
+):
+    print("welcome")
+    return "welcome"
 
 
 # POST /submit
