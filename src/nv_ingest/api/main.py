@@ -14,6 +14,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 from .v1.health import router as HealthApiRouter
 from .v1.ingest import router as IngestApiRouter
+from .v1.metric import router as MetricApiRouter
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,7 @@ app = FastAPI()
 
 app.include_router(IngestApiRouter)
 app.include_router(HealthApiRouter)
+app.include_router(MetricApiRouter)
 
 # Set up the tracer provider and add a processor for exporting traces
 resource = Resource(attributes={"service.name": "nv-ingest"})

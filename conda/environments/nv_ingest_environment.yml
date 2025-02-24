@@ -21,6 +21,8 @@ dependencies:
   - opentelemetry-api>=1.27.0
   - opentelemetry-exporter-otlp>=1.27.0
   - opentelemetry-sdk>=1.27.0
+  - prometheus_client>=0.21.1
+  - psutil>=6.1.1
   - pydantic>2.0.0
   - pydantic-settings>2.0.0
   - pypdfium2>=4.30.0
