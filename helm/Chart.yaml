@@ -50,6 +50,9 @@ dependencies:
     repository: "alias:nvidia-nim"
     version: 1.3.0
     condition: nvEmbedqaDeployed
+  - name: nvidia-nim-nemoretriever-graphic-elements-v1
+    repository: "alias:nvstaging-nim"
+    version: 1.2.0
   - name: milvus
     repository: https://zilliztech.github.io/milvus-helm
     version: 4.1.11
