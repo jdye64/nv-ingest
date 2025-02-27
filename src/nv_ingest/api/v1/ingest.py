@@ -14,9 +14,9 @@ import traceback
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from fastapi import File, UploadFile, Form
+from fastapi import File, UploadFile, Form, Depends
 from fastapi.responses import JSONResponse
-from nv_ingest_client.primitives.jobs.job_spec import JobSpec
+from nv_ingest_client.primitives.jobs.job_spec import JobPayload, JobSpec
 from nv_ingest_client.primitives.tasks.extract import ExtractTask
 from opentelemetry import trace
 from redis import RedisError
@@ -48,14 +48,88 @@ async def _get_ingest_service() -> IngestServiceMeta:
 INGEST_SERVICE_T = Annotated[IngestServiceMeta, Depends(_get_ingest_service)]
 
 # Things needed for this rework ....
-# 1. Support for a CURL file upload
+# 1. People HATE sending raw large json payloads to the endpoints, keep parameters flat and not nested
+# 1. Support for a CURL file upload - Java code generally, can't just use our sdk or cli
 # 2. Full support for all operations that are supported by the client codebase
 # 3. Flag for format that should be returned to the calling client.
 # 4. Accept an actual Pydantic model as the parameter. This will ensure docs are more clear as well
+# 5. Support an endpoint that accepts a purely base64 encoded payload
+
+
+def parse_job_spec(id: str = Form(...), payload: JobPayload = Form(...)):
+    return JobSpec(id=id, payload=payload)
+
+
+# @router.post(
+#     "/ingest_depends",
+#     deprecated=False,
+#     responses={
+#         200: {"description": "Submission was successful"},
+#         500: {"description": "Error encountered during submission"},
+#     },
+#     tags=["Ingestion"],
+#     summary="submit document to the core nv ingestion service for processing",
+#     description="""
+#     ## Create a New Item
+#     This endpoint allows you to create an item.
+#     - **Request Body:** JSON containing `name` and `price`
+#     - **Response:** Returns the created item with an `id`
+#     - **Example Request:**
+#       ```json
+#       {
+#         "name": "Laptop",
+#         "price": 999.99
+#       }
+#       ```
+#     - **Example Response:**
+#       ```json
+#       {
+#         "id": 1,
+#         "name": "Laptop",
+#         "price": 999.99
+#       }
+#       ```
+#     """,
+#     operation_id="ingest_docs",
+#     status_code=status.HTTP_200_OK,
+# )
+# async def ingest_docs_test(
+#     ingest_service: INGEST_SERVICE_T,
+#     job_spec: JobSpec = Depends(parse_job_spec),
+#     file: UploadFile = File(...)
+# ):
+#     try:
+#         print(f"Welcome, Job_Spec: {job_spec}")
+#         print(f"Job_Id: {job_spec.id}")
+#         print(f"Payload: {job_spec.payload}")
+
+#         # Testing ... comment out later
+#         submitted_job_id = uuid.uuid4()
+#         print(f"Simulated Submitted Job_Id: {submitted_job_id}")
+#         return submitted_job_id
+#     except Exception as ex:
+#         traceback.print_exc()
+#         raise HTTPException(status_code=500, detail=f"Nv-Ingest Internal Server Error: {str(ex)}")
+
+
+def parse(job_spec: str = Form(...)) -> JobSpec:
+    job_spec_data = json.loads(job_spec)
+    return JobSpec(**job_spec_data)
+
+
+@router.post("/upload/", response_model=JobSpec)
+async def upload_file(file: UploadFile = File(...), job_spec: JobSpec = Depends(parse)):
+    # Convert the stringified JSON into a dictionary
+    job_spec_data = json.loads(job_spec)
+
+    # Validate and parse into Pydantic model
+    parsed_job_spec = JobSpec(**job_spec_data)
+
+    return {"filename": file.filename, "job_spec": parsed_job_spec.dict()}
 
 
 @router.post(
-    "/ingest_docs",
+    "/ingest_json_str_form_body",
     deprecated=False,
     responses={
         200: {"description": "Submission was successful"},
@@ -63,35 +137,24 @@ INGEST_SERVICE_T = Annotated[IngestServiceMeta, Depends(_get_ingest_service)]
     },
     tags=["Ingestion"],
     summary="submit document to the core nv ingestion service for processing",
-    description="""
-    ## Create a New Item
-    This endpoint allows you to create an item.
-    - **Request Body:** JSON containing `name` and `price`
-    - **Response:** Returns the created item with an `id`
-    - **Example Request:**
-      ```json
-      {
-        "name": "Laptop",
-        "price": 999.99
-      }
-      ```
-    - **Example Response:**
-      ```json
-      {
-        "id": 1,
-        "name": "Laptop",
-        "price": 999.99
-      }
-      ```
-    """,
     operation_id="ingest_docs",
     status_code=status.HTTP_200_OK,
 )
-async def ingest_docs_base64_payload(
-    ingest_service: INGEST_SERVICE_T,
+async def ingest_docs_next(
+    ingest_service: INGEST_SERVICE_T, file: UploadFile = File(...), job_spec: JobSpec = Form(...)
 ):
-    print("welcome")
-    return "welcome"
+    try:
+        print(f"Welcome, Job_Spec: {job_spec}")
+        print(f"Job_Id: {job_spec.id}")
+        print(f"Payload: {job_spec.payload}")
+
+        # Testing ... comment out later
+        submitted_job_id = uuid.uuid4()
+        print(f"Simulated Submitted Job_Id: {submitted_job_id}")
+        return submitted_job_id
+    except Exception as ex:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Nv-Ingest Internal Server Error: {str(ex)}")
 
 
 # POST /submit
