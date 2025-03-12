@@ -16,6 +16,7 @@ services:
       - "8002:8002"
     user: root
     environment:
+      - NIM_MODEL_PROFILE=edc693c6fccd68d266622eace04225421e353d7ce31e3b207afc5ff35124127b
       - NIM_HTTP_API_PORT=8000
       - NIM_TRITON_LOG_VERBOSE=1
       - NGC_API_KEY=${NIM_NGC_API_KEY:-${NGC_API_KEY:-ngcapikey}}
@@ -30,6 +31,7 @@ services:
       # Triton OpenTelemetry Settings
       - TRITON_OTEL_URL=http://otel-collector:4318/v1/traces
       - TRITON_OTEL_RATE=1
+      - NIM_TRITON_REQUEST_TIMEOUT=1000000000
     deploy:
       resources:
         reservations:
@@ -47,6 +49,7 @@ services:
       - "8005:8002"
     user: root
     environment:
+      - NIM_MODEL_PROFILE=edc693c6fccd68d266622eace04225421e353d7ce31e3b207afc5ff35124127b
       - NIM_HTTP_API_PORT=8000
       - NIM_TRITON_LOG_VERBOSE=1
       - NGC_API_KEY=${NIM_NGC_API_KEY:-${NGC_API_KEY:-ngcapikey}}
@@ -69,6 +72,7 @@ services:
       - "8008:8002"
     user: root
     environment:
+      - NIM_MODEL_PROFILE=edc693c6fccd68d266622eace04225421e353d7ce31e3b207afc5ff35124127b
       - NIM_HTTP_API_PORT=8000
       - NIM_TRITON_LOG_VERBOSE=1
       - NGC_API_KEY=${STAGING_NIM_NGC_API_KEY}
@@ -352,7 +356,7 @@ services:
     container_name: grafana-service
     image: grafana/grafana
     ports:
-      - "3000:3000"
+      - "3005:3000"
 
   etcd:
     # Turn on to leverage the `vdb_upload` task
