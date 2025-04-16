@@ -68,14 +68,14 @@ async def get_ready_state() -> dict:
         yolox_graphic_elements_ready = is_ready(
             os.getenv("YOLOX_GRAPHIC_ELEMENTS_HTTP_ENDPOINT", None), "/v1/health/ready"
         )
-        paddle_ready = is_ready(os.getenv("PADDLE_HTTP_ENDPOINT", None), "/v1/health/ready")
+        #paddle_ready = is_ready(os.getenv("PADDLE_HTTP_ENDPOINT", None), "/v1/health/ready")
 
         if (
             ingest_ready
             and morpheus_pipeline_ready
             and yolox_page_elements_ready
             and yolox_graphic_elements_ready
-            and paddle_ready
+            #and paddle_ready
         ):
             return JSONResponse(content={"ready": True}, status_code=200)
         else:
@@ -84,7 +84,7 @@ async def get_ready_state() -> dict:
                 "morpheus_pipeline_ready": morpheus_pipeline_ready,
                 "page_elemenst_ready": yolox_page_elements_ready,
                 "graphic_elements_ready": yolox_graphic_elements_ready,
-                "paddle_ready": paddle_ready,
+                #"paddle_ready": paddle_ready,
             }
             logger.debug(f"Ready Statuses: {ready_statuses}")
             return JSONResponse(content=ready_statuses, status_code=503)
