@@ -323,7 +323,7 @@ def extract_table_data_from_image_internal(
             if table_content_format == TableFormatEnum.SIMPLE:
                 table_content = " ".join(text_predictions)
             elif table_content_format == TableFormatEnum.PSEUDO_MARKDOWN:
-                table_content = convert_rtx_translate_response_to_psuedo_markdown(bounding_boxes, text_predictions)
+                table_content = convert_paddle_response_to_psuedo_markdown(bounding_boxes, text_predictions)
             elif table_content_format == TableFormatEnum.MARKDOWN:
                 table_content = join_yolox_table_structure_and_paddle_output(
                     cell_predictions, bounding_boxes, text_predictions
