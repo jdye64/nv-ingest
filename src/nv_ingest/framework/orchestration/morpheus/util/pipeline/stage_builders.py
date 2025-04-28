@@ -254,7 +254,7 @@ def add_pdf_extractor_stage(pipe, morpheus_pipeline_config, ingest_config, defau
 def add_table_extractor_stage(pipe, morpheus_pipeline_config, ingest_config, default_cpu_count):
     yolox_grpc, yolox_http, yolox_auth, yolox_protocol = get_nim_service("yolox_table_structure")
     #paddle_grpc, paddle_http, paddle_auth, paddle_protocol = get_nim_service("paddle")
-    rtx_translate_grpc, rtx_translate_http, rtx_translate_auth, rtx_translate_protocol = get_nim_service("rtx_translate")
+    custom_ocr_grpc, custom_ocr_http, custom_ocr_auth, custom_ocr_protocol = get_nim_service("custom_ocr")
     table_content_extractor_config = ingest_config.get(
         "table_content_extraction_module",
         {
@@ -263,8 +263,8 @@ def add_table_extractor_stage(pipe, morpheus_pipeline_config, ingest_config, def
                 "yolox_infer_protocol": yolox_protocol,
                 #"paddle_endpoints": (paddle_grpc, paddle_http),
                 #"paddle_infer_protocol": paddle_protocol,
-                "rtx_translate_endpoints": (rtx_translate_grpc, rtx_translate_http),
-                "rtx_translate_infer_protocol": rtx_translate_protocol,
+                "custom_ocr_endpoints": (custom_ocr_grpc, custom_ocr_http),
+                "custom_ocr_infer_protocol": custom_ocr_protocol,
                 "auth_token": yolox_auth,
             }
         },
@@ -282,7 +282,7 @@ def add_table_extractor_stage(pipe, morpheus_pipeline_config, ingest_config, def
 def add_chart_extractor_stage(pipe, morpheus_pipeline_config, ingest_config, default_cpu_count):
     yolox_grpc, yolox_http, yolox_auth, yolox_protocol = get_nim_service("yolox_graphic_elements")
     #paddle_grpc, paddle_http, paddle_auth, paddle_protocol = get_nim_service("paddle")
-    rtx_translate_grpc, rtx_translate_http, rtx_translate_auth, rtx_translate_protocol = get_nim_service("rtx_translate")
+    custom_ocr_grpc, custom_ocr_http, custom_ocr_auth, custom_ocr_protocol = get_nim_service("custom_ocr")
 
     table_content_extractor_config = ingest_config.get(
         "chart_content_extraction_module",
@@ -292,8 +292,8 @@ def add_chart_extractor_stage(pipe, morpheus_pipeline_config, ingest_config, def
                 "yolox_infer_protocol": yolox_protocol,
                 #"paddle_endpoints": (paddle_grpc, paddle_http),
                 #"paddle_infer_protocol": paddle_protocol,
-                "rtx_translate_endpoints": (rtx_translate_grpc, rtx_translate_http),
-                "rtx_translate_infer_protocol": rtx_translate_protocol,
+                "custom_ocr_endpoints": (custom_ocr_grpc, custom_ocr_http),
+                "custom_ocr_infer_protocol": custom_ocr_protocol,
                 "auth_token": yolox_auth,
             }
         },
@@ -310,7 +310,7 @@ def add_chart_extractor_stage(pipe, morpheus_pipeline_config, ingest_config, def
 
 def add_infographic_extractor_stage(pipe, morpheus_pipeline_config, ingest_config, default_cpu_count):
     #paddle_grpc, paddle_http, paddle_auth, paddle_protocol = get_nim_service("paddle")
-    rtx_translate_grpc, rtx_translate_http, rtx_translate_auth, rtx_translate_protocol = get_nim_service("rtx_translate")
+    custom_ocr_grpc, custom_ocr_http, custom_ocr_auth, custom_ocr_protocol = get_nim_service("custom_ocr")
 
     infographic_content_extractor_config = ingest_config.get(
         "infographic_content_extraction_module",
@@ -318,9 +318,9 @@ def add_infographic_extractor_stage(pipe, morpheus_pipeline_config, ingest_confi
             "endpoint_config": {
                 #"paddle_endpoints": (paddle_grpc, paddle_http),
                 #"paddle_infer_protocol": paddle_protocol,
-                "rtx_translate_endpoints": (rtx_translate_grpc, rtx_translate_http),
-                "rtx_translate_infer_protocol": rtx_translate_protocol,
-                "auth_token": rtx_translate_auth,
+                "custom_ocr_endpoints": (custom_ocr_grpc, custom_ocr_http),
+                "custom_ocr_infer_protocol": custom_ocr_protocol,
+                "auth_token": custom_ocr_auth,
             }
         },
     )

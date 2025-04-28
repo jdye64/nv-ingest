@@ -214,7 +214,7 @@ class RTXTranslateModelInterface(ModelInterface):
 
         elif protocol == "http":
             logger.debug("Parsing output from HTTP RTXTranslate model (batched).")
-            return self._extract_content_from_rtx_translate_http_response(response, dims)
+            return self._extract_content_from_custom_ocr_http_response(response, dims)
 
         else:
             raise ValueError("Invalid protocol specified. Must be 'grpc' or 'http'.")
@@ -259,7 +259,7 @@ class RTXTranslateModelInterface(ModelInterface):
 
         return payload
 
-    def _extract_content_from_rtx_translate_http_response(
+    def _extract_content_from_custom_ocr_http_response(
         self,
         json_response: Dict[str, Any],
         dimensions: List[Dict[str, Any]],

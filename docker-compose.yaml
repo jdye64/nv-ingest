@@ -107,8 +107,8 @@ services:
 #              capabilities: [gpu]
 #    runtime: nvidia
 
-  rtx-translate:
-    image: ${RTX_TRANSLATE_IMAGE:-placeholder}:${RTX_TRANSLATE_TAG:-latest}
+  custom-ocr:
+    image: ${CUSTOM_OCR_IMAGE:-placeholder}:${CUSTOM_OCR_TAG:-latest}
     ports:
       - "8009:8000"
       - "8010:8001"
@@ -295,9 +295,9 @@ services:
       #- PADDLE_GRPC_ENDPOINT=paddle:8001
       #- PADDLE_HTTP_ENDPOINT=http://paddle:8000/v1/infer
       #- PADDLE_INFER_PROTOCOL=grpc
-      - RTX_TRANSLATE_GRPC_ENDPOINT=
-      - RTX_TRANSLATE_HTTP_ENDPOINT=http://rtx-translate:8000/infer
-      - RTX_TRANSLATE_INFER_PROTOCOL=http
+      - CUSTOM_OCR_GRPC_ENDPOINT=
+      - CUSTOM_OCR_HTTP_ENDPOINT=http://custom-ocr:8000/infer
+      - CUSTOM_OCR_INFER_PROTOCOL=http
       # build.nvidia.com hosted paddle endpoints.
       #- PADDLE_HTTP_ENDPOINT=https://ai.api.nvidia.com/v1/cv/baidu/paddleocr
       #- PADDLE_INFER_PROTOCOL=http

@@ -12,7 +12,7 @@ from typing import Tuple
 import pandas as pd
 
 from nv_ingest_api.internal.primitives.nim import NimClient
-from nv_ingest_api.internal.primitives.nim.model_interface.rtx_translate import RTXTranslateModelInterface
+from nv_ingest_api.internal.primitives.nim.model_interface.custom_ocr import RTXTranslateModelInterface
 from nv_ingest_api.internal.schemas.extract.extract_infographic_schema import (
     InfographicExtractorSchema,
 )
@@ -61,21 +61,21 @@ def _filter_infographic_images(
 
 def _update_infographic_metadata(
     base64_images: List[str],
-    rtx_translate_client: NimClient,
+    custom_ocr_client: NimClient,
     worker_pool_size: int = 8,  # Not currently used
     trace_info: Optional[Dict] = None,
 ) -> List[Tuple[str, Optional[Any], Optional[Any]]]:
     """
     Filters base64-encoded images and uses PaddleOCR to extract infographic data.
 
-    For each image that meets the minimum size, calls rtx_translate_client.infer to obtain
+    For each image that meets the minimum size, calls custom_ocr_client.infer to obtain
     (text_predictions, bounding_boxes). Invalid images are marked as skipped.
 
     Parameters
     ----------
     base64_images : List[str]
         List of base64-encoded images.
-    rtx_translate_client : NimClient
+    custom_ocr_client : NimClient
         Client instance for PaddleOCR inference.
     worker_pool_size : int, optional
         Worker pool size (currently not used), by default 8.
@@ -88,55 +88,55 @@ def _update_infographic_metadata(
         List of tuples in the same order as base64_images, where each tuple contains:
         (base64_image, text_predictions, bounding_boxes).
     """
-    logger.debug(f"Running infographic extraction using protocol {rtx_translate_client.protocol}")
+    logger.debug(f"Running infographic extraction using protocol {custom_ocr_client.protocol}")
 
     valid_images, valid_indices, results = _filter_infographic_images(base64_images)
-    data_rtx_translate = {"base64_images": valid_images}
+    data_custom_ocr = {"base64_images": valid_images}
 
     # worker_pool_size is not used in current implementation.
     _ = worker_pool_size
 
     try:
-        rtx_translate_results = rtx_translate_client.infer(
-            data=data_rtx_translate,
-            model_name="rtx_translate",
+        custom_ocr_results = custom_ocr_client.infer(
+            data=data_custom_ocr,
+            model_name="custom_ocr",
             stage_name="infographic_data_extraction",
-            max_batch_size=1 if rtx_translate_client.protocol == "grpc" else 2,
+            max_batch_size=1 if custom_ocr_client.protocol == "grpc" else 2,
             trace_info=trace_info,
         )
     except Exception as e:
-        logger.error(f"Error calling rtx_translate_client.infer: {e}", exc_info=True)
+        logger.error(f"Error calling custom_ocr_client.infer: {e}", exc_info=True)
         raise
 
-    if len(rtx_translate_results) != len(valid_images):
-        raise ValueError(f"Expected {len(valid_images)} rtx_translate results, got {len(rtx_translate_results)}")
+    if len(custom_ocr_results) != len(valid_images):
+        raise ValueError(f"Expected {len(valid_images)} custom_ocr results, got {len(custom_ocr_results)}")
 
-    for idx, rtx_translate_res in enumerate(rtx_translate_results):
+    for idx, custom_ocr_res in enumerate(custom_ocr_results):
         original_index = valid_indices[idx]
-        # Each rtx_translate_res is expected to be a tuple (text_predictions, bounding_boxes)
-        results[original_index] = (base64_images[original_index], rtx_translate_res[0], rtx_translate_res[1])
+        # Each custom_ocr_res is expected to be a tuple (text_predictions, bounding_boxes)
+        results[original_index] = (base64_images[original_index], custom_ocr_res[0], custom_ocr_res[1])
 
     return results
 
 
 def _create_clients(
-    rtx_translate_endpoints: Tuple[str, str],
-    rtx_translate_protocol: str,
+    custom_ocr_endpoints: Tuple[str, str],
+    custom_ocr_protocol: str,
     auth_token: str,
 ) -> NimClient:
-    #rtx_translate_model_interface = PaddleOCRModelInterface()
-    rtx_translate_model_interface = RTXTranslateModelInterface()
+    #custom_ocr_model_interface = PaddleOCRModelInterface()
+    custom_ocr_model_interface = RTXTranslateModelInterface()
 
-    logger.debug(f"Inference protocols: rtx_translate={rtx_translate_protocol}")
+    logger.debug(f"Inference protocols: custom_ocr={custom_ocr_protocol}")
 
-    rtx_translate_client = create_inference_client(
-        endpoints=rtx_translate_endpoints,
-        model_interface=rtx_translate_model_interface,
+    custom_ocr_client = create_inference_client(
+        endpoints=custom_ocr_endpoints,
+        model_interface=custom_ocr_model_interface,
         auth_token=auth_token,
-        infer_protocol=rtx_translate_protocol,
+        infer_protocol=custom_ocr_protocol,
     )
 
-    return rtx_translate_client
+    return custom_ocr_client
 
 
 def _meets_infographic_criteria(row: pd.Series) -> bool:
@@ -210,9 +210,9 @@ def extract_infographic_data_from_image_internal(
         return df_extraction_ledger, execution_trace_log
 
     endpoint_config = extraction_config.endpoint_config
-    rtx_translate_client = _create_clients(
-        endpoint_config.rtx_translate_endpoints,
-        endpoint_config.rtx_translate_infer_protocol,
+    custom_ocr_client = _create_clients(
+        endpoint_config.custom_ocr_endpoints,
+        endpoint_config.custom_ocr_infer_protocol,
         endpoint_config.auth_token,
     )
 
@@ -231,14 +231,14 @@ def extract_infographic_data_from_image_internal(
         # Call bulk update to extract infographic data.
         bulk_results = _update_infographic_metadata(
             base64_images=base64_images,
-            rtx_translate_client=rtx_translate_client,
+            custom_ocr_client=custom_ocr_client,
             worker_pool_size=endpoint_config.workers_per_progress_engine,
             trace_info=execution_trace_log,
         )
 
         # Write the extracted results back into the DataFrame.
         for result_idx, df_idx in enumerate(valid_indices):
-            # Unpack result: (base64_image, rtx_translate_bounding_boxes, rtx_translate_text_predictions)
+            # Unpack result: (base64_image, custom_ocr_bounding_boxes, custom_ocr_text_predictions)
             _, _, text_predictions = bulk_results[result_idx]
             table_content = " ".join(text_predictions) if text_predictions else None
             df_extraction_ledger.at[df_idx, "metadata"]["table_metadata"]["table_content"] = table_content
@@ -251,4 +251,4 @@ def extract_infographic_data_from_image_internal(
         raise
 
     finally:
-        rtx_translate_client.close()
+        custom_ocr_client.close()

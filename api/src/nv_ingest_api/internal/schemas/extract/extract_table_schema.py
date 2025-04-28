@@ -22,8 +22,8 @@ class TableExtractorConfigSchema(BaseModel):
     auth_token : Optional[str], default=None
         Authentication token required for secure services.
 
-    rtx_translate_endpoints : Tuple[Optional[str], Optional[str]], default=(None, None)
-        A tuple containing the gRPC and HTTP services for the rtx_translate endpoint.
+    custom_ocr_endpoints : Tuple[Optional[str], Optional[str]], default=(None, None)
+        A tuple containing the gRPC and HTTP services for the custom_ocr endpoint.
         Either the gRPC or HTTP service can be empty, but not both.
 
     Methods
@@ -47,8 +47,8 @@ class TableExtractorConfigSchema(BaseModel):
     yolox_endpoints: Tuple[Optional[str], Optional[str]] = (None, None)
     yolox_infer_protocol: str = ""
 
-    rtx_translate_endpoints: Tuple[Optional[str], Optional[str]] = (None, None)
-    rtx_translate_infer_protocol: str = ""
+    custom_ocr_endpoints: Tuple[Optional[str], Optional[str]] = (None, None)
+    custom_ocr_infer_protocol: str = ""
 
     nim_batch_size: int = 2
     workers_per_progress_engine: int = 5
@@ -81,7 +81,7 @@ class TableExtractorConfigSchema(BaseModel):
                 return None
             return service
 
-        for endpoint_name in ["yolox_endpoints", "rtx_translate_endpoints"]:
+        for endpoint_name in ["yolox_endpoints", "custom_ocr_endpoints"]:
             grpc_service, http_service = values.get(endpoint_name, (None, None))
             grpc_service = clean_service(grpc_service)
             http_service = clean_service(http_service)
