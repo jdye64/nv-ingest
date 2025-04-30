@@ -18,6 +18,12 @@ from nv_ingest_api.util.exception_handlers.decorators import (
     nv_ingest_node_failure_try_except,
 )
 
+from opentelemetry import trace, context
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+
+tracer = trace.get_tracer(__name__)
+otel_propagator = TraceContextTextMapPropagator()
+
 logger = logging.getLogger(__name__)
 
 
@@ -78,6 +84,12 @@ class PDFExtractorStage(RayActorStage):
         IngestControlMessage
             The updated message with the extracted DataFrame and extraction info in metadata.
         """
+        logger.error(f"PDFExtractorStage: ControlMessage: {control_message}")        
+        logger.error(f"PDFExtractorStage config: {control_message.config()}")
+        logger.error(f"PDFExtractorStage metdadata: {control_message.get_metadata()}")
+
+        trace_id = control_message.get_metadata()['trace_id']
+        logger.error(f"PDFExtractorStage trace_id: {trace_id}")
 
         logger.info("PDFExtractorStage.on_data: Starting PDF extraction process.")
 

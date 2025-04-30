@@ -4,7 +4,7 @@
 
 from abc import ABC
 from abc import abstractmethod
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from nv_ingest.framework.schemas.framework_message_wrapper_schema import MessageWrapper
 from nv_ingest.framework.schemas.framework_processing_job_schema import ProcessingJob
@@ -13,11 +13,11 @@ from nv_ingest_api.util.service_clients.client_base import FetchMode
 
 class IngestServiceMeta(ABC):
     @abstractmethod
-    async def submit_job(self, job_spec: MessageWrapper, trace_id: str) -> str:
+    async def submit_job(self, job_spec: MessageWrapper, trace_id: str, otel_context: Any) -> str:
         """Abstract method for submitting one or more jobs to the ingestion pipeline"""
 
     @abstractmethod
-    async def fetch_job(self, job_id: str):
+    async def fetch_job(self, job_id: str, otel_context: Any):
         """Abstract method for fetching job from ingestion service based on job_id"""
 
     @abstractmethod

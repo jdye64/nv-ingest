@@ -401,7 +401,7 @@ paddleocr-nim:
     runAsUser: 1000
     runAsGroup: 1000
     fsGroup: 1000
-  replicaCount: 1
+  replicaCount: 4
   serviceAccount:
     create: false
     name: ""
@@ -791,8 +791,8 @@ envVars:
   MINIO_PUBLIC_ADDRESS: http://localhost:9000
   MINIO_BUCKET: nv-ingest
 
-  PADDLE_GRPC_ENDPOINT: nv-ingest-paddle:8001
-  PADDLE_HTTP_ENDPOINT: http://nv-ingest-paddle:8000/v1/infer
+  PADDLE_GRPC_ENDPOINT: paddle-ocr-loadbalancer:8081
+  PADDLE_HTTP_ENDPOINT: http://paddle-ocr-loadbalancer:8080/v1/infer
   PADDLE_INFER_PROTOCOL: grpc
   NEMORETRIEVER_PARSE_HTTP_ENDPOINT: http://nim-vlm-text-extraction-nemoretriever-parse:8000/v1/chat/completions
   NEMORETRIEVER_PARSE_INFER_PROTOCOL: http

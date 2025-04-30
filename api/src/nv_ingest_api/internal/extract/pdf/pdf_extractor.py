@@ -6,6 +6,7 @@
 import pandas as pd
 from typing import Any, Dict, List, Optional, Tuple
 import logging
+from datetime import datetime
 
 from nv_ingest_api.internal.extract.pdf.engines.pdf_helpers import _orchestrate_row_extraction
 
@@ -55,11 +56,14 @@ def extract_primitives_from_pdf_internal(
         extractor_config = extractor_config
 
         # Apply the orchestration function to each row.
+        start_ts = datetime.now()
+        logger.error("START: df_extraction_ledger.apply()")
         extraction_series = df_extraction_ledger.apply(
             lambda row: _orchestrate_row_extraction(row, task_config, extractor_config, execution_trace_log), axis=1
         )
         # Explode the results if the extraction returns lists.
         extraction_series = extraction_series.explode().dropna()
+        logger.error(f"END: df_extraction_ledger.apply() - {datetime.now() - start_ts}")
 
         # Convert the extracted results into a DataFrame.
         if not extraction_series.empty:

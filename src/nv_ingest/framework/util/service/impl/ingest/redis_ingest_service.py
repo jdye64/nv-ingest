@@ -20,7 +20,12 @@ from nv_ingest_api.internal.schemas.meta.ingest_job_schema import validate_inges
 from nv_ingest_api.util.service_clients.client_base import FetchMode
 from nv_ingest_api.util.service_clients.redis.redis_client import RedisClient
 
+from opentelemetry import trace, context
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+
 logger = logging.getLogger("uvicorn")
+tracer = trace.get_tracer(__name__)
+otel_propagator = TraceContextTextMapPropagator()
 
 
 def get_fetch_mode_from_env() -> "FetchMode":
@@ -151,7 +156,7 @@ class RedisIngestService(IngestServiceMeta):
             f"FetchMode: {fetch_mode.name}, ResultTTL: {result_data_ttl_seconds}, StateTTL: {state_ttl_seconds}"
         )
 
-    async def submit_job(self, job_spec_wrapper: "MessageWrapper", trace_id: str) -> str:
+    async def submit_job(self, job_spec_wrapper: "MessageWrapper", trace_id: str, otel_context: Any) -> str:
         """
         Validates, prepares, and submits a job specification to the Redis task queue.
         Sets result data TTL if configured for NON_DESTRUCTIVE mode.
@@ -177,48 +182,53 @@ class RedisIngestService(IngestServiceMeta):
         RedisError, ConnectionError
             For Redis-related errors.
         """
-        try:
-            json_data = job_spec_wrapper.model_dump(mode="json").get("payload")
-            if not json_data:
-                raise ValueError("MessageWrapper payload is missing or empty.")
-            if isinstance(json_data, str):
-                job_spec = json.loads(json_data)
-            elif isinstance(json_data, dict):
-                job_spec = json_data
-            else:
-                raise TypeError(f"Unexpected payload type: {type(json_data)}")
 
-            validate_ingest_job(job_spec)
-            job_spec["job_id"] = trace_id
-            tasks = job_spec.get("tasks", [])
-            updated_tasks = []
-            for task in tasks:
-                task_prop = task.get("task_properties", {})
-                if hasattr(task_prop, "model_dump") and callable(task_prop.model_dump):
-                    task["task_properties"] = task_prop.model_dump(mode="json")
-                elif not isinstance(task_prop, dict):
-                    try:
-                        task["task_properties"] = dict(task_prop)
-                    except (TypeError, ValueError):
-                        logger.error(f"Cannot convert task_properties to dict: {task_prop}. Skipping properties.")
-                        task["task_properties"] = {}
-                updated_tasks.append(task)
-            job_spec["tasks"] = updated_tasks
-            job_spec_json = json.dumps(job_spec)
-            ttl_for_result: Optional[int] = (
-                self._result_data_ttl_seconds if self._fetch_mode == FetchMode.NON_DESTRUCTIVE else None
-            )
-            logger.debug(
-                f"Submitting job {trace_id} to queue '{self._redis_task_queue}' with result TTL: {ttl_for_result}"
-            )
-            await asyncio.to_thread(
-                self._ingest_client.submit_message,
-                channel_name=self._redis_task_queue,
-                message=job_spec_json,
-                ttl_seconds=ttl_for_result,
-            )
-            logger.debug(f"Successfully submitted job {trace_id}")
-            return trace_id
+        ctx = otel_propagator.extract(otel_context)
+        token = context.attach(ctx)
+
+        try:
+            with tracer.start_as_current_span("redis-submit-job-payload"):
+                json_data = job_spec_wrapper.model_dump(mode="json").get("payload")
+                if not json_data:
+                    raise ValueError("MessageWrapper payload is missing or empty.")
+                if isinstance(json_data, str):
+                    job_spec = json.loads(json_data)
+                elif isinstance(json_data, dict):
+                    job_spec = json_data
+                else:
+                    raise TypeError(f"Unexpected payload type: {type(json_data)}")
+
+                validate_ingest_job(job_spec)
+                job_spec["job_id"] = trace_id
+                tasks = job_spec.get("tasks", [])
+                updated_tasks = []
+                for task in tasks:
+                    task_prop = task.get("task_properties", {})
+                    if hasattr(task_prop, "model_dump") and callable(task_prop.model_dump):
+                        task["task_properties"] = task_prop.model_dump(mode="json")
+                    elif not isinstance(task_prop, dict):
+                        try:
+                            task["task_properties"] = dict(task_prop)
+                        except (TypeError, ValueError):
+                            logger.error(f"Cannot convert task_properties to dict: {task_prop}. Skipping properties.")
+                            task["task_properties"] = {}
+                    updated_tasks.append(task)
+                job_spec["tasks"] = updated_tasks
+                job_spec_json = json.dumps(job_spec)
+                ttl_for_result: Optional[int] = (
+                    self._result_data_ttl_seconds if self._fetch_mode == FetchMode.NON_DESTRUCTIVE else None
+                )
+                logger.debug(
+                    f"Submitting job {trace_id} to queue '{self._redis_task_queue}' with result TTL: {ttl_for_result}"
+                )
+                await asyncio.to_thread(
+                    self._ingest_client.submit_message,
+                    channel_name=self._redis_task_queue,
+                    message=job_spec_json,
+                    ttl_seconds=ttl_for_result,
+                )
+                logger.debug(f"Successfully submitted job {trace_id}")
+                return trace_id
         except (JSONDecodeError, TypeError, ValueError) as err:
             logger.exception(f"Data validation or parsing error for job {trace_id}: {err}")
             raise ValueError(f"Invalid job specification: {err}") from err
@@ -228,6 +238,8 @@ class RedisIngestService(IngestServiceMeta):
         except Exception as err:
             logger.exception(f"Unexpected error submitting job {trace_id}: {err}")
             raise
+        finally:
+            context.detach(token)
 
     async def fetch_job(self, job_id: str) -> Optional[Dict]:
         """

@@ -23,6 +23,7 @@ from typing import List, Tuple, Optional, Any
 import numpy as np
 import pandas as pd
 import pypdfium2 as libpdfium
+from datetime import datetime
 
 from nv_ingest_api.internal.primitives.nim.default_values import YOLOX_MAX_BATCH_SIZE
 from nv_ingest_api.internal.primitives.nim.model_interface.yolox import (
@@ -448,9 +449,12 @@ def pdfium_extractor(
     partition_id = base_source_metadata.get("partition_id", -1)
     access_level = base_source_metadata.get("access_level", AccessLevelEnum.UNKNOWN)
 
+    start_ts = datetime.now()
+    logger.error(f"START: libpdfium.PdfDocument")
     doc = libpdfium.PdfDocument(pdf_stream)
     pdf_metadata = extract_pdf_metadata(doc, source_id)
     page_count = pdf_metadata.page_count
+    logger.error(f"END: libpdfium.PdfDocument extract_pdf_metadata, page_count: {page_count} - {datetime.now() - start_ts}")
 
     source_metadata = {
         "source_name": pdf_metadata.filename,
@@ -483,8 +487,11 @@ def pdfium_extractor(
     pages_for_tables = []  # Accumulate tuples of (page_idx, np_image)
     futures = []  # To track asynchronous table/chart extraction tasks
 
+    start_ts = datetime.now()
+    logger.error("START: ThreadPoolExecutor for processing pages")
     with concurrent.futures.ThreadPoolExecutor(max_workers=pdfium_config.workers_per_progress_engine) as executor:
         # PAGE LOOP
+        start_pdf_processing_ts = datetime.now()
         for page_idx in range(page_count):
             page = doc.get_page(page_idx)
             page_width, page_height = page.get_size()
@@ -526,12 +533,14 @@ def pdfium_extractor(
 
             # If we want tables or charts, rasterize the page and store it
             if extract_tables or extract_charts or extract_infographics:
+                # start_pdfium_to_numpy_ts = datetime.now()
                 image, padding_offsets = pdfium_pages_to_numpy(
                     [page],
                     scale_tuple=(YOLOX_PAGE_IMAGE_PREPROC_WIDTH, YOLOX_PAGE_IMAGE_PREPROC_HEIGHT),
                     padding_tuple=(YOLOX_PAGE_IMAGE_PREPROC_WIDTH, YOLOX_PAGE_IMAGE_PREPROC_HEIGHT),
                     trace_info=execution_trace_log,
                 )
+                # logger.error(f"pdfium_pages_to_numpy, single page took: {datetime.now() - start_pdfium_to_numpy_ts}")
                 pages_for_tables.append((page_idx, image[0], padding_offsets[0]))
 
                 # Whenever pages_for_tables hits YOLOX_MAX_BATCH_SIZE, submit a job
@@ -577,9 +586,14 @@ def pdfium_extractor(
             pages_for_tables.clear()
 
         # Wait for all asynchronous jobs to complete.
+        num_complete = 0
         for fut in concurrent.futures.as_completed(futures):
+            num_complete = num_complete + 1
             table_chart_items = fut.result()  # Blocks until the job is finished
             extracted_data.extend(table_chart_items)
+            logger.error(f"{num_complete} of {len(futures)} pages/futures complete")
+        
+        logger.error(f"END: PDF pages processed in {datetime.now() - start_pdf_processing_ts}")
 
     # For document-level text extraction, combine the accumulated text.
     if extract_text and text_depth == TextTypeEnum.DOCUMENT and accumulated_text:

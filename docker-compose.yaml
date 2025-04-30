@@ -21,16 +21,16 @@ services:
       - NGC_API_KEY=${NIM_NGC_API_KEY:-${NGC_API_KEY:-ngcapikey}}
       - CUDA_VISIBLE_DEVICES=0
       - NIM_TRITON_MODEL_BATCH_SIZE=${PAGE_ELEMENTS_BATCH_SIZE:-1}
-      # NIM OpenTelemetry Settings
-      - NIM_ENABLE_OTEL=0
-      - NIM_OTEL_SERVICE_NAME=page-elements
-      - NIM_OTEL_TRACES_EXPORTER=otlp
-      - NIM_OTEL_METRICS_EXPORTER=console
-      - NIM_OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
-      - NIM_ENABLE_OTEL=true
-      # Triton OpenTelemetry Settings
-      - TRITON_OTEL_URL=http://otel-collector:4318/v1/traces
-      - TRITON_OTEL_RATE=1
+      # # NIM OpenTelemetry Settings
+      # - NIM_ENABLE_OTEL=0
+      # - NIM_OTEL_SERVICE_NAME=page-elements
+      # - NIM_OTEL_TRACES_EXPORTER=otlp
+      # - NIM_OTEL_METRICS_EXPORTER=console
+      # - NIM_OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+      # - NIM_ENABLE_OTEL=true
+      # # Triton OpenTelemetry Settings
+      # - TRITON_OTEL_URL=http://otel-collector:4318/v1/traces
+      # - TRITON_OTEL_RATE=1
     deploy:
       resources:
         reservations:
@@ -275,6 +275,8 @@ services:
       - NVIDIA_BUILD_API_KEY=${NVIDIA_BUILD_API_KEY:-${NGC_API_KEY:-ngcapikey}}
       - NV_INGEST_MAX_UTIL=${NV_INGEST_MAX_UTIL:-48}
       - OTEL_EXPORTER_OTLP_ENDPOINT=otel-collector:4317
+      # Set to true to completely disable all otel tracing code, forces trace.get_tracer() to return a no-op tracer if true
+      - OTEL_SDK_DISABLED=false
       # Self-hosted paddle endpoints.
       - PADDLE_GRPC_ENDPOINT=paddle:8001
       - PADDLE_HTTP_ENDPOINT=http://paddle:8000/v1/infer

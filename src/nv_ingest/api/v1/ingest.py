@@ -25,7 +25,8 @@ from nv_ingest.framework.util.service.meta.ingest.ingest_service_meta import Ing
 from nv_ingest_api.util.service_clients.client_base import FetchMode
 from nv_ingest_client.primitives.jobs.job_spec import JobSpec
 from nv_ingest_client.primitives.tasks.extract import ExtractTask
-from opentelemetry import trace
+from opentelemetry import trace, context
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from redis import RedisError
 
 from nv_ingest_api.util.converters.formats import ingest_json_results_to_blob
@@ -36,6 +37,7 @@ from nv_ingest_client.primitives.tasks.infographic_extraction import Infographic
 
 logger = logging.getLogger("uvicorn")
 tracer = trace.get_tracer(__name__)
+otel_propagator = TraceContextTextMapPropagator()
 
 router = APIRouter()
 
@@ -133,26 +135,44 @@ async def submit_job(request: Request, response: Response, job_spec: MessageWrap
             # Add custom attributes to the span
             span.set_attribute("http.method", request.method)
             span.set_attribute("http.url", str(request.url))
-            span.add_event("Submitting file for processing")
+
+            # JEREMY: Really would like to load the values of the PDF here ... name, size (in bytes)
+            # while things like number of pages would be fantastic to have we don't want to use the
+            # compute needed to bust open the PDF and get that information here yet since
+            # we do that in later processing.
 
             current_trace_id = span.get_span_context().trace_id
             job_id = trace_id_to_uuid(current_trace_id)
 
+            # JEREMY: This is actually rather expensive due to the size of the payload coming in
+            # and having to deserialize it and then re serialize. I think we should move to 
+            # stop embedding tracing information in the messages themselves and rather rely
+            # entirely on open-telemetry.
+            # This operation alone can take up to 1 second with a decent sized PDF payload ...
+
             # Add trace_id to job_spec payload
+            span.add_event("Start: Adding tracing_options to json dict")
             job_spec_dict = json.loads(job_spec.payload)
             if "tracing_options" not in job_spec_dict:
                 job_spec_dict["tracing_options"] = {}
             job_spec_dict["tracing_options"]["trace_id"] = str(current_trace_id)
             updated_job_spec = MessageWrapper(payload=json.dumps(job_spec_dict))
+            span.add_event("END: Adding tracing_options to json dict")
 
-            # Add another event
-            span.add_event("Finished processing")
+            # This is the entry point for processing. We want all downstream processing to show up under this original span
+            # as so we inject the current otel context into a dic and pass it along to the downstream processes
+            otel_context_carrier = {}
+            otel_propagator.inject(otel_context_carrier, context.get_current())
 
             # Submit the job to the pipeline task queue
-            await ingest_service.submit_job(updated_job_spec, job_id)  # Pass job_id used for state
+            await ingest_service.submit_job(updated_job_spec, job_id, otel_context_carrier)  # Pass job_id used for state
             await ingest_service.set_job_state(job_id, "SUBMITTED")
 
             response.headers["x-trace-id"] = trace.format_trace_id(current_trace_id)
+
+            span.set_attribute("job_id", job_id)
+            span.set_attribute("x-trace-id", response.headers["x-trace-id"])
+
             return job_id
 
         except Exception as ex:
