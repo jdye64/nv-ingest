@@ -248,23 +248,24 @@ def extract_simple_images_from_pdfium_page(page, max_depth):
     extracted_images = []
     for obj in image_objects:
         try:
+            print("something")
             # Attempt to retrieve the image bitmap
             image_numpy: np.ndarray = pdfium_try_get_bitmap_as_numpy(obj)  # noqa
             image_base64: str = numpy_to_base64(image_numpy)
-            image_bbox = obj.get_pos()
-            image_size = obj.get_size()
-            if image_size[0] < 10 and image_size[1] < 10:
-                continue
+            # image_bbox = obj.get_pos()
+            # image_size = obj.get_size()
+            # if image_size[0] < 10 and image_size[1] < 10:
+            #     continue
 
-            image_data = Base64Image(
-                image=image_base64,
-                bbox=image_bbox,
-                width=image_size[0],
-                height=image_size[1],
-                max_width=page_width,
-                max_height=page_height,
-            )
-            extracted_images.append(image_data)
+            # image_data = Base64Image(
+            #     image=image_base64,
+            #     bbox=image_bbox,
+            #     width=image_size[0],
+            #     height=image_size[1],
+            #     max_width=page_width,
+            #     max_height=page_height,
+            # )
+            # extracted_images.append(image_data)
         except Exception as e:
             logger.exception(f"Unhandled error extracting image: {e}")
             pass  # Pdfium failed to extract the image associated with this object - corrupt or missing.
