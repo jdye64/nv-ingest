@@ -100,8 +100,10 @@ def _update_infographic_metadata(
         custom_ocr_results = custom_ocr_client.infer(
             data=data_custom_ocr,
             model_name="custom_ocr",
-            stage_name="infographic_data_extraction",
-            max_batch_size=1 if custom_ocr_client.protocol == "grpc" else 2,
+            stage_name="infographic_extraction",
+            #max_batch_size=1 if custom_ocr_client.protocol == "grpc" else 2,
+            max_batch_size=8,
+            force_max_batch_size=True,
             trace_info=trace_info,
         )
     except Exception as e:

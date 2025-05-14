@@ -80,7 +80,7 @@ def _run_chart_inference(
             yolox_client.infer,
             data=data_yolox,
             model_name="yolox",
-            stage_name="chart_data_extraction",
+            stage_name="chart_extraction",
             max_batch_size=8,
             trace_info=trace_info,
         )
@@ -88,7 +88,7 @@ def _run_chart_inference(
             custom_ocr_client.infer,
             data=data_custom_ocr,
             model_name="custom_ocr",
-            stage_name="chart_data_extraction",
+            stage_name="chart_extraction",
             #max_batch_size=1 if custom_ocr_client.protocol == "grpc" else 2,
             max_batch_size=8,
             force_max_batch_size=True,
