@@ -25,6 +25,7 @@ from PIL import Image
 from nv_ingest_api.internal.primitives.nim import ModelInterface
 from nv_ingest_api.internal.primitives.nim.model_interface.helpers import get_model_name
 from nv_ingest_api.util.image_processing import scale_image_to_encoding_size
+from nv_ingest_api.util.image_processing.transforms import numpy_to_base64
 
 logger = logging.getLogger(__name__)
 
@@ -244,9 +245,10 @@ class YoloxModelInterfaceBase(ModelInterface):
                 original_size = image_pil.size
 
                 # Save the image to a buffer and encode to base64.
-                buffered = io.BytesIO()
-                image_pil.save(buffered, format="PNG")
-                image_b64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+                #buffered = io.BytesIO()
+                #image_pil.save(buffered, format="PNG")
+                #image_b64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+                image_b64 = numpy_to_base64(image)
 
                 # Scale the image if necessary.
                 scaled_image_b64, new_size = scale_image_to_encoding_size(
