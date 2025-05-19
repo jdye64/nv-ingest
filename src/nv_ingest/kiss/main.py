@@ -2,7 +2,7 @@ import os
 import sys
 import ray
 import logging
-from typing import List
+from typing import Any, List
 from opentelemetry import trace, context, propagate
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace import TracerProvider
@@ -10,6 +10,8 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.trace import SpanKind
 import pypdfium2 as pdfium
+
+from api.src.nv_ingest_api.internal.extract.pdf.engines.pdfium import _process_page, pdfium_extractor
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +35,48 @@ def get_tracer():
 
 
 @ray.remote
+def process_pdf_page_remote(pdf_path: str, page_idx: int, context_carrier: dict) -> None:
+    """
+    Process a single page of a PDF file using PDFium in a remote task.
+
+    Args:
+        pdf_path: Path to the PDF file
+        page_idx: Index of the page to process
+    """
+
+    # Get a new tracer instance for this process
+    tracer = get_tracer()
+
+    # Extract context from carrier
+    ctx = propagate.extract(carrier=context_carrier)
+    token = context.attach(ctx)
+
+    try:
+        # Create a span that's linked to the parent span from the context
+        with tracer.start_as_current_span(
+            "page_processing", context=ctx, kind=SpanKind.CLIENT, attributes={"page_idx": page_idx}
+        ) as span:
+            # Create context carrier for propagation
+            context_carrier = {}
+            propagate.inject(carrier=context_carrier)
+
+            span.set_attribute("pdf_path", pdf_path)
+            span.add_event("Loading page")
+
+            # Load the page
+            page = pdfium.PdfDocument(pdf_path).get_page(page_idx)
+
+            _process_page(page, page_idx, context_carrier=context_carrier)
+
+            span.add_event("Page loaded")
+
+    finally:
+        context.detach(token)
+        # Force flush the span processor
+        trace.get_tracer_provider().force_flush()
+
+
+@ray.remote
 def process_pdf_remote(pdf_path: str, context_carrier: dict) -> None:
     """
     Process a single PDF file using PDFium in a remote task.
@@ -53,6 +97,10 @@ def process_pdf_remote(pdf_path: str, context_carrier: dict) -> None:
         with tracer.start_as_current_span(
             "pdfium_processing", context=ctx, kind=SpanKind.CLIENT, attributes={"pdf_path": pdf_path}
         ) as span:
+            # Create context carrier for propagation
+            context_carrier = {}
+            propagate.inject(carrier=context_carrier)
+
             # Add some work to make the span more visible
             span.set_attribute("processing_started", True)
             # Add an event to make the span more visible
@@ -67,10 +115,17 @@ def process_pdf_remote(pdf_path: str, context_carrier: dict) -> None:
 
             logger.info(f"Processing PDF {pdf_path} with {n_pages} pages")
 
+            tasks = []
             # Process each page
             for page_idx in range(n_pages):
                 page = pdf.get_page(page_idx)
-                # Add page processing logic here
+                tasks.append(
+                    process_pdf_page_remote.remote(pdf_path, page_idx=page_idx, context_carrier=context_carrier)
+                )
+
+            # Wait for all tasks to complete
+            ray.get(tasks)
+
     finally:
         context.detach(token)
         # Force flush the span processor

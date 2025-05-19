@@ -24,6 +24,13 @@ import numpy as np
 import pandas as pd
 import pypdfium2 as libpdfium
 
+from opentelemetry import trace, context, propagate
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.trace import SpanKind
+
 from nv_ingest_api.internal.primitives.nim.default_values import YOLOX_MAX_BATCH_SIZE
 from nv_ingest_api.internal.primitives.nim.model_interface.yolox import (
     YOLOX_PAGE_IMAGE_PREPROC_WIDTH,
@@ -377,6 +384,108 @@ def _extract_page_elements(
     return extracted_page_elements
 
 
+def get_tracer():
+    """Get a tracer instance for the current process."""
+    resource = Resource(attributes={"service.name": "nv-ingest"})
+    provider = TracerProvider(resource=resource)
+    trace.set_tracer_provider(provider)
+    tracer = trace.get_tracer(__name__)
+
+    # Use OTLP exporter for sending traces to collector
+    exporter = OTLPSpanExporter(endpoint="localhost:4317", insecure=True)
+    span_processor = BatchSpanProcessor(exporter)
+    trace.get_tracer_provider().add_span_processor(span_processor)
+
+    return tracer
+
+
+def _process_page(page, page_idx, context_carrier):
+    tracer = get_tracer()
+
+    extract_text = True
+    extract_images = True
+    extract_infographics = True
+    extract_tables = True
+    extract_charts = True
+
+    # Extract context from carrier
+    ctx = propagate.extract(carrier=context_carrier)
+    token = context.attach(ctx)
+
+    try:
+        with tracer.start_as_current_span(
+            "page_processing_internal", context=ctx, kind=SpanKind.CLIENT, attributes={"page_idx": page_idx}
+        ) as span:
+            page_width, page_height = page.get_size()
+
+            # Text extraction
+            if extract_text:
+                page_text = _extract_page_text(page)
+                if text_depth == TextTypeEnum.PAGE:
+                    text_meta = construct_text_metadata(
+                        [page_text],
+                        pdf_metadata.keywords,
+                        page_idx,
+                        -1,
+                        -1,
+                        -1,
+                        page_count,
+                        text_depth,
+                        source_metadata,
+                        base_unified_metadata,
+                    )
+                    extracted_data.append(text_meta)
+                else:
+                    accumulated_text.append(page_text)
+
+            # Image extraction
+            if extract_images:
+                image_data = _extract_page_images(
+                    extract_images_method,
+                    page,
+                    page_idx,
+                    page_width,
+                    page_height,
+                    page_count,
+                    source_metadata,
+                    base_unified_metadata,
+                    **extract_images_params,
+                )
+                extracted_data.extend(image_data)
+
+            # If we want tables or charts, rasterize the page and store it
+            if extract_tables or extract_charts or extract_infographics:
+                image, padding_offsets = pdfium_pages_to_numpy(
+                    [page],
+                    scale_tuple=(YOLOX_PAGE_IMAGE_PREPROC_WIDTH, YOLOX_PAGE_IMAGE_PREPROC_HEIGHT),
+                    padding_tuple=(YOLOX_PAGE_IMAGE_PREPROC_WIDTH, YOLOX_PAGE_IMAGE_PREPROC_HEIGHT),
+                    trace_info=execution_trace_log,
+                )
+                pages_for_tables.append((page_idx, image[0], padding_offsets[0]))
+
+                # Whenever pages_for_tables hits YOLOX_MAX_BATCH_SIZE, submit a job
+                if len(pages_for_tables) >= YOLOX_MAX_BATCH_SIZE:
+                    future = executor.submit(
+                        _extract_page_elements,
+                        pages_for_tables[:],  # pass a copy
+                        page_count,
+                        source_metadata,
+                        base_unified_metadata,
+                        extract_tables,
+                        extract_charts,
+                        extract_infographics,
+                        paddle_output_format,
+                        pdfium_config.yolox_endpoints,
+                        pdfium_config.yolox_infer_protocol,
+                        pdfium_config.auth_token,
+                        execution_trace_log=execution_trace_log,
+                    )
+                    futures.append(future)
+                    pages_for_tables.clear()
+    finally:
+        context.detach(token)
+
+
 def pdfium_extractor(
     pdf_stream,
     extract_text: bool,
@@ -487,72 +596,8 @@ def pdfium_extractor(
         # PAGE LOOP
         for page_idx in range(page_count):
             page = doc.get_page(page_idx)
-            page_width, page_height = page.get_size()
 
-            # Text extraction
-            if extract_text:
-                page_text = _extract_page_text(page)
-                if text_depth == TextTypeEnum.PAGE:
-                    text_meta = construct_text_metadata(
-                        [page_text],
-                        pdf_metadata.keywords,
-                        page_idx,
-                        -1,
-                        -1,
-                        -1,
-                        page_count,
-                        text_depth,
-                        source_metadata,
-                        base_unified_metadata,
-                    )
-                    extracted_data.append(text_meta)
-                else:
-                    accumulated_text.append(page_text)
-
-            # Image extraction
-            if extract_images:
-                image_data = _extract_page_images(
-                    extract_images_method,
-                    page,
-                    page_idx,
-                    page_width,
-                    page_height,
-                    page_count,
-                    source_metadata,
-                    base_unified_metadata,
-                    **extract_images_params,
-                )
-                extracted_data.extend(image_data)
-
-            # If we want tables or charts, rasterize the page and store it
-            if extract_tables or extract_charts or extract_infographics:
-                image, padding_offsets = pdfium_pages_to_numpy(
-                    [page],
-                    scale_tuple=(YOLOX_PAGE_IMAGE_PREPROC_WIDTH, YOLOX_PAGE_IMAGE_PREPROC_HEIGHT),
-                    padding_tuple=(YOLOX_PAGE_IMAGE_PREPROC_WIDTH, YOLOX_PAGE_IMAGE_PREPROC_HEIGHT),
-                    trace_info=execution_trace_log,
-                )
-                pages_for_tables.append((page_idx, image[0], padding_offsets[0]))
-
-                # Whenever pages_for_tables hits YOLOX_MAX_BATCH_SIZE, submit a job
-                if len(pages_for_tables) >= YOLOX_MAX_BATCH_SIZE:
-                    future = executor.submit(
-                        _extract_page_elements,
-                        pages_for_tables[:],  # pass a copy
-                        page_count,
-                        source_metadata,
-                        base_unified_metadata,
-                        extract_tables,
-                        extract_charts,
-                        extract_infographics,
-                        paddle_output_format,
-                        pdfium_config.yolox_endpoints,
-                        pdfium_config.yolox_infer_protocol,
-                        pdfium_config.auth_token,
-                        execution_trace_log=execution_trace_log,
-                    )
-                    futures.append(future)
-                    pages_for_tables.clear()
+            _process_page(page, page_idx, None)
 
             page.close()
 
