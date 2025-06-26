@@ -176,3 +176,12 @@ RUN source activate nv_ingest_runtime && \
 
 # Default command: Run `make docs`
 CMD ["bash", "-c", "cd /workspace/docs && source activate nv_ingest_runtime && make docs"]
+
+
+FROM nv_ingest_install AS benchmarks
+
+# Install extra pip dependencies needed by benchmarking scripts
+RUN source activate nv_ingest_runtime && \
+    --mount=type=cache,target=/opt/conda/pkgs \
+    --mount=type=cache,target=/root/.cache/pip \
+    pip install docker pydrive2
