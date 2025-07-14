@@ -301,7 +301,7 @@ nim-vlm-image-captioning:
   fullnameOverride: nim-vlm-image-captioning
   customCommand: []
   customArgs: []
-  image:NIM_TRITON_MAX_BATCH_SIZE
+  image:
     repository: nvcr.io/nim/nvidia/llama-3.1-nemotron-nano-vl-8b-v1
     tag: "1.1.1"
   podSecurityContext:
