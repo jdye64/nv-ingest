@@ -43,6 +43,13 @@ dependencies:
     alias: nim-vlm-text-extraction
     condition: nim-vlm-text-extraction.deployed
 
+  # NemoRetriever OCR NIM
+  - name: nvidia-nim-nemoretriever-ocr
+    repository: "alias:nvstaging"
+    version: 1.3.0
+    alias: nemoretriever-ocr
+    condition: nemoretriever-ocr.deployed
+
   # PaddleOCR NIM
   - name: nvidia-nim-paddleocr
     repository: "alias:baidu-nim"
