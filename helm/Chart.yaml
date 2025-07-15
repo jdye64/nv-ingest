@@ -74,7 +74,7 @@ dependencies:
     repository: "alias:nvstaging"
     version: 1.9.0
     alias: vlm-embedding-nim
-    condition: vln-embedding-nim.deployed
+    condition: vlm-embedding-nim.deployed
 
   # Nvidia llama-32-nv-rerankqa-1b-v2 reranking NIM
   - name: nvidia-nim-llama-32-nv-rerankqa-1b-v2
