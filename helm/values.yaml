@@ -509,10 +509,8 @@ text-embedding-nim:
   customCommand: []
   customArgs: []
   image:
-    # repository: nvcr.io/nim/nvidia/nv-embedqa-e5-v5
-    # tag: "1.6.0"
-    repository: nvcr.io/nvstaging/nim/llama-3.2-nemoretriever-1b-vlm-embed-v1
-    tag: "1.9.0-rc3-latest-release-31195805"
+    repository: nvcr.io/nim/nvidia/nv-embedqa-e5-v5
+    tag: "1.6.0"
   podSecurityContext:
     runAsUser: 1000
     runAsGroup: 1000
@@ -578,6 +576,69 @@ nvidia-nim-llama-32-nv-embedqa-1b-v2:
   image:
     repository: nvcr.io/nim/nvidia/llama-3.2-nv-embedqa-1b-v2
     tag: "1.6.0"
+  podSecurityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+  replicaCount: 1
+  serviceAccount:
+    create: false
+    name: ""
+  statefuleSet:
+    enabled: false
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 10
+    metrics: []
+  service:
+    type: "ClusterIP"
+    name: nv-ingest-embedqa
+    httpPort: 8000
+    grpcPort: 8001
+    metricsPort: 0  # Generally unused and defaults to 0
+  nim:
+    grpcPort: 8001
+    logLevel: "INFO"
+  env:
+    - name: NIM_HTTP_API_PORT
+      value: "8000"
+    - name: NIM_TRITON_MAX_BATCH_SIZE
+      value: "1"
+
+
+## @skip vlm-embedding-nim
+## @param vlm-embedding-nim.deployed [default: false] true if the vlm-embedding-nim should be deployed and false otherwise
+## @param vlm-embedding-nim.image.repository The repository to override the location of the vlm-embedding-nim
+## @param vlm-embedding-nim.image.tag The tag override for vlm-embedding-nim
+## @param vlm-embedding-nim.fullnameOverride [default: "nv-ingest-embedqa"] The name override for the deployment
+## @param vlm-embedding-nim.customCommand [default: []] Custom command to override container entrypoint
+## @param vlm-embedding-nim.customArgs [default: []] Custom arguments to pass to the container
+## @param vlm-embedding-nim.podSecurityContext Security context for the pod
+## @param vlm-embedding-nim.replicaCount [default: 1] Number of replicas to deploy
+## @param vlm-embedding-nim.serviceAccount.create [default: false] Whether to create a service account
+## @param vlm-embedding-nim.serviceAccount.name [default: ""] The name of the service account
+## @param vlm-embedding-nim.statefuleSet.enabled [default: false] Whether to deploy as a StatefulSet
+## @param vlm-embedding-nim.autoscaling.enabled [default: false] Enable autoscaling
+## @param vlm-embedding-nim.autoscaling.minReplicas [default: 1] Minimum number of replicas
+## @param vlm-embedding-nim.autoscaling.maxReplicas [default: 10] Maximum number of replicas
+## @param vlm-embedding-nim.autoscaling.metrics [default: []] Metrics for autoscaling
+## @param vlm-embedding-nim.service.type [default: "ClusterIP"] The type of Kubernetes service to create
+## @param vlm-embedding-nim.service.name [default: "nv-ingest-embedqa"] The name of the service
+## @param vlm-embedding-nim.service.httpPort [default: 8000] The HTTP port for the service
+## @param vlm-embedding-nim.service.grpcPort [default: 8001] The gRPC port for the service
+## @param vlm-embedding-nim.service.metricsPort [default: 0] The metrics port for the service
+## @param vlm-embedding-nim.nim.grpcPort [default: 8001] The gRPC port for NIM communication
+## @param vlm-embedding-nim.nim.logLevel [default: "INFO"] The log level for NIM
+## @param vlm-embedding-nim.env [default: []] Environment variables for the container
+vlm-embedding-nim:
+  deployed: false
+  fullnameOverride: nv-ingest-embedqa # Share name with nvidia-nim-llama-32-nv-embedqa-1b-v2 to ease configuration
+  customCommand: []
+  customArgs: []
+  image:
+    repository: nvcr.io/nvstaging/nim/llama-3.2-nemoretriever-1b-vlm-embed-v1
+    tag: "1.9.0-rc3-latest-release-31195805"
   podSecurityContext:
     runAsUser: 1000
     runAsGroup: 1000

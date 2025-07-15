@@ -73,8 +73,8 @@ dependencies:
   - name: nvidia-nim-llama-32-nemoretriever-1b-vlm-embed-v1
     repository: "alias:nvstaging"
     version: 1.9.0
-    alias: text-embedding-nim
-    condition: text-embedding-nim.deployed
+    alias: vlm-embedding-nim
+    condition: vln-embedding-nim.deployed
 
   # Nvidia llama-32-nv-rerankqa-1b-v2 reranking NIM
   - name: nvidia-nim-llama-32-nv-rerankqa-1b-v2
