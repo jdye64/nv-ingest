@@ -30,7 +30,7 @@ image:
   # repository: "nvcr.io/nvidia/nemo-microservices/nv-ingest"
   # tag: "25.7.0"
   repository: "nvcr.io/nvstaging/nim/nv-ingest"
-  tag: "pr-849-c6feb7689cb4d5a606c84cbb6db95685c0b63bb1"
+  tag: "pr-878-2dc1c14e4bb819e2fa7653f6e7f2cf2cd6ba1c4e"
 
 ## @section Pod Configuration
 ## @param podAnnotations [object] Sets additional annotations on the main deployment pods
@@ -946,6 +946,9 @@ envVars:
   YOLOX_TABLE_STRUCTURE_GRPC_ENDPOINT: nemoretriever-table-structure-v1:8001
   YOLOX_TABLE_STRUCTURE_HTTP_ENDPOINT: http://nemoretriever-table-structure-v1:8000/v1/infer
   YOLOX_TABLE_STRUCTURE_INFER_PROTOCOL: grpc
+  OCR_GRPC_ENDPOINT=nemoretriever-ocr:8001
+  OCR_HTTP_ENDPOINT=http://nemoretriever-ocr:8000/v1/infer
+  OCR_INFER_PROTOCOL=grpc
 
   EMBEDDING_NIM_ENDPOINT: "http://nv-ingest-embedqa:8000/v1"
   EMBEDDING_NIM_MODEL_NAME: "nvidia/llama-3.2-nv-embedqa-1b-v2"
