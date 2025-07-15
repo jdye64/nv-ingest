@@ -509,8 +509,10 @@ text-embedding-nim:
   customCommand: []
   customArgs: []
   image:
-    repository: nvcr.io/nim/nvidia/nv-embedqa-e5-v5
-    tag: "1.6.0"
+    # repository: nvcr.io/nim/nvidia/nv-embedqa-e5-v5
+    # tag: "1.6.0"
+    repository: nvcr.io/nvstaging/nim/llama-3.2-nemoretriever-1b-vlm-embed-v1
+    tag: "1.9.0-rc3-latest-release-31195805"
   podSecurityContext:
     runAsUser: 1000
     runAsGroup: 1000
