@@ -379,7 +379,7 @@ nim-vlm-text-extraction:
 ## This service provides OCR (Optical Character Recognition) capabilities using NemoRetriever OCR.
 ## @descriptionEnd
 ## @param nemoretriever-ocr.deployed [default: false] Whether to deploy the PaddleOCR NIM service
-## @param nemoretriever-ocr.fullnameOverride [default: "nv-ingest-ocr"] Override the full name of the deployment
+## @param nemoretriever-ocr.fullnameOverride [default: "nemoretriever-ocr"] Override the full name of the deployment
 ## @param nemoretriever-ocr.customCommand [default: []] Custom command to run in the container
 ## @param nemoretriever-ocr.customArgs [default: []] Custom arguments to pass to the container command
 ## @param nemoretriever-ocr.image.repository [default: "nvcr.io/nim/baidu/paddleocr"] The container image repository
@@ -390,7 +390,7 @@ nim-vlm-text-extraction:
 ## @param nemoretriever-ocr.serviceAccount.name [default: ""] The name of the service account
 ## @param nemoretriever-ocr.statefuleSet.enabled [default: false] Whether to deploy as a StatefulSet
 ## @param nemoretriever-ocr.service.type [default: "ClusterIP"] The type of Kubernetes service to create
-## @param nemoretriever-ocr.service.name [default: "nv-ingest-ocr"] The name of the service
+## @param nemoretriever-ocr.service.name [default: "nemoretriever-ocr"] The name of the service
 ## @param nemoretriever-ocr.service.httpPort [default: 8000] The HTTP port for the service
 ## @param nemoretriever-ocr.service.grpcPort [default: 8001] The gRPC port for the service
 ## @param nemoretriever-ocr.service.metricsPort [default: 0] The metrics port for the service
@@ -399,7 +399,7 @@ nim-vlm-text-extraction:
 ## @param nemoretriever-ocr.env [default: []] Environment variables for the container
 nemoretriever-ocr:
   deployed: true
-  fullnameOverride: nv-ingest-ocr
+  fullnameOverride: nemoretriever-ocr
   customCommand: []
   customArgs: []
   image:
@@ -422,7 +422,7 @@ nemoretriever-ocr:
     metrics: []
   service:
     type: "ClusterIP"
-    name: nv-ingest-ocr
+    name: nemoretriever-ocr
     httpPort: 8000
     grpcPort: 8001
     metricsPort: 0  # Generally unused and defaults to 0
@@ -461,7 +461,7 @@ nemoretriever-ocr:
 ## @param paddleocr-nim.env [default: []] Environment variables for the container
 paddleocr-nim:
   deployed: false
-  fullnameOverride: nv-ingest-ocr
+  fullnameOverride: nv-ingest-paddle
   customCommand: []
   customArgs: []
   image:
@@ -484,7 +484,7 @@ paddleocr-nim:
     metrics: []
   service:
     type: "ClusterIP"
-    name: nv-ingest-ocr
+    name: nv-ingest-paddle
     httpPort: 8000
     grpcPort: 8001
     metricsPort: 0  # Generally unused and defaults to 0
@@ -1031,6 +1031,7 @@ envVars:
   OCR_GRPC_ENDPOINT: nemoretriever-ocr:8001
   OCR_HTTP_ENDPOINT: http://nemoretriever-ocr:8000/v1/infer
   OCR_INFER_PROTOCOL: grpc
+  OCR_MODEL_NAME: paddle
 
   EMBEDDING_NIM_ENDPOINT: "http://nv-ingest-embedqa:8000/v1"
   EMBEDDING_NIM_MODEL_NAME: "nvidia/llama-3.2-nv-embedqa-1b-v2"
