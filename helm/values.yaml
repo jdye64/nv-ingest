@@ -27,10 +27,8 @@ nameOverride: ""
 ## @param image.pullPolicy [string] Image pull policy
 image:
   pullPolicy: IfNotPresent
-  # repository: "nvcr.io/nvidia/nemo-microservices/nv-ingest"
-  # tag: "25.7.0"
-  repository: "nvcr.io/nvstaging/nim/nv-ingest"
-  tag: "pr-878-ebdce005d3a723bac593f052a1ee832b5b7bebaa"
+  repository: "nvcr.io/nvidia/nemo-microservices/nv-ingest"
+  tag: "25.6.2"
 
 ## @section Pod Configuration
 ## @param podAnnotations [object] Sets additional annotations on the main deployment pods
@@ -115,11 +113,8 @@ tmpDirSize: 50Gi
 nemoretriever-page-elements-v2:
   deployed: true
   image:
-    # repository: nvcr.io/nim/nvidia/nemoretriever-page-elements-v2
-    # tag: "1.3.0"
-    repository: nvcr.io/nvstaging/nim/nemoretriever-page-elements-v2
-    # tag: "1.4.0-rc7-latest-release-31032373"
-    tag: "alrichards-cpu-resize"
+    repository: nvcr.io/nim/nvidia/nemoretriever-page-elements-v2
+    tag: "1.3.0"
     pullPolicy: IfNotPresent
   podSecurityContext:
     runAsUser: 1000
@@ -179,11 +174,9 @@ nemoretriever-graphic-elements-v1:
   customCommand: []
   customArgs: []
   image:
-    # repository: nvcr.io/nim/nvidia/nemoretriever-graphic-elements-v1
-    # tag: "1.3.0"
-    repository: nvcr.io/nvstaging/nim/nemoretriever-graphic-elements-v1
-    # tag: "1.4.0-rc7-latest-release-31032376"
-    tag: "alrichards-cpu-resize"
+    repository: nvcr.io/nim/nvidia/nemoretriever-graphic-elements-v1
+    tag: "1.3.0"
+    pullPolicy: IfNotPresent
   podSecurityContext:
     runAsUser: 1000
     runAsGroup: 1000
@@ -243,11 +236,9 @@ nemoretriever-table-structure-v1:
   customCommand: []
   customArgs: []
   image:
-    # repository: nvcr.io/nim/nvidia/nemoretriever-table-structure-v1
-    # tag: "1.3.0"
-    repository: nvcr.io/nvstaging/nim/nemoretriever-table-structure-v1
-    # tag: "1.4.0-rc7-latest-release-31032374"
-    tag: "alrichards-cpu-resize"
+    repository: nvcr.io/nim/nvidia/nemoretriever-table-structure-v1
+    tag: "1.3.0"
+    pullPolicy: IfNotPresent
   podSecurityContext:
     runAsUser: 1000
     runAsGroup: 1000
@@ -381,14 +372,33 @@ nim-vlm-text-extraction:
 ## Configuration for the NemoRetriever OCR NIM service.
 ## This service provides OCR (Optical Character Recognition) capabilities using NemoRetriever OCR.
 ## @descriptionEnd
+## @param nemoretriever-ocr.deployed [default: false] Whether to deploy the PaddleOCR NIM service
+## @param nemoretriever-ocr.fullnameOverride [default: "nv-ingest-ocr"] Override the full name of the deployment
+## @param nemoretriever-ocr.customCommand [default: []] Custom command to run in the container
+## @param nemoretriever-ocr.customArgs [default: []] Custom arguments to pass to the container command
+## @param nemoretriever-ocr.image.repository [default: "nvcr.io/nim/baidu/paddleocr"] The container image repository
+## @param nemoretriever-ocr.image.tag [default: "1.2.0"] The container image tag
+## @param nemoretriever-ocr.podSecurityContext [default: {}] Pod security context configuration
+## @param nemoretriever-ocr.replicaCount [default: 1] Number of replicas to deploy
+## @param nemoretriever-ocr.serviceAccount.create [default: false] Whether to create a service account
+## @param nemoretriever-ocr.serviceAccount.name [default: ""] The name of the service account
+## @param nemoretriever-ocr.statefuleSet.enabled [default: false] Whether to deploy as a StatefulSet
+## @param nemoretriever-ocr.service.type [default: "ClusterIP"] The type of Kubernetes service to create
+## @param nemoretriever-ocr.service.name [default: "nv-ingest-ocr"] The name of the service
+## @param nemoretriever-ocr.service.httpPort [default: 8000] The HTTP port for the service
+## @param nemoretriever-ocr.service.grpcPort [default: 8001] The gRPC port for the service
+## @param nemoretriever-ocr.service.metricsPort [default: 0] The metrics port for the service
+## @param nemoretriever-ocr.nim.grpcPort [default: 8001] The gRPC port for NIM communication
+## @param nemoretriever-ocr.nim.logLevel [default: "INFO"] The log level for NIM
+## @param nemoretriever-ocr.env [default: []] Environment variables for the container
 nemoretriever-ocr:
-  deployed: true
-  fullnameOverride: nv-ingest-nemo-retriever-ocr
+  deployed: false
+  fullnameOverride: nv-ingest-ocr
   customCommand: []
   customArgs: []
   image:
-    repository: nvcr.io/nvstaging/nim/nemoretriever-ocr
-    tag: "1.0.0-rc2-latest-release-31618140"
+    repository: nvcr.io/nvidia/nemo-microservices/nemoretriever-ocr-v1
+    tag: "1.0.0"
   podSecurityContext:
     runAsUser: 1000
     runAsGroup: 1000
@@ -406,7 +416,7 @@ nemoretriever-ocr:
     metrics: []
   service:
     type: "ClusterIP"
-    name: nv-ingest-nemoretriever-ocr
+    name: nv-ingest-ocr
     httpPort: 8000
     grpcPort: 8001
     metricsPort: 0  # Generally unused and defaults to 0
@@ -425,7 +435,7 @@ nemoretriever-ocr:
 ## This service provides OCR (Optical Character Recognition) capabilities using PaddleOCR.
 ## @descriptionEnd
 ## @param paddleocr-nim.deployed [default: true] Whether to deploy the PaddleOCR NIM service
-## @param paddleocr-nim.fullnameOverride [default: "nv-ingest-paddle"] Override the full name of the deployment
+## @param paddleocr-nim.fullnameOverride [default: "nv-ingest-ocr"] Override the full name of the deployment
 ## @param paddleocr-nim.customCommand [default: []] Custom command to run in the container
 ## @param paddleocr-nim.customArgs [default: []] Custom arguments to pass to the container command
 ## @param paddleocr-nim.image.repository [default: "nvcr.io/nim/baidu/paddleocr"] The container image repository
@@ -436,7 +446,7 @@ nemoretriever-ocr:
 ## @param paddleocr-nim.serviceAccount.name [default: ""] The name of the service account
 ## @param paddleocr-nim.statefuleSet.enabled [default: false] Whether to deploy as a StatefulSet
 ## @param paddleocr-nim.service.type [default: "ClusterIP"] The type of Kubernetes service to create
-## @param paddleocr-nim.service.name [default: "nv-ingest-paddle"] The name of the service
+## @param paddleocr-nim.service.name [default: "nv-ingest-ocr"] The name of the service
 ## @param paddleocr-nim.service.httpPort [default: 8000] The HTTP port for the service
 ## @param paddleocr-nim.service.grpcPort [default: 8001] The gRPC port for the service
 ## @param paddleocr-nim.service.metricsPort [default: 0] The metrics port for the service
@@ -444,8 +454,8 @@ nemoretriever-ocr:
 ## @param paddleocr-nim.nim.logLevel [default: "INFO"] The log level for NIM
 ## @param paddleocr-nim.env [default: []] Environment variables for the container
 paddleocr-nim:
-  deployed: false
-  fullnameOverride: nv-ingest-paddle
+  deployed: true
+  fullnameOverride: nv-ingest-ocr
   customCommand: []
   customArgs: []
   image:
@@ -468,7 +478,7 @@ paddleocr-nim:
     metrics: []
   service:
     type: "ClusterIP"
-    name: nv-ingest-paddle
+    name: nv-ingest-ocr
     httpPort: 8000
     grpcPort: 8001
     metricsPort: 0  # Generally unused and defaults to 0

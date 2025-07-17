@@ -45,7 +45,7 @@ dependencies:
 
   # NemoRetriever OCR NIM
   - name: nvidia-nim-nemoretriever-ocr
-    repository: "alias:nvstaging"
+    repository: "alias:nemo-microservices"
     version: 1.3.0
     alias: nemoretriever-ocr
     condition: nemoretriever-ocr.deployed
