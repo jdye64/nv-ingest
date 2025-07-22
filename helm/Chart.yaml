@@ -44,7 +44,7 @@ dependencies:
     condition: nim-vlm-text-extraction.deployed
 
   # NemoRetriever OCR NIM
-  - name: nvidia-nim-nemoretriever-ocr
+  - name: nvidia-nim-nemoretriever-ocr-v1
     repository: "alias:nemo-microservices"
     version: 1.0.0
     alias: nemoretriever-ocr
