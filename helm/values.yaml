@@ -113,8 +113,10 @@ tmpDirSize: 50Gi
 nemoretriever-page-elements-v2:
   deployed: true
   image:
-    repository: nvcr.io/nim/nvidia/nemoretriever-page-elements-v2
-    tag: "1.3.0"
+    # repository: nvcr.io/nim/nvidia/nemoretriever-page-elements-v2
+    # tag: "1.3.0"
+    repository: nvcr.io/nvstaging/nim/nemoretriever-page-elements-v2
+    tag: 1.4.0-rc7-latest-release-31032373
     pullPolicy: IfNotPresent
   podSecurityContext:
     runAsUser: 1000
@@ -174,8 +176,10 @@ nemoretriever-graphic-elements-v1:
   customCommand: []
   customArgs: []
   image:
-    repository: nvcr.io/nim/nvidia/nemoretriever-graphic-elements-v1
-    tag: "1.3.0"
+    # repository: nvcr.io/nim/nvidia/nemoretriever-graphic-elements-v1
+    # tag: "1.3.0"
+    repository: nvcr.io/nvstaging/nim/nemoretriever-graphic-elements-v1
+    tag: 1.4.0-rc7-latest-release-31032376
     pullPolicy: IfNotPresent
   podSecurityContext:
     runAsUser: 1000
@@ -236,8 +240,10 @@ nemoretriever-table-structure-v1:
   customCommand: []
   customArgs: []
   image:
-    repository: nvcr.io/nim/nvidia/nemoretriever-table-structure-v1
-    tag: "1.3.0"
+    # repository: nvcr.io/nim/nvidia/nemoretriever-table-structure-v1
+    # tag: "1.3.0"
+    repository: nvcr.io/nvstaging/nim/nemoretriever-table-structure-v1
+    tag: 1.4.0-rc7-latest-release-31032374
     pullPolicy: IfNotPresent
   podSecurityContext:
     runAsUser: 1000
@@ -995,8 +1001,9 @@ envVars:
   INGEST_LOG_LEVEL: "DEFAULT"
   INGEST_EDGE_BUFFER_SIZE: 64
   INGEST_DYNAMIC_MEMORY_THRESHOLD: 0.80
-  MAX_INGEST_PROCESS_WORKERS: 16
-  NV_INGEST_MAX_UTIL: 48
+  INGEST_DISABLE_DYNAMIC_SCALING: true
+  MAX_INGEST_PROCESS_WORKERS: 32
+  NV_INGEST_MAX_UTIL: 32
   MESSAGE_CLIENT_HOST: "nv-ingest-redis-master"
   MESSAGE_CLIENT_PORT: "6379"
   MESSAGE_CLIENT_TYPE: "redis"
