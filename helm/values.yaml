@@ -403,8 +403,10 @@ nemoretriever-ocr:
   customCommand: []
   customArgs: []
   image:
-    repository: nvcr.io/nvidia/nemo-microservices/nemoretriever-ocr-v1
-    tag: "1.0.0"
+    # repository: nvcr.io/nvidia/nemo-microservices/nemoretriever-ocr-v1
+    # tag: "1.0.0"
+    repository: nvcr.io/nvstaging/nim/nemoretriever-ocr-v1
+    tag: 1.0.0-rc1-latest-release-31712057
   podSecurityContext:
     runAsUser: 1000
     runAsGroup: 1000
