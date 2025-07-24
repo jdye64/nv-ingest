@@ -147,7 +147,7 @@ nemoretriever-page-elements-v2:
       value: "8000"
     # - name: NIM_TRITON_MAX_BATCH_SIZE
     #   value: "32"
-    - NAME: NIM_TRITON_OPTIMIZATION_MODE
+    - name: NIM_TRITON_OPTIMIZATION_MODE
       value: vram_opt
 
 ## @skip nemoretriever-graphic-elements-v1
@@ -212,7 +212,7 @@ nemoretriever-graphic-elements-v1:
       value: "8000"
     # - name: NIM_TRITON_MAX_BATCH_SIZE
     #   value: "32"
-    - NAME: NIM_TRITON_OPTIMIZATION_MODE
+    - name: NIM_TRITON_OPTIMIZATION_MODE
       value: vram_opt
 
 ## @skip nemoretriever-table-structure-v1
@@ -278,7 +278,7 @@ nemoretriever-table-structure-v1:
       value: "8000"
     # - name: NIM_TRITON_MAX_BATCH_SIZE
     #   value: "32"
-    - NAME: NIM_TRITON_OPTIMIZATION_MODE
+    - name: NIM_TRITON_OPTIMIZATION_MODE
       value: vram_opt
 
 ## @section NIM VLM Image Captioning Configuration
@@ -329,7 +329,7 @@ nim-vlm-image-captioning:
       value: "8000"
     # - name: NIM_TRITON_MAX_BATCH_SIZE
     #   value: "32"
-    - NAME: NIM_TRITON_OPTIMIZATION_MODE
+    - name: NIM_TRITON_OPTIMIZATION_MODE
       value: vram_opt
 
 ## @section NIM VLM Text Extraction Configuration
@@ -380,7 +380,7 @@ nim-vlm-text-extraction:
       value: "8000"
     # - name: NIM_TRITON_MAX_BATCH_SIZE
     #   value: "32"
-    - NAME: NIM_TRITON_OPTIMIZATION_MODE
+    - name: NIM_TRITON_OPTIMIZATION_MODE
       value: vram_opt
 
 ## @section NemoRetriever OCR NIM Configuration
@@ -446,7 +446,7 @@ nemoretriever-ocr:
       value: "8000"
     # - name: NIM_TRITON_MAX_BATCH_SIZE
     #   value: "32"
-    - NAME: NIM_TRITON_OPTIMIZATION_MODE
+    - name: NIM_TRITON_OPTIMIZATION_MODE
       value: vram_opt
 
 ## @section PaddleOCR NIM Configuration
@@ -510,7 +510,7 @@ paddleocr-nim:
       value: "8000"
     # - name: NIM_TRITON_MAX_BATCH_SIZE
     #   value: "32"
-    - NAME: NIM_TRITON_OPTIMIZATION_MODE
+    - name: NIM_TRITON_OPTIMIZATION_MODE
       value: vram_opt
 
 
