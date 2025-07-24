@@ -149,6 +149,8 @@ nemoretriever-page-elements-v2:
     #   value: "32"
     - name: NIM_TRITON_OPTIMIZATION_MODE
       value: vram_opt
+    - name: NIM_TRITON_CUDA_MEMORY_POOL_MB
+      value: 768
 
 ## @skip nemoretriever-graphic-elements-v1
 ## @param nemoretriever-graphic-elements-v1.deployed [default: true] true if the nemoretriever-graphic-elements NIM should be deployed and false otherwise
@@ -214,6 +216,8 @@ nemoretriever-graphic-elements-v1:
     #   value: "32"
     - name: NIM_TRITON_OPTIMIZATION_MODE
       value: vram_opt
+    - name: NIM_TRITON_CUDA_MEMORY_POOL_MB
+      value: 768
 
 ## @skip nemoretriever-table-structure-v1
 ## @param nemoretriever-table-structure-v1.deployed [default: true] true if the nemoretriever-table-structure NIM should be deployed and false otherwise
@@ -280,6 +284,8 @@ nemoretriever-table-structure-v1:
     #   value: "32"
     - name: NIM_TRITON_OPTIMIZATION_MODE
       value: vram_opt
+    - name: NIM_TRITON_CUDA_MEMORY_POOL_MB
+      value: 768
 
 ## @section NIM VLM Image Captioning Configuration
 ## @descriptionStart
@@ -331,6 +337,8 @@ nim-vlm-image-captioning:
     #   value: "32"
     - name: NIM_TRITON_OPTIMIZATION_MODE
       value: vram_opt
+    - name: NIM_TRITON_CUDA_MEMORY_POOL_MB
+      value: 768
 
 ## @section NIM VLM Text Extraction Configuration
 ## @descriptionStart
@@ -382,6 +390,8 @@ nim-vlm-text-extraction:
     #   value: "32"
     - name: NIM_TRITON_OPTIMIZATION_MODE
       value: vram_opt
+    - name: NIM_TRITON_CUDA_MEMORY_POOL_MB
+      value: 768
 
 ## @section NemoRetriever OCR NIM Configuration
 ## @descriptionStart
@@ -448,6 +458,8 @@ nemoretriever-ocr:
     #   value: "32"
     - name: NIM_TRITON_OPTIMIZATION_MODE
       value: vram_opt
+    - name: NIM_TRITON_CUDA_MEMORY_POOL_MB
+      value: 768
 
 ## @section PaddleOCR NIM Configuration
 ## @descriptionStart
@@ -512,6 +524,8 @@ paddleocr-nim:
     #   value: "32"
     - name: NIM_TRITON_OPTIMIZATION_MODE
       value: vram_opt
+    - name: NIM_TRITON_CUDA_MEMORY_POOL_MB
+      value: 768
 
 
 ## @skip text-embedding-nim
