@@ -145,8 +145,10 @@ nemoretriever-page-elements-v2:
   env:
     - name: NIM_HTTP_API_PORT
       value: "8000"
-    - name: NIM_TRITON_MAX_BATCH_SIZE
-      value: "32"
+    # - name: NIM_TRITON_MAX_BATCH_SIZE
+    #   value: "32"
+    - NAME: NIM_TRITON_OPTIMIZATION_MODE
+      value: vram_opt
 
 ## @skip nemoretriever-graphic-elements-v1
 ## @param nemoretriever-graphic-elements-v1.deployed [default: true] true if the nemoretriever-graphic-elements NIM should be deployed and false otherwise
@@ -208,8 +210,10 @@ nemoretriever-graphic-elements-v1:
   env:
     - name: NIM_HTTP_API_PORT
       value: "8000"
-    - name: NIM_TRITON_MAX_BATCH_SIZE
-      value: "32"
+    # - name: NIM_TRITON_MAX_BATCH_SIZE
+    #   value: "32"
+    - NAME: NIM_TRITON_OPTIMIZATION_MODE
+      value: vram_opt
 
 ## @skip nemoretriever-table-structure-v1
 ## @param nemoretriever-table-structure-v1.deployed [default: true] true if the nemoretriever-table-structure NIM should be deployed and false otherwise
@@ -272,8 +276,10 @@ nemoretriever-table-structure-v1:
   env:
     - name: NIM_HTTP_API_PORT
       value: "8000"
-    - name: NIM_TRITON_MAX_BATCH_SIZE
-      value: "32"
+    # - name: NIM_TRITON_MAX_BATCH_SIZE
+    #   value: "32"
+    - NAME: NIM_TRITON_OPTIMIZATION_MODE
+      value: vram_opt
 
 ## @section NIM VLM Image Captioning Configuration
 ## @descriptionStart
@@ -321,8 +327,10 @@ nim-vlm-image-captioning:
   env:
     - name: NIM_HTTP_API_PORT
       value: "8000"
-    - name: NIM_TRITON_MAX_BATCH_SIZE
-      value: "32"
+    # - name: NIM_TRITON_MAX_BATCH_SIZE
+    #   value: "32"
+    - NAME: NIM_TRITON_OPTIMIZATION_MODE
+      value: vram_opt
 
 ## @section NIM VLM Text Extraction Configuration
 ## @descriptionStart
@@ -370,8 +378,10 @@ nim-vlm-text-extraction:
   env:
     - name: NIM_HTTP_API_PORT
       value: "8000"
-    - name: NIM_TRITON_MAX_BATCH_SIZE
-      value: "32"
+    # - name: NIM_TRITON_MAX_BATCH_SIZE
+    #   value: "32"
+    - NAME: NIM_TRITON_OPTIMIZATION_MODE
+      value: vram_opt
 
 ## @section NemoRetriever OCR NIM Configuration
 ## @descriptionStart
@@ -434,8 +444,10 @@ nemoretriever-ocr:
   env:
     - name: NIM_HTTP_API_PORT
       value: "8000"
-    - name: NIM_TRITON_MAX_BATCH_SIZE
-      value: "32"
+    # - name: NIM_TRITON_MAX_BATCH_SIZE
+    #   value: "32"
+    - NAME: NIM_TRITON_OPTIMIZATION_MODE
+      value: vram_opt
 
 ## @section PaddleOCR NIM Configuration
 ## @descriptionStart
@@ -496,8 +508,10 @@ paddleocr-nim:
   env:
     - name: NIM_HTTP_API_PORT
       value: "8000"
-    - name: NIM_TRITON_MAX_BATCH_SIZE
-      value: "32"
+    # - name: NIM_TRITON_MAX_BATCH_SIZE
+    #   value: "32"
+    - NAME: NIM_TRITON_OPTIMIZATION_MODE
+      value: vram_opt
 
 
 ## @skip text-embedding-nim
