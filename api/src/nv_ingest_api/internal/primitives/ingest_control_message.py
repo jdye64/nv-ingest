@@ -42,6 +42,7 @@ def remove_task_by_type(ctrl_msg, task: str):
     """
     task_obj = None
     for t in ctrl_msg.get_tasks():
+        print(f"Available Control Message Task: {t}")
         if t.type == task:
             task_obj = t
             break

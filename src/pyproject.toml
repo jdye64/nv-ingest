@@ -55,6 +55,7 @@ dependencies = [
     "tqdm>=4.67.1",
     "uvicorn",
     "pip",
+    "celery",
     "llama-index-embeddings-nvidia",
     "opencv-python", # For some reason conda cant solve our req set with py-opencv so we need to use pip
     "pymilvus>=2.5.10",

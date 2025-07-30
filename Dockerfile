@@ -124,8 +124,6 @@ RUN rm -rf src
 
 FROM nv_ingest_install AS runtime
 
-COPY src/microservice_entrypoint.py ./
-
 # Copy entrypoint script(s)
 COPY ./docker/scripts/entrypoint.sh /workspace/docker/entrypoint.sh
 COPY ./docker/scripts/entrypoint_source_ext.sh /workspace/docker/entrypoint_source_ext.sh

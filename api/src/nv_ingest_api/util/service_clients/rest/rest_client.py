@@ -2,6 +2,7 @@
 # All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import logging
 import re
 import time
@@ -137,8 +138,8 @@ class RestClient(MessageBrokerClientBase):
                 )
                 self._client = requests.Session()
 
-        self._submit_endpoint: str = "/v1/submit_job"
-        self._fetch_endpoint: str = "/v1/fetch_job"
+        self._submit_endpoint: str = "/v1/upload"
+        self._fetch_endpoint: str = "/v1/result"
         self._base_url: str = kwargs.get("base_url") or self._generate_url(self._host, self._port)
         self._headers = kwargs.get("headers", {})
         self._auth = kwargs.get("auth", None)
@@ -434,6 +435,9 @@ class RestClient(MessageBrokerClientBase):
 
             try:
                 if isinstance(self._client, requests.Session):
+                    resp = json.loads(request_payload['payload'])
+                    start_ts = time.time()
+                    print(f"Submitting PDF: {resp['job_payload']['source_id']}")
                     result = self._client.post(
                         url,
                         json=request_payload,
@@ -444,6 +448,7 @@ class RestClient(MessageBrokerClientBase):
                     response_code = result.status_code
                     trace_id = result.headers.get("x-trace-id")
                     response_text: str = result.text
+                    print(f"Submitting PDF: {resp['job_payload']['source_id']} took {time.time() - start_ts:.2f} seconds")
 
                     if response_code in _TERMINAL_RESPONSE_STATUSES:
                         error_reason: str = f"Terminal response code {response_code} submitting job."

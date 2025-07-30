@@ -97,11 +97,13 @@ else
             --error-logfile - &
     fi
 
-    if [ "${MEM_TRACE}" = true ]; then
-        # Run the entrypoint wrapped in memray
-        python -m memray run -o memray_trace.bin /workspace/microservice_entrypoint.py --edge_buffer_size="${EDGE_BUFFER_SIZE}" ${CONFIG_ARG}
-    else
-        # Run without memray
-        python /workspace/microservice_entrypoint.py --edge_buffer_size="${EDGE_BUFFER_SIZE}" ${CONFIG_ARG}
-    fi
+    celery -A nv_ingest.api.v1.celery_worker worker --loglevel=info
+
+    # if [ "${MEM_TRACE}" = true ]; then
+    #     # Run the entrypoint wrapped in memray
+    #     python -m memray run -o memray_trace.bin /workspace/microservice_entrypoint.py --edge_buffer_size="${EDGE_BUFFER_SIZE}" ${CONFIG_ARG}
+    # else
+    #     # Run without memray
+    #     python /workspace/microservice_entrypoint.py --edge_buffer_size="${EDGE_BUFFER_SIZE}" ${CONFIG_ARG}
+    # fi
 fi

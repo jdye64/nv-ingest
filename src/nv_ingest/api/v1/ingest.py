@@ -18,6 +18,7 @@ from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.responses import JSONResponse
 
+from nv_ingest.api.v1.tasks import process_pdf
 from nv_ingest.framework.schemas.framework_message_wrapper_schema import MessageWrapper
 from nv_ingest.framework.schemas.framework_processing_job_schema import ProcessingJob, ConversionStatus
 from nv_ingest.framework.util.service.impl.ingest.redis_ingest_service import RedisIngestService
@@ -56,6 +57,36 @@ STATE_FAILED = "FAILED"
 STATE_PROCESSING = "PROCESSING"
 STATE_SUBMITTED = "SUBMITTED"
 INTERMEDIATE_STATES = {STATE_PROCESSING, STATE_SUBMITTED}
+
+
+
+
+
+
+@router.post("/upload/")
+async def upload_pdf(request: Request, response: Response, job_spec: MessageWrapper):
+    print("-------- Entering upload_pdf ---------")
+    job_spec_dict = json.loads(job_spec.payload)
+    task = process_pdf.delay(job_spec_dict)  # enqueue task
+    response.headers["x-trace-id"] = task.id
+    return task.id
+
+
+@router.get("/result/{task_id}")
+async def get_result(task_id: str):
+    result = process_pdf.AsyncResult(task_id)
+    if result.ready():
+        return result.result
+    raise HTTPException(
+        status_code=202, detail=f"Job is processing. Retry later."
+    )
+
+
+
+
+
+
+
 
 
 # POST /submit
@@ -144,9 +175,6 @@ async def submit_job(request: Request, response: Response, job_spec: MessageWrap
                 job_spec_dict["tracing_options"] = {"trace": True}
             job_spec_dict["tracing_options"]["trace_id"] = str(current_trace_id)
             updated_job_spec = MessageWrapper(payload=json.dumps(job_spec_dict))
-
-            # Add another event
-            span.add_event("Finished processing")
 
             # Submit the job to the pipeline task queue
             await ingest_service.submit_job(updated_job_spec, job_id)  # Pass job_id used for state

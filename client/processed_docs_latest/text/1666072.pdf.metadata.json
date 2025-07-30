@@ -1,0 +1,82 @@
+[
+  {
+    "document_type": "text",
+    "metadata": {
+      "content": "Albaugh Europe S\u00e0rl\r\nWorld Trade Center Lausanne\r\nAvenue Gratta-Paille 2, 1018 Lausanne, Switzerland\r\nTel: + 41 21 799 9130 - Fax: + 41 21 799 9139\r\nCompany registration number CH-660-1934004-6\r\nwww.albaugh.eu\r\nAlbaugh Europe\r\nBoom efekt\r\nCertificate of Analysis\r\nQuantity: 16,640 LIT\r\nSales Order Reference: 18-SO-1534\r\nDespatch Date: 19-10-2018\r\nShelf Life: minimum three years from date of manufacture\r\nProduct Description:\r\nA soluble liquid containing 360 g/L of glyphosate acid\r\nIdentity:\r\nChemical Name:\r\nCAS:\r\nEC Number:\r\nGlyphosate mono-isopropylamine salt\r\nN- phosphonomethylglycine-isopropylamine salt\r\n38641-94-0\r\n254-056-8\r\nBatch \r\nNo. Quantity Packing Manufacturing \r\nDate\r\nGlyphosate \r\nacid content \r\n(342 - 378 g/L)\r\nSpecific \r\ngravity \r\nat 200C\r\n(1.15 - 1.17)\r\npH \r\n(undiluted)\r\n(4.8 - 5.2)\r\nAppearance\r\n(Yellowish liquid, \r\nfree from foreign \r\nmaterials)\r\nA28368 8,320 LIT 20 L 16-10-2018 365.0 1.17 4.8 Pass\r\nA28369 8,320 LIT 20 L 16-10-2018 358.4 1.17 4.8 Pass\r\nIssued by:\r\nThis certificate is issued electronically, no signature is required\r\nJonathan Ward\r\nTechnical Manager\r\nAlbaugh Europe S\u00e0rl\r\nDate of Issue: 19-10-2018",
+      "content_url": "",
+      "embedding": null,
+      "source_metadata": {
+        "source_name": "/media/jeremy/storage/bo20/1666072.pdf",
+        "source_id": "/media/jeremy/storage/bo20/1666072.pdf",
+        "source_location": "",
+        "source_type": "PDF",
+        "collection_id": "",
+        "date_created": "2018-10-19T09:21:18",
+        "last_modified": "2018-10-19T09:21:18",
+        "summary": "",
+        "partition_id": -1,
+        "access_level": -1,
+        "custom_content": null
+      },
+      "content_metadata": {
+        "type": "text",
+        "description": "Unstructured text from PDF document.",
+        "page_number": -1,
+        "hierarchy": {
+          "page_count": 1,
+          "page": -1,
+          "block": -1,
+          "line": -1,
+          "span": -1,
+          "nearby_objects": {
+            "text": {
+              "content": [],
+              "bbox": [],
+              "type": []
+            },
+            "images": {
+              "content": [],
+              "bbox": [],
+              "type": []
+            },
+            "structured": {
+              "content": [],
+              "bbox": [],
+              "type": []
+            }
+          }
+        },
+        "subtype": "",
+        "start_time": -1,
+        "end_time": -1,
+        "custom_content": null
+      },
+      "audio_metadata": null,
+      "text_metadata": {
+        "text_type": "document",
+        "summary": "",
+        "keywords": "",
+        "language": "en",
+        "text_location": [
+          -1,
+          -1,
+          -1,
+          -1
+        ],
+        "text_location_max_dimensions": [
+          -1,
+          -1
+        ],
+        "custom_content": null
+      },
+      "image_metadata": null,
+      "table_metadata": null,
+      "chart_metadata": null,
+      "error_metadata": null,
+      "info_message_metadata": null,
+      "debug_metadata": null,
+      "raise_on_failure": false,
+      "custom_content": null
+    }
+  }
+]

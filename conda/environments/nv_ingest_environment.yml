@@ -44,6 +44,7 @@ dependencies:
   - tqdm>=4.67.1
   - uvicorn
   - pip
+  - celery
   - pip:
       - llama-index-embeddings-nvidia
       - milvus-lite==2.4.12

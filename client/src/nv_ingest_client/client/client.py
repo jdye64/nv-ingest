@@ -1351,16 +1351,18 @@ class NvIngestClient:
         def fetch_with_retries(job_id: str):
             retries = 0
             while (max_retries is None) or (retries < max_retries):
+                print(f"retrying")
                 try:
                     # Attempt to fetch the job result
                     result = self._fetch_job_result(job_id, timeout, data_only=False)
+                    print(f"Result received .... for job {job_id}")
                     return result, job_id
                 except TimeoutError:
-                    if verbose:
-                        logger.info(
-                            f"Job {job_id} is not ready. Retrying {retries + 1}/{max_retries if max_retries else '∞'} "
-                            f"after {retry_delay} seconds."
-                        )
+                    print("Exception TimeoutError")
+                    print(
+                        f"Job {job_id} is not ready. Retrying {retries + 1}/{max_retries if max_retries else '∞'} "
+                        f"after {retry_delay} seconds."
+                    )
                     retries += 1
                     time.sleep(retry_delay)  # Wait before retrying
                 except (RuntimeError, Exception) as err:
