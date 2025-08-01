@@ -76,7 +76,10 @@ async def upload_pdf(request: Request, response: Response, job_spec: MessageWrap
 async def get_result(task_id: str):
     result = process_pdf.AsyncResult(task_id)
     if result.ready():
-        return result.result
+        print(f"-------- Result is showing ready, attempting to return --------")
+        r = result.result
+        print("Received result")
+        return r
     raise HTTPException(
         status_code=202, detail=f"Job is processing. Retry later."
     )

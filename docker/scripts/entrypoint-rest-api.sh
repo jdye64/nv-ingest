@@ -17,11 +17,7 @@
 
 #!/bin/bash
 
-# Activate the `nv_ingest_runtime` conda environment
-
 set -e
-. /opt/conda/etc/profile.d/conda.sh
-conda activate nv_ingest_runtime
 
 # Source "source" file if it exists
 SRC_FILE="/opt/docker/bin/entrypoint_source"
@@ -29,9 +25,6 @@ SRC_FILE="/opt/docker/bin/entrypoint_source"
 
 SRC_EXT="/workspace/docker/entrypoint_source_ext.sh"
 [ -f "${SRC_EXT}" ] && . "${SRC_EXT}"
-
-# Determine edge buffer size (default: 32)
-EDGE_BUFFER_SIZE="${INGEST_EDGE_BUFFER_SIZE:-32}"
 
 # Determine ingest config path, if exists and is a valid file.
 if [ -n "${INGEST_CONFIG_PATH}" ] && [ -f "${INGEST_CONFIG_PATH}" ]; then
@@ -62,7 +55,7 @@ else
     fi
 
     # --- Determine if access logs should be enabled ---
-    _access_logs_enabled="false"
+    _access_logs_enabled="true"
 
     # Normalize INGEST_ENABLE_SERVICE_ACCESS_LOGS to lower case
     _explicit_access_logs=$(echo "${INGEST_ENABLE_SERVICE_ACCESS_LOGS:-false}" | tr '[:upper:]' '[:lower:]')
@@ -84,26 +77,14 @@ else
 
     # --- Launch Services ---
 
-    if [ "${MESSAGE_CLIENT_TYPE}" != "simple" ]; then
-        # Start gunicorn if MESSAGE_CLIENT_TYPE is not 'simple'.
-        gunicorn nv_ingest.api.main:app \
-            -w 32 \
-            -k uvicorn.workers.UvicornWorker \
-            --bind 0.0.0.0:7670 \
-            --timeout 300 \
-            --log-level "${_log_level}" \
-            --access-logfile "${_gunicorn_access_logfile}" \
-            --access-logformat "${_gunicorn_access_logformat}" \
-            --error-logfile - &
-    fi
+    gunicorn nv_ingest.api.main:app \
+        -w 32 \
+        -k uvicorn.workers.UvicornWorker \
+        --bind 0.0.0.0:7670 \
+        --timeout 300 \
+        --log-level "${_log_level}" \
+        --access-logfile "${_gunicorn_access_logfile}" \
+        --access-logformat "${_gunicorn_access_logformat}" \
+        --error-logfile -
 
-    celery -A nv_ingest.api.v1.celery_worker worker --loglevel=info
-
-    # if [ "${MEM_TRACE}" = true ]; then
-    #     # Run the entrypoint wrapped in memray
-    #     python -m memray run -o memray_trace.bin /workspace/microservice_entrypoint.py --edge_buffer_size="${EDGE_BUFFER_SIZE}" ${CONFIG_ARG}
-    # else
-    #     # Run without memray
-    #     python /workspace/microservice_entrypoint.py --edge_buffer_size="${EDGE_BUFFER_SIZE}" ${CONFIG_ARG}
-    # fi
 fi
