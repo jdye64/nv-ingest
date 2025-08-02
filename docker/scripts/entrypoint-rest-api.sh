@@ -81,7 +81,6 @@ else
         -w 32 \
         -k uvicorn.workers.UvicornWorker \
         --bind 0.0.0.0:7670 \
-        --timeout 300 \
         --log-level "${_log_level}" \
         --access-logfile "${_gunicorn_access_logfile}" \
         --access-logformat "${_gunicorn_access_logformat}" \
