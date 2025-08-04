@@ -70,7 +70,7 @@ replicaCount: 1
 ## @param resources.requests.cpu [default: "24000m"] Specify request for CPU
 resources:
   limits:
-    memory: 200Gi
+    memory: 75Gi
     cpu: "48000m"
   requests:
     memory: 24Gi
@@ -113,8 +113,10 @@ tmpDirSize: 50Gi
 nemoretriever-page-elements-v2:
   deployed: true
   image:
-    repository: nvcr.io/nim/nvidia/nemoretriever-page-elements-v2
-    tag: "1.3.0"
+    # repository: nvcr.io/nim/nvidia/nemoretriever-page-elements-v2
+    # tag: "1.4.0"
+    repository: nvcr.io/nvstaging/nim/nemoretriever-page-elements-v2
+    tag: 1.4.0-latest-release-32539462
     pullPolicy: IfNotPresent
   podSecurityContext:
     runAsUser: 1000
@@ -126,6 +128,7 @@ nemoretriever-page-elements-v2:
     name: ""
   statefuleSet:
     enabled: false
+  replicaCount: 1
   autoscaling:
     enabled: false
     minReplicas: 1
@@ -143,8 +146,10 @@ nemoretriever-page-elements-v2:
   env:
     - name: NIM_HTTP_API_PORT
       value: "8000"
-    - name: NIM_TRITON_MODEL_BATCH_SIZE
-      value: "1"
+    - name: NIM_TRITON_MAX_BATCH_SIZE
+      value: "32"
+    - name: NIM_TRITON_CUDA_MEMORY_POOL_MB
+      value: "2048"
 
 ## @skip nemoretriever-graphic-elements-v1
 ## @param nemoretriever-graphic-elements-v1.deployed [default: true] true if the nemoretriever-graphic-elements NIM should be deployed and false otherwise
@@ -174,8 +179,10 @@ nemoretriever-graphic-elements-v1:
   customCommand: []
   customArgs: []
   image:
-    repository: nvcr.io/nim/nvidia/nemoretriever-graphic-elements-v1
-    tag: "1.3.0"
+    # repository: nvcr.io/nim/nvidia/nemoretriever-graphic-elements-v1
+    # tag: "1.4.0"
+    repository: nvcr.io/nvstaging/nim/nemoretriever-graphic-elements-v1
+    tag: "1.4.0-latest-release-32539461"
   podSecurityContext:
     runAsUser: 1000
     runAsGroup: 1000
@@ -186,6 +193,7 @@ nemoretriever-graphic-elements-v1:
     name: ""
   statefuleSet:
     enabled: false
+  replicaCount: 1
   autoscaling:
     enabled: false
     minReplicas: 1
@@ -203,8 +211,10 @@ nemoretriever-graphic-elements-v1:
   env:
     - name: NIM_HTTP_API_PORT
       value: "8000"
-    - name: NIM_TRITON_MODEL_BATCH_SIZE
-      value: "1"
+    - name: NIM_TRITON_MAX_BATCH_SIZE
+      value: "32"
+    - name: NIM_TRITON_CUDA_MEMORY_POOL_MB
+      value: "2048"
 
 ## @skip nemoretriever-table-structure-v1
 ## @param nemoretriever-table-structure-v1.deployed [default: true] true if the nemoretriever-table-structure NIM should be deployed and false otherwise
@@ -235,8 +245,8 @@ nemoretriever-table-structure-v1:
   customCommand: []
   customArgs: []
   image:
-    repository: nvcr.io/nim/nvidia/nemoretriever-table-structure-v1
-    tag: "1.3.0"
+    repository: nvcr.io/nvstaging/nim/nemoretriever-table-structure-v1
+    tag: "1.4.0-latest-release-32539474"
   podSecurityContext:
     runAsUser: 1000
     runAsGroup: 1000
@@ -247,6 +257,7 @@ nemoretriever-table-structure-v1:
     name: ""
   statefuleSet:
     enabled: false
+  replicaCount: 1
   autoscaling:
     enabled: false
     minReplicas: 1
@@ -264,8 +275,10 @@ nemoretriever-table-structure-v1:
   env:
     - name: NIM_HTTP_API_PORT
       value: "8000"
-    - name: NIM_TRITON_MODEL_BATCH_SIZE
-      value: "1"
+    - name: NIM_TRITON_MAX_BATCH_SIZE
+      value: "32"
+    - name: NIM_TRITON_CUDA_MEMORY_POOL_MB
+      value: "2048"
 
 ## @section NIM VLM Image Captioning Configuration
 ## @descriptionStart
@@ -313,8 +326,10 @@ nim-vlm-image-captioning:
   env:
     - name: NIM_HTTP_API_PORT
       value: "8000"
-    - name: NIM_TRITON_MODEL_BATCH_SIZE
-      value: "1"
+    - name: NIM_TRITON_MAX_BATCH_SIZE
+      value: "32"
+    - name: NIM_TRITON_CUDA_MEMORY_POOL_MB
+      value: "2048"
 
 ## @section NIM VLM Text Extraction Configuration
 ## @descriptionStart
@@ -362,8 +377,77 @@ nim-vlm-text-extraction:
   env:
     - name: NIM_HTTP_API_PORT
       value: "8000"
-    - name: NIM_TRITON_MODEL_BATCH_SIZE
-      value: "1"
+    - name: NIM_TRITON_MAX_BATCH_SIZE
+      value: "32"
+    - name: NIM_TRITON_CUDA_MEMORY_POOL_MB
+      value: "2048"
+
+## @section NemoRetriever OCR NIM Configuration
+## @descriptionStart
+## Configuration for the NemoRetriever OCR NIM service.
+## This service provides OCR (Optical Character Recognition) capabilities using NemoRetriever OCR.
+## @descriptionEnd
+## @param nemoretriever-ocr.deployed [default: false] Whether to deploy the PaddleOCR NIM service
+## @param nemoretriever-ocr.fullnameOverride [default: "nv-ingest-ocr"] Override the full name of the deployment
+## @param nemoretriever-ocr.customCommand [default: []] Custom command to run in the container
+## @param nemoretriever-ocr.customArgs [default: []] Custom arguments to pass to the container command
+## @param nemoretriever-ocr.image.repository [default: "nvcr.io/nim/baidu/paddleocr"] The container image repository
+## @param nemoretriever-ocr.image.tag [default: "1.2.0"] The container image tag
+## @param nemoretriever-ocr.podSecurityContext [default: {}] Pod security context configuration
+## @param nemoretriever-ocr.replicaCount [default: 1] Number of replicas to deploy
+## @param nemoretriever-ocr.serviceAccount.create [default: false] Whether to create a service account
+## @param nemoretriever-ocr.serviceAccount.name [default: ""] The name of the service account
+## @param nemoretriever-ocr.statefuleSet.enabled [default: false] Whether to deploy as a StatefulSet
+## @param nemoretriever-ocr.service.type [default: "ClusterIP"] The type of Kubernetes service to create
+## @param nemoretriever-ocr.service.name [default: "nv-ingest-ocr"] The name of the service
+## @param nemoretriever-ocr.service.httpPort [default: 8000] The HTTP port for the service
+## @param nemoretriever-ocr.service.grpcPort [default: 8001] The gRPC port for the service
+## @param nemoretriever-ocr.service.metricsPort [default: 0] The metrics port for the service
+## @param nemoretriever-ocr.nim.grpcPort [default: 8001] The gRPC port for NIM communication
+## @param nemoretriever-ocr.nim.logLevel [default: "INFO"] The log level for NIM
+## @param nemoretriever-ocr.env [default: []] Environment variables for the container
+nemoretriever-ocr:
+  deployed: true
+  fullnameOverride: nv-ingest-ocr
+  customCommand: []
+  customArgs: []
+  image:
+    # repository: nvcr.io/nvidia/nemo-microservices/nemoretriever-ocr-v1
+    # tag: "1.0.0"
+    repository: nvcr.io/nvstaging/nim/nemoretriever-ocr-v1
+    tag: 1.0.0-rc1-latest-release-31712057
+  podSecurityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+  replicaCount: 1
+  serviceAccount:
+    create: false
+    name: ""
+  statefuleSet:
+    enabled: false
+  replicaCount: 1
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 10
+    metrics: []
+  service:
+    type: "ClusterIP"
+    name: nv-ingest-ocr
+    httpPort: 8000
+    grpcPort: 8001
+    metricsPort: 0  # Generally unused and defaults to 0
+  nim:
+    grpcPort: 8001
+    logLevel: "INFO"
+  env:
+    - name: NIM_HTTP_API_PORT
+      value: "8000"
+    - name: NIM_TRITON_MAX_BATCH_SIZE
+      value: "32"
+    - name: NIM_TRITON_CUDA_MEMORY_POOL_MB
+      value: "2048"
 
 ## @section PaddleOCR NIM Configuration
 ## @descriptionStart
@@ -390,7 +474,7 @@ nim-vlm-text-extraction:
 ## @param paddleocr-nim.nim.logLevel [default: "INFO"] The log level for NIM
 ## @param paddleocr-nim.env [default: []] Environment variables for the container
 paddleocr-nim:
-  paddleocr-nim.deployed: true
+  deployed: false
   fullnameOverride: nv-ingest-paddle
   customCommand: []
   customArgs: []
@@ -414,7 +498,7 @@ paddleocr-nim:
     metrics: []
   service:
     type: "ClusterIP"
-    name: nv-ingest-paddle
+    name: nv-ingest-ocr
     httpPort: 8000
     grpcPort: 8001
     metricsPort: 0  # Generally unused and defaults to 0
@@ -424,8 +508,10 @@ paddleocr-nim:
   env:
     - name: NIM_HTTP_API_PORT
       value: "8000"
-    - name: NIM_TRITON_MODEL_BATCH_SIZE
-      value: "1"
+    - name: NIM_TRITON_MAX_BATCH_SIZE
+      value: "32"
+    - name: NIM_TRITON_CUDA_MEMORY_POOL_MB
+      value: "2048"
 
 
 ## @skip text-embedding-nim
@@ -553,7 +639,9 @@ nvidia-nim-llama-32-nv-embedqa-1b-v2:
     - name: NIM_HTTP_API_PORT
       value: "8000"
     - name: NIM_TRITON_MAX_BATCH_SIZE
-      value: "1"
+      value: "16"
+    - name: NIM_TRITON_CUDA_MEMORY_POOL_MB
+      value: "2048"
 
 
 ## @skip llama-32-nv-rerankqa-1b-v2
@@ -615,8 +703,10 @@ llama-32-nv-rerankqa-1b-v2:
   env:
     - name: NIM_HTTP_API_PORT
       value: "8000"
-    - name: NIM_TRITON_MODEL_BATCH_SIZE
-      value: "1"
+    - name: NIM_TRITON_MAX_BATCH_SIZE
+      value: "32"
+    - name: NIM_TRITON_CUDA_MEMORY_POOL_MB
+      value: "2048"
 
 
 ## @skip riva-nim
@@ -785,22 +875,24 @@ redis:
   auth:
     enabled: false
   replica:
-    replicaCount: 1
+    replicaCount: 2
     persistence:
+      enabled: false
       size: "50Gi"
     resources:
       requests:
         memory: "6Gi"
       limits:
-        memory: "12Gi"
+        memory: "90Gi"
   master:
     persistence:
+      enabled: false
       size: "50Gi"
     resources:
       requests:
         memory: "6Gi"
       limits:
-        memory: "12Gi"
+        memory: "90Gi"
     configmap: |-
       protected-mode no
 
@@ -868,10 +960,6 @@ prometheus:
 envVars:
   ARROW_DEFAULT_MEMORY_POOL: "system"
   INGEST_LOG_LEVEL: "DEFAULT"
-  INGEST_EDGE_BUFFER_SIZE: 64
-  INGEST_DYNAMIC_MEMORY_THRESHOLD: 0.80
-  MAX_INGEST_PROCESS_WORKERS: 16
-  NV_INGEST_MAX_UTIL: 48
   MESSAGE_CLIENT_HOST: "nv-ingest-redis-master"
   MESSAGE_CLIENT_PORT: "6379"
   MESSAGE_CLIENT_TYPE: "redis"
@@ -897,6 +985,10 @@ envVars:
   YOLOX_TABLE_STRUCTURE_GRPC_ENDPOINT: nemoretriever-table-structure-v1:8001
   YOLOX_TABLE_STRUCTURE_HTTP_ENDPOINT: http://nemoretriever-table-structure-v1:8000/v1/infer
   YOLOX_TABLE_STRUCTURE_INFER_PROTOCOL: grpc
+  OCR_GRPC_ENDPOINT: nv-ingest-ocr:8001
+  OCR_HTTP_ENDPOINT: http://nv-ingest-ocr:8000/v1/infer
+  OCR_INFER_PROTOCOL: grpc
+  OCR_MODEL_NAME: scene_text
 
   EMBEDDING_NIM_ENDPOINT: "http://nv-ingest-embedqa:8000/v1"
   EMBEDDING_NIM_MODEL_NAME: "nvidia/llama-3.2-nv-embedqa-1b-v2"
@@ -910,7 +1002,6 @@ envVars:
 
   COMPONENTS_TO_READY_CHECK: "ALL"
   MODEL_PREDOWNLOAD_PATH: "/workspace/models/"
-  INSTALL_AUDIO_EXTRACTION_DEPS: "true"
 
 ## @section Open Telemetry
 ## @descriptionStart

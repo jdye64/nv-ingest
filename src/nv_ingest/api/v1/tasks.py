@@ -19,18 +19,18 @@ from nv_ingest_api.internal.primitives.control_message_task import ControlMessag
 from nv_ingest_api.internal.primitives.tracing.logging import annotate_cm
 from nv_ingest_api.internal.schemas.meta.ingest_job_schema import validate_ingest_job
 from celery import Celery
-import base64
 from opentelemetry import trace
 
 import pandas as pd
 
-from dotenv import load_dotenv
-load_dotenv()
+# from dotenv import load_dotenv
+# load_dotenv()
+
+REDIS_ENDPOINT = os.getenv("MESSAGE_CLIENT_HOST", "redis")
+REDIS_PORT = os.getenv("MESSAGE_CLIENT_PORT", "6379")
 
 celery_app = Celery(
-    "tasks",
-    broker="redis://redis:6379/0",
-    backend="redis://redis:6379/1"
+    "tasks", broker=f"redis://{REDIS_ENDPOINT}:{REDIS_PORT}/0", backend=f"redis://{REDIS_ENDPOINT}:{REDIS_PORT}/1"
 )
 
 
@@ -121,7 +121,7 @@ def stage_1_extract_pdf_components(job_spec_dict):
             raise
 
     return control_message
-    
+
 
 def stage_2_metadata_injection(control_message: IngestControlMessage):
     df = control_message.payload()
@@ -228,14 +228,14 @@ def stage_2_metadata_injection(control_message: IngestControlMessage):
 
 def stage_3_pdf_extraction(control_message):
     print("-------- Entering stage_3_pdf_extraction ---------")
-    
+
     # The validated config. I don't like setting this here.
     yolox_grpc, yolox_http, yolox_auth, yolox_protocol = get_nim_service("yolox")
     nemoretriever_parse_grpc, nemoretriever_parse_http, nemoretriever_parse_auth, nemoretriever_parse_protocol = (
         get_nim_service("nemoretriever_parse")
     )
     model_name = os.environ.get("NEMORETRIEVER_PARSE_MODEL_NAME", "nvidia/nemoretriever-parse")
-    
+
     print(f"Yolox grpc: {yolox_grpc}")
     print(f"Yolox http: {yolox_http}")
     print(f"Yolox auth: {yolox_auth}")
@@ -261,7 +261,7 @@ def stage_3_pdf_extraction(control_message):
             },
         }
     )
-    
+
     # Extract the DataFrame payload.
     df_extraction_ledger = control_message.payload()
     print(f"Extracted payload with {len(df_extraction_ledger)} rows.")
@@ -296,7 +296,7 @@ def stage_3_pdf_extraction(control_message):
 
 def stage_4_image_extraction(control_message):
     print("-------- Entering stage_4_image_extraction ---------")
-    
+
     # Hate this ...
     yolox_grpc, yolox_http, yolox_auth, yolox_protocol = get_nim_service("yolox")
 
@@ -380,7 +380,7 @@ def _create_json_payload(message: Any, df_json: Any) -> List[Dict[str, Any]]:
     # else:
     #     data_fragments = [df_json]
     #     fragment_count = 1
-    
+
     data_fragments = [df_json]
     fragment_count = 1
 
@@ -450,7 +450,6 @@ def stage_final_prepare_response(control_message):
     return json_payloads
 
 
-
 def stage_final_prepare_response_simplified(control_message):
     print("-------- Entering stage_final_prepare_response ---------")
     mdf, df_json = None, None
@@ -461,7 +460,7 @@ def stage_final_prepare_response_simplified(control_message):
         json_result_fragments = _create_json_payload(control_message, df_json)
     else:
         json_result_fragments = _create_json_payload(control_message, None)
-        
+
     return json_result_fragments[0]
 
 
@@ -471,18 +470,17 @@ def process_pdf(job_spec_dict):
 
     # Stage 1: Extract PDF components - message_broker_task_source.py:_process_message() adaptation for celery
     control_message = stage_1_extract_pdf_components(job_spec_dict)
-    
+
     # Stage 2: Metadata Injection - metadata_injector.py:on_data()
     control_message = stage_2_metadata_injection(control_message)
-    
+
     # Stage 3: PDF Extraction - pdf_extractor.py:on_data()
     control_message = stage_3_pdf_extraction(control_message)
-    
+
     # # Stage 4: Image Extraction - image_extractor.py:on_data()
     # control_message = stage_4_image_extraction(control_message)
-    
+
     # Stage Final: Prepare response and send to Redis - message_broker_task_sink.py:on_data()
     response = stage_final_prepare_response_simplified(control_message)
-    
-    return response
 
+    return response

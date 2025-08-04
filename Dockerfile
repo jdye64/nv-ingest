@@ -83,6 +83,7 @@ SHELL ["/bin/bash", "-c"]
 
 COPY tests tests
 COPY data data
+RUN rm -rf ./data/dev # Ensure dev directory is not copied
 COPY api api
 COPY client client
 COPY src src

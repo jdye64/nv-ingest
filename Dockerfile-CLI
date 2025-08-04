@@ -1,0 +1,80 @@
+# SPDX-FileCopyrightText: Copyright (c) 2024, NVIDIA CORPORATION & AFFILIATES.
+# All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# syntax=docker/dockerfile:1.3
+
+ARG BASE_IMG=nvcr.io/nvidia/base/ubuntu
+ARG BASE_IMG_TAG=jammy-20250619
+
+FROM $BASE_IMG:$BASE_IMG_TAG AS base
+
+ARG RELEASE_TYPE="dev"
+ARG VERSION=""
+ARG VERSION_REV="0"
+ARG DOWNLOAD_LLAMA_TOKENIZER="False"
+ARG HF_ACCESS_TOKEN=""
+ARG MODEL_PREDOWNLOAD_PATH="/workspace/models/"
+
+# Prevent interactive prompts during package install
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install necessary dependencies using apt-get
+RUN apt-get update && \
+    apt-get install -y \
+      software-properties-common \
+      curl \
+      gnupg && \
+    add-apt-repository ppa:deadsnakes/ppa && \
+    apt-get update && \
+    apt-get install -y \
+      bzip2 \
+      ca-certificates \
+      curl \
+      wget \
+      tini \
+      vim \
+      unzip \
+      python3.12 \
+      python3.12-venv \
+    && apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Set Python 3.12 as the default `python3` (optional)
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
+
+# Set default shell to bash
+SHELL ["/bin/bash", "-c"]
+
+# Set the working directory in the container
+WORKDIR /workspace
+
+FROM base AS nv_ingest_install
+
+# Create a virtual environment
+RUN python3 -m venv /opt/venv/nv-ingest
+
+ENV PATH="/opt/venv/nv-ingest/bin:$PATH"
+
+COPY ci ci
+COPY tests tests
+COPY data data
+RUN rm -rf ./data/dev # Ensure dev directory is not copied
+COPY bo767 bo767
+COPY api api
+COPY client client
+RUN rm -rf ./src/dist ./client/dist ./api/dist
+
+# Install Pip dependencies needed for the build
+RUN pip install "build>=1.2.2"
+
+# Add pip cache path to match conda's package cache
+RUN --mount=type=cache,target=/root/.cache/pip \
+    chmod +x ./ci/scripts/build_pip_packages.sh \
+    && ./ci/scripts/build_pip_packages.sh --type ${RELEASE_TYPE} --lib api \
+    && ./ci/scripts/build_pip_packages.sh --type ${RELEASE_TYPE} --lib client
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install ./api/dist/*.whl \
+    && pip install ./client/dist/*.whl
+
+CMD ["sleep", "infinity"]

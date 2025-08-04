@@ -27,4 +27,4 @@ spec:
       {{- end }}
       {{- end }}
   selector:
-    {{- include "nv-ingest.selectorLabels" . | nindent 4 }}
+    app: rest-api

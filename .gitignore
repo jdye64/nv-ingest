@@ -176,6 +176,7 @@ tags
 # Persistent undo
 [._]*.un~
 
+bo767
 
 # End of https://www.gitignore.io/api/vim,c++,cmake,python,synology
 
