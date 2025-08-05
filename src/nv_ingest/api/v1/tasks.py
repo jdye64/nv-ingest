@@ -480,6 +480,25 @@ def process_pdf(job_spec_dict):
     # # Stage 4: Image Extraction - image_extractor.py:on_data()
     # control_message = stage_4_image_extraction(control_message)
 
+    # Transform and data synthesis
+    # text_splitter_stage_id = add_text_splitter_stage(pipeline, default_cpu_count)
+    # embed_extractions_stage_id = add_text_embedding_stage(pipeline, default_cpu_count)
+    control_message = text_embedding(control_message)
+
+    # ########################################################################################################
+    # ## Storage and output
+    # ########################################################################################################
+    # embedding_storage_stage_id = add_embedding_storage_stage(pipeline, default_cpu_count)
+    # image_storage_stage_id = add_image_storage_stage(pipeline, default_cpu_count)
+    # # vdb_task_sink_stage = add_vdb_task_sink_stage(pipe, morpheus_pipeline_config, ingest_config)
+    # broker_response_stage_id = add_message_broker_response_stage(pipeline, default_cpu_count)
+    # ########################################################################################################
+
+    # #######################################################################################################
+    # ## Telemetry (Note: everything after the sync stage is out of the hot path, please keep it that way) ##
+    # #######################################################################################################
+    # otel_tracer_stage_id = add_otel_tracer_stage(pipeline, default_cpu_count)
+
     # Stage Final: Prepare response and send to Redis - message_broker_task_sink.py:on_data()
     response = stage_final_prepare_response_simplified(control_message)
 
