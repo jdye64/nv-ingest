@@ -8,6 +8,7 @@ from nv_ingest_api.internal.extract.image.image_extractor import extract_primiti
 from nv_ingest_api.internal.schemas.extract.extract_image_schema import ImageConfigSchema
 from nv_ingest_api.internal.primitives.ingest_control_message import remove_task_by_type
 from nv_ingest_api.internal.schemas.extract.extract_pdf_schema import PDFExtractorSchema
+from nv_ingest_api.internal.store.embed_text_upload import store_text_embeddings_internal
 from nv_ingest.framework.orchestration.ray.stages.extractors.pdf_extractor import _inject_validated_config
 from nv_ingest.framework.orchestration.ray.util.pipeline.stage_builders import get_nim_service
 from nv_ingest_api.internal.enums.common import DocumentTypeEnum
@@ -448,6 +449,45 @@ def stage_final_prepare_response(control_message):
 
     # return control_message
     return json_payloads
+
+
+def text_embedding(control_message):
+    """
+    Process the control message by storing embeddings.
+
+    Parameters
+    ----------
+    control_message : IngestControlMessage
+        The message containing a DataFrame payload with embedding data.
+
+    Returns
+    -------
+    IngestControlMessage
+        The updated message with embeddings stored in MinIO.
+    """
+    print("EmbeddingStorageStage.on_data: Starting embedding storage process.")
+
+    # Extract the DataFrame payload.
+    df_ledger = control_message.payload()
+    print("Extracted payload with %d rows.", len(df_ledger))
+
+    # Remove the "store_embedding" task from the message to obtain task-specific configuration.
+    task_config = remove_task_by_type(control_message, "store_embedding")
+    print("Extracted task config: %s", task_config)
+
+    # Perform embedding storage.
+    new_df = store_text_embeddings_internal(
+        df_store_ledger=df_ledger,
+        task_config=task_config,
+        store_config=None,
+        execution_trace_log=None,
+    )
+    print("Embedding storage completed. Resulting DataFrame has %d rows.", len(new_df))
+
+    # Update the message payload with the stored embeddings DataFrame.
+    control_message.payload(new_df)
+
+    return control_message
 
 
 def stage_final_prepare_response_simplified(control_message):
