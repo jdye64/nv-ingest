@@ -2,6 +2,7 @@ from datetime import datetime
 import json
 import os
 import sys
+import pprint
 from typing import Any, Dict, List, Tuple
 import uuid
 from nv_ingest_api.internal.extract.image.image_extractor import extract_primitives_from_image_internal
@@ -21,6 +22,8 @@ from nv_ingest_api.internal.primitives.tracing.logging import annotate_cm
 from nv_ingest_api.internal.schemas.meta.ingest_job_schema import validate_ingest_job
 from celery import Celery
 from opentelemetry import trace
+from nv_ingest_api.internal.schemas.transform.transform_text_embedding_schema import TextEmbeddingSchema
+from nv_ingest_api.internal.transform.embed_text import transform_create_text_embeddings_internal
 
 import pandas as pd
 
@@ -451,7 +454,7 @@ def stage_final_prepare_response(control_message):
     return json_payloads
 
 
-def text_embedding(control_message):
+def store_text_embedding(control_message):
     """
     Process the control message by storing embeddings.
 
@@ -486,6 +489,130 @@ def text_embedding(control_message):
 
     # Update the message payload with the stored embeddings DataFrame.
     control_message.payload(new_df)
+
+    return control_message
+
+
+def text_embedding(control_message):
+    """
+    Process the control message by generating text embeddings.
+
+    Parameters
+    ----------
+    control_message : IngestControlMessage
+        The incoming message containing the DataFrame payload.
+
+    Returns
+    -------
+    IngestControlMessage
+        The updated message with text embeddings and trace info added.
+    """
+    print("TextEmbeddingTransformStage.on_data: Starting text embedding transformation.")
+
+    api_key = os.environ.get(
+        "NVIDIA_API_KEY",
+        "",
+    ) or os.environ.get(
+        "NGC_API_KEY",
+        "",
+    )
+    # TODO: Why in the world is this always defaulting to http://localhost:8000/v1????
+    embedding_nim_endpoint = os.getenv("EMBEDDING_NIM_ENDPOINT", "http://embedding:8000/v1")
+    embedding_model = os.getenv("EMBEDDING_NIM_MODEL_NAME", "nvidia/llama-3.2-nv-embedqa-1b-v2")
+
+    config = TextEmbeddingSchema(
+        **{
+            "api_key": api_key,
+            "embedding_nim_endpoint": embedding_nim_endpoint,
+            "embedding_model": embedding_model,
+        }
+    )
+
+    print(f"TextEmbeddingSchema: {config}")
+
+    # Get the DataFrame payload.
+    df_payload = control_message.payload()
+    print("TextEmbeddingTransformStage: Extracted payload with %d rows.", len(df_payload))
+
+    # Remove the "embed" task to obtain task-specific configuration.
+    task_config = remove_task_by_type(control_message, "embed")
+    print("TextEmbeddingTransformStage: Task configuration extracted: %s", pprint.pformat(task_config))
+
+    # Call the text embedding extraction function.
+    new_df, execution_trace_log = transform_create_text_embeddings_internal(
+        df_payload, task_config=task_config, transform_config=config
+    )
+    print("Text embedding transformation completed. New payload has %d rows.", len(new_df))
+
+    # Update the control message payload.
+    control_message.payload(new_df)
+    # Annotate the message metadata with trace info.
+    control_message.set_metadata("text_embedding_trace", execution_trace_log)
+    print("Text embedding trace metadata added.")
+    return control_message
+
+
+def table_extraction(control_message):
+    print("-------- Entering table_extraction ---------")
+    yolox_table_structure_grpc, yolox_table_structure_http, yolox_auth, yolox_table_structure_protocol = (
+        get_nim_service("yolox_table_structure")
+    )
+    ocr_grpc, ocr_http, ocr_auth, ocr_protocol = get_nim_service("ocr")
+
+    table_extractor_config = TableExtractorSchema(
+        **{
+            "endpoint_config": {
+                "yolox_endpoints": (yolox_table_structure_grpc, yolox_table_structure_http),
+                "yolox_infer_protocol": yolox_table_structure_protocol,
+                "ocr_endpoints": (ocr_grpc, ocr_http),
+                "ocr_infer_protocol": ocr_protocol,
+                "auth_token": yolox_auth,
+            }
+        }
+    )
+
+    """
+    Process the control message by extracting table data from the PDF payload.
+
+    Parameters
+    ----------
+    control_message : IngestControlMessage
+        The incoming message containing the PDF payload.
+
+    Returns
+    -------
+    IngestControlMessage
+        The updated message with the extracted table data and extraction info in metadata.
+    """
+    print("TableExtractorStage.on_data: Starting table extraction.")
+    # Extract the DataFrame payload.
+    df_payload = control_message.payload()
+    print("Extracted payload with %d rows.", len(df_payload))
+
+    # Remove the "table_data_extract" task to obtain task-specific configuration.
+    task_config = remove_task_by_type(control_message, "table_data_extract")
+    print("Extracted task configuration: %s", task_config)
+
+    # Perform table data extraction.
+    execution_trace_log = {}
+    new_df, extraction_info = extract_table_data_from_image_internal(
+        df_extraction_ledger=df_payload,
+        task_config=task_config,
+        extraction_config=self.validated_config,
+        execution_trace_log=execution_trace_log,
+    )
+    print("Table extraction completed. Extracted %d rows.", len(new_df))
+
+    # Update the control message with the new DataFrame.
+    control_message.payload(new_df)
+    # Annotate the message with extraction info.
+    control_message.set_metadata("table_extraction_info", extraction_info)
+    print("Table extraction metadata injected successfully.")
+
+    do_trace_tagging = control_message.get_metadata("config::add_trace_tagging") is True
+    if do_trace_tagging and execution_trace_log:
+        for key, ts in execution_trace_log.items():
+            control_message.set_timestamp(key, ts)
 
     return control_message
 
