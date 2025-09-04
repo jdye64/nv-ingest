@@ -30,6 +30,10 @@ image:
   repository: "nvcr.io/nvidia/nemo-microservices/nv-ingest"
   tag: "25.6.2"
 
+serviceAccount:
+  create: true
+  name: nv-ingest-sa
+
 ## @section Pod Configuration
 ## @param podAnnotations [object] Sets additional annotations on the main deployment pods
 podAnnotations:
@@ -922,6 +926,9 @@ redisDeployed: true
 ## @param redis.master.configmap [default: "protected-mode no"] Redis master configuration
 
 redis:
+  configmap: |-
+    save ""
+    appendonly no
   image:
     tag: 7.4.3-debian-12-r0
   auth:
@@ -929,6 +936,7 @@ redis:
   replica:
     replicaCount: 1
     persistence:
+      enabled: false
       size: "50Gi"
     resources:
       requests:
@@ -937,6 +945,7 @@ redis:
         memory: "12Gi"
   master:
     persistence:
+      enabled: false
       size: "50Gi"
     resources:
       requests:

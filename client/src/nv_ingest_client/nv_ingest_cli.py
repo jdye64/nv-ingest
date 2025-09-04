@@ -257,8 +257,8 @@ def main(
             _msg = f"Output will be written to: {output_directory}"
             if dry_run:
                 _msg = f"[Dry-Run] {_msg}"
-            else:
-                ensure_directory_with_permissions(output_directory)
+            #else:
+                #ensure_directory_with_permissions(output_directory)
 
             logger.info(_msg)
 
