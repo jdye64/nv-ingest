@@ -16,7 +16,97 @@ logger = logging.getLogger(__name__)
 import numpy as np
 import pandas as pd
 
+from importlib import import_module
+
 from nv_ingest_api.util.nim import infer_microservice
+
+
+def _lancedb():
+    """Import lancedb lazily to avoid fork warnings during early process setup."""
+    return import_module("lancedb")
+
+
+def _ensure_lancedb_table(uri: str, table_name: str) -> None:
+    """
+    Ensure the local LanceDB URI exists and table can be opened.
+
+    Creates an empty table with the expected schema if it does not exist yet.
+    """
+    # Local path URI in this pipeline.
+    Path(uri).mkdir(parents=True, exist_ok=True)
+
+    db = _lancedb().connect(uri)
+    try:
+        db.open_table(table_name)
+        return
+    except Exception:
+        pass
+
+    import pyarrow as pa  # type: ignore
+
+    schema = pa.schema(
+        [
+            pa.field("vector", pa.list_(pa.float32(), 2048)),
+            pa.field("pdf_page", pa.string()),
+            pa.field("filename", pa.string()),
+            pa.field("pdf_basename", pa.string()),
+            pa.field("page_number", pa.int32()),
+            pa.field("source_id", pa.string()),
+            pa.field("path", pa.string()),
+            pa.field("text", pa.string()),
+            pa.field("metadata", pa.string()),
+            pa.field("source", pa.string()),
+        ]
+    )
+    empty = pa.table(
+        {
+            "vector": [],
+            "pdf_page": [],
+            "filename": [],
+            "pdf_basename": [],
+            "page_number": [],
+            "source_id": [],
+            "path": [],
+            "text": [],
+            "metadata": [],
+            "source": [],
+        },
+        schema=schema,
+    )
+    db.create_table(table_name, data=empty, schema=schema, mode="create")
+
+
+def _gold_to_doc_page(golden_key: str) -> tuple[str, str]:
+    s = str(golden_key)
+    if "_" not in s:
+        return s, ""
+    doc, page = s.rsplit("_", 1)
+    return doc, page
+
+
+def _is_hit_at_k(golden_key: str, retrieved_keys: list[str], k: int) -> bool:
+    doc, page = _gold_to_doc_page(golden_key)
+    specific_page = f"{doc}_{page}"
+    entire_document = f"{doc}_-1"
+    top = (retrieved_keys or [])[: int(k)]
+    return (specific_page in top) or (entire_document in top)
+
+
+def _hit_key_and_distance(hit: dict) -> tuple[str | None, float | None]:
+    try:
+        res = json.loads(hit.get("metadata", "{}"))
+        source = json.loads(hit.get("source", "{}"))
+    except Exception:
+        return None, None
+
+    source_id = source.get("source_id")
+    page_number = res.get("page_number")
+    if not source_id or page_number is None:
+        return None, float(hit.get("_distance")) if "_distance" in hit else None
+
+    key = f"{Path(str(source_id)).stem}_{page_number}"
+    dist = float(hit["_distance"]) if "_distance" in hit else float(hit["_score"]) if "_score" in hit else None
+    return key, dist
 
 
 @dataclass(frozen=True)
