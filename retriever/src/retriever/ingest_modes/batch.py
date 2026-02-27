@@ -620,7 +620,7 @@ class BatchIngestor(Ingestor):
         # Rebalance page rows globally before extraction so large PDFs do not
         # concentrate work into a few skewed blocks.
         self._rd_dataset = self._rd_dataset.repartition(
-            target_num_rows_per_block=max(1, int(pdf_extract_batch_size) * 4),
+            num_blocks=max(1, int(pdf_extract_workers) * 4),
             shuffle=True,
         )
 
