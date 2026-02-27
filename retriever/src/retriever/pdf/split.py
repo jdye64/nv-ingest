@@ -190,9 +190,11 @@ class PDFSplitActor:
     def __call__(self, pdf_batch: Any) -> Any:
         t0 = time.perf_counter()
         out = split_pdf_batch(pdf_batch, params=self.split_params)
+        metrics_actor = getattr(self, "_metrics_actor", None)
+        stage_name = str(getattr(self, "_stage_name", "pdf_split"))
         emit_actor_metrics(
-            self._metrics_actor,
-            stage=self._stage_name,
+            metrics_actor,
+            stage=stage_name,
             duration_sec=(time.perf_counter() - t0),
             input_rows=estimate_batch_rows(pdf_batch),
             output_rows=estimate_batch_rows(out),
