@@ -29,7 +29,7 @@ def run(
     rows: int = typer.Option(256, "--rows", min=1, help="How many page rows to synthesize for each benchmark trial."),
     workers: str = typer.Option("1,2,4", "--workers", help="Comma-separated worker counts to try."),
     batch_sizes: str = typer.Option("1,2,4,8,16", "--batch-sizes", help="Comma-separated Ray batch sizes to try."),
-    dpi: int = typer.Option(200, "--dpi", min=72, help="Render DPI for page image extraction."),
+    dpi: int = typer.Option(100, "--dpi", min=72, help="Render DPI for page image extraction."),
     extract_text: bool = typer.Option(True, "--extract-text/--no-extract-text", help="Enable text extraction."),
     extract_page_as_image: bool = typer.Option(
         True, "--extract-page-as-image/--no-extract-page-as-image", help="Emit page image payload."

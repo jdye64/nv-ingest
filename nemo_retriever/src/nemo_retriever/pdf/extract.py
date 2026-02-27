@@ -33,7 +33,7 @@ except Exception:  # pragma: no cover
     Image = None  # type: ignore[assignment]
 
 
-def _render_page_to_base64(page: Any, *, dpi: int = 200, image_format: str = "png") -> Dict[str, Any]:
+def _render_page_to_base64(page: Any, *, dpi: int = 100, image_format: str = "png") -> Dict[str, Any]:
     """
     Render a page to an image and return base64 plus minimal metadata.
 
@@ -110,7 +110,7 @@ def _error_record(
     stage: str,
     exc: BaseException,
     page_number: int = 0,
-    dpi: int = 200,
+    dpi: int = 100,
 ) -> Dict[str, Any]:
     """
     Return a single output record with the same shape as a normal page record,
@@ -168,7 +168,7 @@ def pdf_extraction(
     extract_tables: bool = False,
     extract_charts: bool = False,
     extract_infographics: bool = False,
-    dpi: int = 200,
+    dpi: int = 100,
     image_format: str = "png",
     text_extraction_method: str = "pdfium_hybrid",
     text_depth: str = "page",

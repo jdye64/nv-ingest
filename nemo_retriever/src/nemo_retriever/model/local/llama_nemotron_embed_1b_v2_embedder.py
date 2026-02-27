@@ -7,6 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Sequence
+import warnings
 
 import torch
 
@@ -39,6 +40,15 @@ class LlamaNemotronEmbed1BV2Embedder:
         self._tokenizer = None
         self._model = None
         self._device = None
+        # The upstream HF remote-code module for this model currently calls
+        # create_bidirectional_mask(input_embeds=...), which emits a FutureWarning
+        # on newer transformers versions. Suppress only that known warning.
+        warnings.filterwarnings(
+            "ignore",
+            message=r".*`input_embeds` is deprecated.*create_bidirectional_mask.*",
+            category=FutureWarning,
+            module=r".*llama_bidirectional_model",
+        )
 
         from transformers import AutoModel, AutoTokenizer
 

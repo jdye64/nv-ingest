@@ -152,7 +152,7 @@ class ExtractParams(_ParamsModel):
     extract_charts: bool = False
     extract_infographics: bool = False
     extract_page_as_image: Optional[bool] = None
-    dpi: int = 200
+    dpi: int = 100
 
     invoke_url: Optional[str] = None
     api_key: Optional[str] = None

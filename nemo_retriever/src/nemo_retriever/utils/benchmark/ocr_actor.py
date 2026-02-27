@@ -37,7 +37,7 @@ def run(
     ),
     num_gpus: float = typer.Option(1.0, "--num-gpus", min=0.0, help="GPUs reserved per actor."),
     num_cpus: float = typer.Option(1.0, "--num-cpus", min=0.0, help="CPUs reserved per actor."),
-    dpi: int = typer.Option(200, "--dpi", min=72, help="Seed extraction DPI."),
+    dpi: int = typer.Option(100, "--dpi", min=72, help="Seed extraction DPI."),
     ray_address: Optional[str] = typer.Option(None, "--ray-address", help="Ray address (default local)."),
     output_json: Optional[Path] = typer.Option(None, "--output-json", help="Optional output JSON summary path."),
 ) -> None:
