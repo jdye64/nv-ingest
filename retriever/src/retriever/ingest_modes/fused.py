@@ -12,6 +12,7 @@ handoffs. It intentionally does not support remote NIM endpoints.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Dict
 
 import ray.data as rd
@@ -26,6 +27,7 @@ from ..params import ExtractParams
 from ..params import PdfSplitParams
 from .batch import BatchIngestor
 from .inprocess import embed_text_main_text_embed, explode_content_to_rows
+from retriever.utils.metrics_actor import emit_actor_metrics, estimate_batch_rows
 
 
 def _assert_no_remote_endpoints(kwargs: Dict[str, Any], *, context: str) -> None:
@@ -49,6 +51,8 @@ class _FusedModelActor:
 
     def __init__(self, **kwargs: Any) -> None:
         _assert_no_remote_endpoints(dict(kwargs), context="actor init")
+        self._metrics_actor = kwargs.pop("metrics_actor", None)
+        self._stage_name = str(kwargs.pop("stage_name", "fused_model"))
 
         from retriever.model.local import NemotronOCRV1, NemotronPageElementsV3
         from retriever.model.local.llama_nemotron_embed_1b_v2_embedder import (
@@ -93,6 +97,7 @@ class _FusedModelActor:
         )
 
     def __call__(self, batch_df: Any) -> Any:
+        t0 = time.perf_counter()
         detected = detect_page_elements_v3(
             batch_df,
             model=self._page_elements_model,
@@ -107,6 +112,14 @@ class _FusedModelActor:
         )
         exploded = explode_content_to_rows(ocred, text_column=str(self._embed_kwargs["text_column"]))
         embedded = embed_text_main_text_embed(exploded, model=self._embed_model, **self._embed_kwargs)
+        emit_actor_metrics(
+            self._metrics_actor,
+            stage=self._stage_name,
+            duration_sec=(time.perf_counter() - t0),
+            input_rows=estimate_batch_rows(batch_df),
+            output_rows=estimate_batch_rows(embedded),
+            ok=True,
+        )
         return embedded
 
 
@@ -151,7 +164,9 @@ class FusedIngestor(BatchIngestor):
             split_params=PdfSplitParams(
                 start_page=kwargs.get("start_page"),
                 end_page=kwargs.get("end_page"),
-            )
+            ),
+            metrics_actor=self._metrics_actor,
+            stage_name="pdf_split",
         )
         self._rd_dataset = self._rd_dataset.map_batches(
             pdf_split_actor,
@@ -161,7 +176,11 @@ class FusedIngestor(BatchIngestor):
             batch_format="pandas",
         )
 
-        extraction_actor = PDFExtractionActor(**kwargs)
+        extraction_actor = PDFExtractionActor(
+            **kwargs,
+            metrics_actor=self._metrics_actor,
+            stage_name="pdf_extract",
+        )
         self._rd_dataset = self._rd_dataset.map_batches(
             extraction_actor,
             batch_size=pdf_extract_batch_size,
@@ -199,6 +218,8 @@ class FusedIngestor(BatchIngestor):
 
         stage_kwargs = dict(getattr(self, "_fused_extract_flags", {}))
         stage_kwargs.update(dict(kwargs))
+        stage_kwargs["metrics_actor"] = self._metrics_actor
+        stage_kwargs["stage_name"] = "fused_model"
 
         self._tasks.append(("embed", dict(stage_kwargs)))
         self._rd_dataset = self._rd_dataset.repartition(target_num_rows_per_block=max(16, fused_batch_size))

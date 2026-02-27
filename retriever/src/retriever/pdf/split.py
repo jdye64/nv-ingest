@@ -9,10 +9,12 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import time
 import traceback
 
 import pandas as pd
 from retriever.params import PdfSplitParams
+from retriever.utils.metrics_actor import emit_actor_metrics, estimate_batch_rows
 
 try:
     import pypdfium2 as pdfium
@@ -173,11 +175,28 @@ def split_pdf_batch(pdf_batch: Any, params: PdfSplitParams | None = None) -> pd.
 class PDFSplitActor:
     split_params: PdfSplitParams
 
-    def __init__(self, split_params: PdfSplitParams | None = None) -> None:
+    def __init__(
+        self,
+        split_params: PdfSplitParams | None = None,
+        metrics_actor: Any = None,
+        stage_name: str = "pdf_split",
+    ) -> None:
         self.split_params = split_params or PdfSplitParams()
+        self._metrics_actor = metrics_actor
+        self._stage_name = str(stage_name)
 
     def __call__(self, pdf_batch: Any) -> Any:
-        return split_pdf_batch(pdf_batch, params=self.split_params)
+        t0 = time.perf_counter()
+        out = split_pdf_batch(pdf_batch, params=self.split_params)
+        emit_actor_metrics(
+            self._metrics_actor,
+            stage=self._stage_name,
+            duration_sec=(time.perf_counter() - t0),
+            input_rows=estimate_batch_rows(pdf_batch),
+            output_rows=estimate_batch_rows(out),
+            ok=True,
+        )
+        return out
 
 
 def split_pdf(pdf_ds: Any, params: PdfSplitParams | None = None) -> Any:

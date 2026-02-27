@@ -17,7 +17,7 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 from datetime import timedelta
 
 from typing import Union
@@ -29,6 +29,7 @@ from retriever.page_elements import PageElementDetectionActor
 from retriever.ocr.ocr import OCRActor
 from retriever.pdf.extract import PDFExtractionActor
 from retriever.pdf.split import PDFSplitActor
+from retriever.utils.metrics_actor import MetricsActor, emit_actor_metrics, estimate_batch_rows
 
 from ..ingest import Ingestor
 from ..params import EmbedParams
@@ -79,12 +80,19 @@ class _LanceDBWriteActor:
     has been consumed (handled by ``BatchIngestor.ingest()``).
     """
 
-    def __init__(self, params: VdbUploadParams | None = None) -> None:
+    def __init__(
+        self,
+        params: VdbUploadParams | None = None,
+        metrics_actor: Any = None,
+        stage_name: str = "vdb_upload",
+    ) -> None:
         import json
         from pathlib import Path
 
         self._json = json
         self._Path = Path
+        self._metrics_actor = metrics_actor
+        self._stage_name = str(stage_name)
         lancedb_params = (params or VdbUploadParams()).lancedb
 
         self._lancedb_uri = lancedb_params.lancedb_uri
@@ -218,6 +226,7 @@ class _LanceDBWriteActor:
         return rows
 
     def __call__(self, batch_df: Any) -> Any:
+        t0 = time.perf_counter()
         rows = self._build_rows(batch_df)
         if rows:
             # Infer schema from first batch
@@ -226,7 +235,15 @@ class _LanceDBWriteActor:
             self._table.add(rows)
 
             self._total_rows += len(rows)
-
+        emit_actor_metrics(
+            self._metrics_actor,
+            stage=self._stage_name,
+            duration_sec=(time.perf_counter() - t0),
+            input_rows=estimate_batch_rows(batch_df),
+            output_rows=estimate_batch_rows(batch_df),
+            ok=True,
+            metadata={"rows_written": len(rows)},
+        )
         return batch_df
 
 
@@ -237,8 +254,10 @@ class _BatchEmbedActor:
     model creation and delegates to a remote NIM endpoint instead.
     """
 
-    def __init__(self, params: EmbedParams) -> None:
+    def __init__(self, params: EmbedParams, metrics_actor: Any = None, stage_name: str = "embed") -> None:
         self._params = params
+        self._metrics_actor = metrics_actor
+        self._stage_name = str(stage_name)
         self._kwargs = {
             **params.model_dump(mode="python", exclude={"runtime", "batch_tuning", "fused_tuning"}, exclude_none=True),
             **params.runtime.model_dump(mode="python", exclude_none=True),
@@ -284,7 +303,17 @@ class _BatchEmbedActor:
     def __call__(self, batch_df: Any) -> Any:
         from retriever.ingest_modes.inprocess import embed_text_main_text_embed
 
-        return embed_text_main_text_embed(batch_df, model=self._model, **self._kwargs)
+        t0 = time.perf_counter()
+        out = embed_text_main_text_embed(batch_df, model=self._model, **self._kwargs)
+        emit_actor_metrics(
+            self._metrics_actor,
+            stage=self._stage_name,
+            duration_sec=(time.perf_counter() - t0),
+            input_rows=estimate_batch_rows(batch_df),
+            output_rows=estimate_batch_rows(out),
+            ok=True,
+        )
+        return out
 
 
 class BatchIngestor(Ingestor):
@@ -312,6 +341,7 @@ class BatchIngestor(Ingestor):
         resources = ray.available_resources()
         self._num_gpus = int(resources.get("GPU", 0))
         self._num_cpus = int(resources.get("CPU", os.cpu_count() or 4))
+        self._metrics_actor = ray.remote(MetricsActor).remote(run_id="batch_ingest_init")
 
         # Builder-style task configuration recorded for later execution.
         # Keep backwards-compatibility with code that inspects `Ingestor._documents`
@@ -323,6 +353,7 @@ class BatchIngestor(Ingestor):
         self._pipeline_type: str = "pdf"  # "pdf" | "txt" | "html"
         self._extract_txt_kwargs: Dict[str, Any] = {}  # noqa: F821
         self._extract_html_kwargs: Dict[str, Any] = {}  # noqa: F821
+        self._last_actor_metrics_report: Optional[Dict[str, Any]] = None
 
     def files(self, documents: Union[str, List[str]]) -> "BatchIngestor":
         """
@@ -566,6 +597,7 @@ class BatchIngestor(Ingestor):
             num_cpus=1,
             num_gpus=0,
             batch_format="pandas",
+            fn_constructor_kwargs={"metrics_actor": self._metrics_actor, "stage_name": "convert_to_pdf"},
         )
 
         # Splitting pdfs is broken into a separate stage to help amortize downstream
@@ -574,7 +606,9 @@ class BatchIngestor(Ingestor):
             split_params=PdfSplitParams(
                 start_page=kwargs.get("start_page"),
                 end_page=kwargs.get("end_page"),
-            )
+            ),
+            metrics_actor=self._metrics_actor,
+            stage_name="pdf_split",
         )
         self._rd_dataset = self._rd_dataset.map_batches(
             pdf_split_actor,
@@ -585,7 +619,11 @@ class BatchIngestor(Ingestor):
         )
 
         # Pre-split pdfs are now ready for extraction — the main CPU bottleneck.
-        extraction_actor = PDFExtractionActor(**kwargs)
+        extraction_actor = PDFExtractionActor(
+            **kwargs,
+            metrics_actor=self._metrics_actor,
+            stage_name="pdf_extract",
+        )
         self._rd_dataset = self._rd_dataset.map_batches(
             extraction_actor,
             batch_size=pdf_extract_batch_size,
@@ -606,7 +644,11 @@ class BatchIngestor(Ingestor):
             num_cpus=page_elements_cpus_per_actor,
             num_gpus=gpu_page_elements,
             compute=rd.ActorPoolStrategy(size=page_elements_workers),
-            fn_constructor_kwargs=dict(detect_kwargs),
+            fn_constructor_kwargs={
+                **dict(detect_kwargs),
+                "metrics_actor": self._metrics_actor,
+                "stage_name": "page_elements",
+            },
         )
 
         # OCR-based extraction for tables/charts/infographics (single stage).
@@ -642,7 +684,7 @@ class BatchIngestor(Ingestor):
                 num_cpus=ocr_cpus_per_actor,
                 num_gpus=gpu_ocr,
                 compute=rd.ActorPoolStrategy(size=detect_workers),
-                fn_constructor_kwargs=ocr_flags,
+                fn_constructor_kwargs={**ocr_flags, "metrics_actor": self._metrics_actor, "stage_name": "ocr"},
             )
 
         return self
@@ -667,7 +709,11 @@ class BatchIngestor(Ingestor):
             batch_format="pandas",
             num_cpus=1,
             num_gpus=0,
-            fn_constructor_kwargs={"params": TextChunkParams(**self._extract_txt_kwargs)},
+            fn_constructor_kwargs={
+                "params": TextChunkParams(**self._extract_txt_kwargs),
+                "metrics_actor": self._metrics_actor,
+                "stage_name": "txt_split",
+            },
         )
         return self
 
@@ -691,7 +737,11 @@ class BatchIngestor(Ingestor):
             batch_format="pandas",
             num_cpus=1,
             num_gpus=0,
-            fn_constructor_kwargs={"params": HtmlChunkParams(**self._extract_html_kwargs)},
+            fn_constructor_kwargs={
+                "params": HtmlChunkParams(**self._extract_html_kwargs),
+                "metrics_actor": self._metrics_actor,
+                "stage_name": "html_split",
+            },
         )
         return self
 
@@ -779,7 +829,7 @@ class BatchIngestor(Ingestor):
             num_cpus=embed_cpus_per_actor,
             num_gpus=gpu_per_stage,
             compute=rd.ActorPoolStrategy(size=embed_workers),
-            fn_constructor_kwargs={"params": resolved},
+            fn_constructor_kwargs={"params": resolved, "metrics_actor": self._metrics_actor, "stage_name": "embed"},
         )
 
         return self
@@ -815,7 +865,7 @@ class BatchIngestor(Ingestor):
             num_cpus=1,
             num_gpus=0,
             compute=rd.ActorPoolStrategy(size=1),
-            fn_constructor_kwargs={"params": p},
+            fn_constructor_kwargs={"params": p, "metrics_actor": self._metrics_actor, "stage_name": "vdb_upload"},
         )
 
         return self
@@ -875,6 +925,11 @@ class BatchIngestor(Ingestor):
         )
         runtime_metrics_dir = run_params.runtime_metrics_dir
         runtime_metrics_prefix = run_params.runtime_metrics_prefix
+        run_id = str(runtime_metrics_prefix or f"batch_run_{int(time.time())}")
+        try:
+            ray.get(self._metrics_actor.reset.remote(run_id=run_id))
+        except Exception:
+            pass
         t0 = time.monotonic()
         num_pages = self._rd_dataset.count()
         elapsed = time.monotonic() - t0
@@ -933,6 +988,41 @@ class BatchIngestor(Ingestor):
         # Create LanceDB vector index after all streaming writes are complete.
         if hasattr(self, "_vdb_upload_kwargs") and self._vdb_upload_kwargs:
             self._create_lancedb_index()
+
+        try:
+            report = ray.get(self._metrics_actor.report.remote())
+            self._last_actor_metrics_report = report
+            print("\nActor metrics summary:")
+            totals = report.get("totals", {})
+            print(
+                "  total_calls={calls} errors={errors} duration_sec={duration:.3f}".format(
+                    calls=int(totals.get("calls", 0)),
+                    errors=int(totals.get("errors", 0)),
+                    duration=float(totals.get("duration_sec", 0.0)),
+                )
+            )
+            stages = report.get("stages", {})
+            for stage_name in sorted(stages.keys()):
+                s = stages[stage_name]
+                print(
+                    "  - {stage}: calls={calls} errors={errors} avg_s={avg:.3f} "
+                    "in_rows={in_rows} out_rows={out_rows}".format(
+                        stage=stage_name,
+                        calls=int(s.get("calls", 0)),
+                        errors=int(s.get("errors", 0)),
+                        avg=float(s.get("avg_duration_sec", 0.0)),
+                        in_rows=int(s.get("input_rows", 0)),
+                        out_rows=int(s.get("output_rows", 0)),
+                    )
+                )
+            if runtime_metrics_dir:
+                metrics_dir = Path(runtime_metrics_dir)
+                metrics_dir.mkdir(parents=True, exist_ok=True)
+                prefix = (runtime_metrics_prefix or "run").strip() or "run"
+                actor_report_path = metrics_dir / f"{prefix}.actor_metrics.json"
+                actor_report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        except Exception as e:
+            print(f"Warning: failed collecting actor metrics report: {e}")
 
         return num_pages
 

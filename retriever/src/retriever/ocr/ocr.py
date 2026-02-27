@@ -24,6 +24,7 @@ import pandas as pd
 from retriever.params import RemoteRetryParams
 from retriever.nim.nim import invoke_image_inference_batches
 from retriever.utils.actor_runtime import apply_dataframe_defaults, execute_actor_call
+from retriever.utils.metrics_actor import emit_actor_metrics, estimate_batch_rows
 
 try:
     from PIL import Image
@@ -586,6 +587,8 @@ class OCRActor:
         "_api_key",
         "_request_timeout_s",
         "_remote_retry",
+        "_metrics_actor",
+        "_stage_name",
     )
 
     def __init__(
@@ -601,7 +604,11 @@ class OCRActor:
         remote_max_pool_workers: int = 16,
         remote_max_retries: int = 10,
         remote_max_429_retries: int = 5,
+        metrics_actor: Any = None,
+        stage_name: str = "ocr",
     ) -> None:
+        self._metrics_actor = metrics_actor
+        self._stage_name = str(stage_name)
         self._invoke_url = (ocr_invoke_url or invoke_url or "").strip()
         self._api_key = api_key
         self._request_timeout_s = float(request_timeout_s)
@@ -621,6 +628,9 @@ class OCRActor:
         self._extract_infographics = bool(extract_infographics)
 
     def __call__(self, batch_df: Any, **override_kwargs: Any) -> Any:
+        t0 = time.perf_counter()
+        error_holder: Dict[str, Optional[BaseException]] = {"exc": None}
+
         def _invoke() -> Any:
             return ocr_page_elements(
                 batch_df,
@@ -636,6 +646,7 @@ class OCRActor:
             )
 
         def _df_error(df: pd.DataFrame, exc: BaseException) -> Any:
+            error_holder["exc"] = exc
             payload = _error_payload(stage="actor_call", exc=exc)
             return apply_dataframe_defaults(
                 df,
@@ -648,11 +659,22 @@ class OCRActor:
             )
 
         def _other_error(exc: BaseException) -> Any:
+            error_holder["exc"] = exc
             return [{"ocr_v1": _error_payload(stage="actor_call", exc=exc)}]
 
-        return execute_actor_call(
+        out = execute_actor_call(
             batch_df,
             invoke=_invoke,
             dataframe_error=_df_error,
             other_error=_other_error,
         )
+        emit_actor_metrics(
+            self._metrics_actor,
+            stage=self._stage_name,
+            duration_sec=(time.perf_counter() - t0),
+            input_rows=estimate_batch_rows(batch_df),
+            output_rows=estimate_batch_rows(out),
+            ok=(error_holder["exc"] is None),
+            error=error_holder["exc"],
+        )
+        return out

@@ -9,11 +9,13 @@ from io import BytesIO
 from typing import Any, Dict, List, Optional
 
 import base64
+import time
 import traceback
 import pypdfium2.raw as pdfium_c
 
 import pandas as pd
 from retriever.utils.actor_runtime import execute_actor_call
+from retriever.utils.metrics_actor import emit_actor_metrics, estimate_batch_rows
 
 try:
     import pypdfium2 as pdfium
@@ -335,13 +337,19 @@ class PDFExtractionActor:
     extract_kwargs: Dict[str, Any]
 
     def __init__(self, **extract_kwargs: Any) -> None:
+        self._metrics_actor = extract_kwargs.pop("metrics_actor", None)
+        self._stage_name = str(extract_kwargs.pop("stage_name", "pdf_extract"))
         self.extract_kwargs = dict(extract_kwargs)
 
     def __call__(self, pdf: Any, **override_kwargs: Any) -> Optional[Any]:
+        t0 = time.perf_counter()
+        error_holder: Dict[str, Optional[BaseException]] = {"exc": None}
+
         def _invoke() -> Optional[Any]:
             return pdf_extraction(pdf, **self.extract_kwargs, **override_kwargs)
 
         def _error_rows(exc: BaseException) -> list[dict[str, Any]]:
+            error_holder["exc"] = exc
             source_path = None
             try:
                 if isinstance(pdf, pd.DataFrame) and "path" in pdf.columns and len(pdf.index) > 0:
@@ -357,9 +365,19 @@ class PDFExtractionActor:
                 )
             ]
 
-        return execute_actor_call(
+        out = execute_actor_call(
             pdf,
             invoke=_invoke,
             dataframe_error=lambda _df, exc: _error_rows(exc),
             other_error=_error_rows,
         )
+        emit_actor_metrics(
+            self._metrics_actor,
+            stage=self._stage_name,
+            duration_sec=(time.perf_counter() - t0),
+            input_rows=estimate_batch_rows(pdf),
+            output_rows=estimate_batch_rows(out),
+            ok=(error_holder["exc"] is None),
+            error=error_holder["exc"],
+        )
+        return out

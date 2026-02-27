@@ -9,11 +9,13 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
+import time
 import traceback
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
+from retriever.utils.metrics_actor import emit_actor_metrics, estimate_batch_rows
 
 SUPPORTED_EXTENSIONS = frozenset({".pdf", ".docx", ".pptx"})
 
@@ -144,8 +146,19 @@ class DocToPdfConversionActor:
     ``PDFSplitActor``.
     """
 
-    def __init__(self) -> None:
-        pass
+    def __init__(self, metrics_actor: Any = None, stage_name: str = "convert_to_pdf") -> None:
+        self._metrics_actor = metrics_actor
+        self._stage_name = str(stage_name)
 
     def __call__(self, batch_df: Any) -> Any:
-        return convert_batch_to_pdf(batch_df)
+        t0 = time.perf_counter()
+        out = convert_batch_to_pdf(batch_df)
+        emit_actor_metrics(
+            self._metrics_actor,
+            stage=self._stage_name,
+            duration_sec=(time.perf_counter() - t0),
+            input_rows=estimate_batch_rows(batch_df),
+            output_rows=estimate_batch_rows(out),
+            ok=True,
+        )
+        return out

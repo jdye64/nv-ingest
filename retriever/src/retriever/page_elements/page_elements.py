@@ -19,6 +19,7 @@ from retriever.utils.detection_common import (
     decode_b64_image_to_chw_tensor as _shared_decode_b64_image_to_chw_tensor,
     detection_error_payload as _error_payload,
 )
+from retriever.utils.metrics_actor import emit_actor_metrics, estimate_batch_rows
 
 try:
     import numpy as np
@@ -685,9 +686,11 @@ class PageElementDetectionActor:
       ds = ds.map_batches(PageElementDetectionActor, fn_constructor_kwargs={...}, batch_format="pandas")
     """
 
-    __slots__ = ("detect_kwargs", "_model")
+    __slots__ = ("detect_kwargs", "_model", "_metrics_actor", "_stage_name")
 
     def __init__(self, **detect_kwargs: Any) -> None:
+        self._metrics_actor = detect_kwargs.pop("metrics_actor", None)
+        self._stage_name = str(detect_kwargs.pop("stage_name", "page_elements"))
         self.detect_kwargs = dict(detect_kwargs)
         invoke_url = str(
             self.detect_kwargs.get("page_elements_invoke_url") or self.detect_kwargs.get("invoke_url") or ""
@@ -702,6 +705,9 @@ class PageElementDetectionActor:
             self._model = NemotronPageElementsV3()
 
     def __call__(self, pages_df: Any, **override_kwargs: Any) -> Any:
+        t0 = time.perf_counter()
+        error_holder: Dict[str, Optional[BaseException]] = {"exc": None}
+
         def _invoke() -> Any:
             return detect_page_elements_v3(
                 pages_df,
@@ -711,6 +717,7 @@ class PageElementDetectionActor:
             )
 
         def _df_error(df: pd.DataFrame, exc: BaseException) -> Any:
+            error_holder["exc"] = exc
             payload = _error_payload(stage="actor_call", exc=exc)
             return apply_dataframe_defaults(
                 df,
@@ -722,11 +729,22 @@ class PageElementDetectionActor:
             )
 
         def _other_error(exc: BaseException) -> Any:
+            error_holder["exc"] = exc
             return [{"page_elements_v3": _error_payload(stage="actor_call", exc=exc)}]
 
-        return execute_actor_call(
+        out = execute_actor_call(
             pages_df,
             invoke=_invoke,
             dataframe_error=_df_error,
             other_error=_other_error,
         )
+        emit_actor_metrics(
+            self._metrics_actor,
+            stage=self._stage_name,
+            duration_sec=(time.perf_counter() - t0),
+            input_rows=estimate_batch_rows(pages_df),
+            output_rows=estimate_batch_rows(out),
+            ok=(error_holder["exc"] is None),
+            error=error_holder["exc"],
+        )
+        return out
