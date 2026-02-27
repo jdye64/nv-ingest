@@ -294,17 +294,18 @@ def _search_lancedb(
             from lancedb.rerankers import RRFReranker  # type: ignore
 
             text = query_texts[i]
-            hits = (
+            query = (
                 table.search(query_type="hybrid")
                 .vector(q)
                 .text(text)
                 .nprobes(effective_nprobes)
                 .refine_factor(refine_factor)
-                .select(["text", "metadata", "source", "_score"])
-                .limit(top_k)
-                .rerank(RRFReranker())
-                .to_list()
             )
+            # Newer LanceDB warns if scoring is auto-projected. Opt out when
+            # the API is available, while keeping compatibility with older versions.
+            if hasattr(query, "disable_scoring_autoprojection"):
+                query = query.disable_scoring_autoprojection()
+            hits = query.select(["text", "metadata", "source"]).limit(top_k).rerank(RRFReranker()).to_list()
         else:
             hits = (
                 table.search(q, vector_column_name=vector_column_name)
