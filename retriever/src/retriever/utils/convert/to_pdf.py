@@ -146,6 +146,9 @@ class DocToPdfConversionActor:
     ``PDFSplitActor``.
     """
 
+    _metrics_actor: Any
+    _stage_name: str
+
     def __init__(self, metrics_actor: Any = None, stage_name: str = "convert_to_pdf") -> None:
         self._metrics_actor = metrics_actor
         self._stage_name = str(stage_name)

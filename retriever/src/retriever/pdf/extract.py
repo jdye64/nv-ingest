@@ -335,6 +335,8 @@ class PDFExtractionActor:
     """
 
     extract_kwargs: Dict[str, Any]
+    _metrics_actor: Any
+    _stage_name: str
 
     def __init__(self, **extract_kwargs: Any) -> None:
         self._metrics_actor = extract_kwargs.pop("metrics_actor", None)

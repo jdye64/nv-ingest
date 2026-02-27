@@ -174,6 +174,8 @@ def split_pdf_batch(pdf_batch: Any, params: PdfSplitParams | None = None) -> pd.
 @dataclass(slots=True)
 class PDFSplitActor:
     split_params: PdfSplitParams
+    _metrics_actor: Any
+    _stage_name: str
 
     def __init__(
         self,
