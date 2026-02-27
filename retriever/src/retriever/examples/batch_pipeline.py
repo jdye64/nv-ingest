@@ -7,9 +7,9 @@ Batch ingestion pipeline with optional recall evaluation.
 Run with: uv run python -m retriever.examples.batch_pipeline <input-dir>
 """
 
-import json
 import subprocess
 import time
+import json
 from collections import defaultdict
 from pathlib import Path
 from typing import Optional
@@ -23,7 +23,15 @@ from retriever.params import IngestExecuteParams
 from retriever.params import IngestorCreateParams
 from retriever.params import TextChunkParams
 from retriever.params import VdbUploadParams
-from retriever.recall.core import RecallConfig, retrieve_and_score
+from retriever.recall.core import (
+    RecallConfig,
+    _ensure_lancedb_table,
+    _gold_to_doc_page,
+    _hit_key_and_distance,
+    _is_hit_at_k,
+    _lancedb,
+    retrieve_and_score,
+)
 
 app = typer.Typer()
 
@@ -144,6 +152,150 @@ def _print_pages_per_second(processed_pages: Optional[int], ingest_elapsed_s: fl
     pps = processed_pages / ingest_elapsed_s
     print(f"Pages processed: {processed_pages}")
     print(f"Pages/sec (ingest only; excludes Ray startup and recall): {pps:.2f}")
+
+
+def _estimate_processed_pages(uri: str, table_name: str) -> Optional[int]:
+    try:
+        db = _lancedb().connect(uri)
+        table = db.open_table(table_name)
+    except Exception:
+        return None
+
+    try:
+        df = table.to_pandas()[["source_id", "page_number"]]
+        return int(df.dropna(subset=["source_id", "page_number"]).drop_duplicates().shape[0])
+    except Exception:
+        try:
+            return int(table.count_rows())
+        except Exception:
+            return None
+
+
+def _collect_detection_summary(uri: str, table_name: str) -> dict:
+    summary = {
+        "pages_seen": 0,
+        "page_elements_v3_total_detections": 0,
+        "page_elements_v3_counts_by_label": {},
+        "ocr_table_total_detections": 0,
+        "ocr_chart_total_detections": 0,
+        "ocr_infographic_total_detections": 0,
+    }
+    try:
+        db = _lancedb().connect(uri)
+        table = db.open_table(table_name)
+        df = table.to_pandas()
+    except Exception:
+        return summary
+
+    per_page: dict[tuple[str, int], dict] = {}
+    for _, row in df.iterrows():
+        row_dict = row.to_dict()
+
+        meta = row_dict.get("metadata")
+        if isinstance(meta, str):
+            try:
+                meta = json.loads(meta)
+            except Exception:
+                meta = {}
+        if not isinstance(meta, dict):
+            meta = {}
+
+        source = row_dict.get("source")
+        if isinstance(source, str):
+            try:
+                source = json.loads(source)
+            except Exception:
+                source = {}
+        if not isinstance(source, dict):
+            source = {}
+
+        source_id = str(
+            row_dict.get("source_id")
+            or source.get("source_id")
+            or meta.get("source_path")
+            or row_dict.get("path")
+            or ""
+        )
+        try:
+            page_number = int(meta.get("page_number") or row_dict.get("page_number") or -1)
+        except (TypeError, ValueError):
+            page_number = -1
+
+        key = (source_id, page_number)
+        entry = per_page.setdefault(
+            key,
+            {
+                "pe": 0,
+                "ocr_table": 0,
+                "ocr_chart": 0,
+                "ocr_infographic": 0,
+                "pe_by_label": defaultdict(int),
+            },
+        )
+
+        try:
+            pe = int(
+                meta.get("page_elements_v3_num_detections") or row_dict.get("page_elements_v3_num_detections") or 0
+            )
+        except (TypeError, ValueError):
+            pe = 0
+        entry["pe"] = max(entry["pe"], pe)
+
+        for field, meta_key in [
+            ("ocr_table", "ocr_table_detections"),
+            ("ocr_chart", "ocr_chart_detections"),
+            ("ocr_infographic", "ocr_infographic_detections"),
+        ]:
+            try:
+                val = int(meta.get(meta_key, 0) or 0)
+            except (TypeError, ValueError):
+                val = 0
+            entry[field] = max(entry[field], val)
+
+        label_counts = meta.get("page_elements_v3_counts_by_label") or row_dict.get("page_elements_v3_counts_by_label")
+        if isinstance(label_counts, dict):
+            for label, count in label_counts.items():
+                try:
+                    c = int(count or 0)
+                except (TypeError, ValueError):
+                    c = 0
+                label_name = str(label)
+                entry["pe_by_label"][label_name] = max(entry["pe_by_label"][label_name], c)
+
+    pe_by_label_totals: dict[str, int] = defaultdict(int)
+    for entry in per_page.values():
+        summary["page_elements_v3_total_detections"] += int(entry["pe"])
+        summary["ocr_table_total_detections"] += int(entry["ocr_table"])
+        summary["ocr_chart_total_detections"] += int(entry["ocr_chart"])
+        summary["ocr_infographic_total_detections"] += int(entry["ocr_infographic"])
+        for label, count in entry["pe_by_label"].items():
+            pe_by_label_totals[label] += int(count)
+
+    summary["pages_seen"] = len(per_page)
+    summary["page_elements_v3_counts_by_label"] = dict(sorted(pe_by_label_totals.items()))
+    return summary
+
+
+def _print_detection_summary(summary: dict) -> None:
+    print("\nDetection summary (deduped by source/page_number):")
+    print(f"  Pages seen: {summary.get('pages_seen', 0)}")
+    print(f"  PageElements v3 total detections: {summary.get('page_elements_v3_total_detections', 0)}")
+    print(f"  OCR table detections: {summary.get('ocr_table_total_detections', 0)}")
+    print(f"  OCR chart detections: {summary.get('ocr_chart_total_detections', 0)}")
+    print(f"  OCR infographic detections: {summary.get('ocr_infographic_total_detections', 0)}")
+    print("  PageElements v3 counts by label:")
+    by_label = summary.get("page_elements_v3_counts_by_label", {})
+    if not by_label:
+        print("    (none)")
+        return
+    for label, count in by_label.items():
+        print(f"    {label}: {count}")
+
+
+def _write_detection_summary(out_path: Path, summary: dict) -> None:
+    out_file = Path(out_path).expanduser().resolve()
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    out_file.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
 
 
 @app.command()
@@ -322,6 +474,12 @@ def main(
         False,
         "--hybrid/--no-hybrid",
         help="Enable LanceDB hybrid mode (dense + FTS text).",
+    ),
+    detection_summary_file: Optional[Path] = typer.Option(
+        None,
+        "--detection-summary-file",
+        path_type=Path,
+        help="Optional path to write detection summary JSON after ingest.",
     ),
 ) -> None:
     try:

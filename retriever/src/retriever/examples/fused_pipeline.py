@@ -28,7 +28,6 @@ from retriever.examples.batch_pipeline import (
     LANCEDB_TABLE,
     LANCEDB_URI,
     _configure_logging,
-    _ensure_lancedb_table,
     _estimate_processed_pages,
     _gold_to_doc_page,
     _hit_key_and_distance,
@@ -38,7 +37,7 @@ from retriever.examples.batch_pipeline import (
     _write_detection_summary,
     _collect_detection_summary,
 )
-from retriever.recall.core import RecallConfig, retrieve_and_score
+from retriever.recall.core import RecallConfig, _ensure_lancedb_table, retrieve_and_score
 
 app = typer.Typer()
 
