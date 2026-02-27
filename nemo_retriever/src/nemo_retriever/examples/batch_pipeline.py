@@ -801,13 +801,16 @@ def main(
 
         print("Running extraction...")
         ingest_start = time.perf_counter()
-        processed_pages = ingestor.ingest(
+        ingest_metrics = ingestor.ingest(
             params=IngestExecuteParams(
                 runtime_metrics_dir=str(runtime_metrics_dir) if runtime_metrics_dir is not None else None,
                 runtime_metrics_prefix=runtime_metrics_prefix,
             )
         )
         ingest_elapsed_s = time.perf_counter() - ingest_start
+        processed_pages = None
+        if isinstance(ingest_metrics, dict):
+            processed_pages = ingest_metrics.get("true_pages_processed")
         if processed_pages is None:
             processed_pages = _estimate_processed_pages(lancedb_uri, LANCEDB_TABLE)
         detection_summary = _collect_detection_summary(lancedb_uri, LANCEDB_TABLE)

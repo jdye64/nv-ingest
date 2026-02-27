@@ -969,9 +969,9 @@ class BatchIngestor(Ingestor):
     def write_to_disk(self, output_dir: str) -> "BatchIngestor":
         return self.save_intermediate_results(output_dir=output_dir)
 
-    def ingest(self, params: IngestExecuteParams | None = None, **kwargs: Any) -> int:
+    def ingest(self, params: IngestExecuteParams | None = None, **kwargs: Any) -> dict[str, Any]:
         """
-        Execute the Ray Data pipeline and return the total number of pages.
+        Execute the Ray Data pipeline and return ingest metrics.
 
         If a VDB upload stage was added (via ``vdb_upload()``), data is written
         to LanceDB in a streaming fashion by ``_LanceDBWriteActor``.  After the
@@ -988,10 +988,20 @@ class BatchIngestor(Ingestor):
         runtime_metrics_dir = run_params.runtime_metrics_dir
         runtime_metrics_prefix = run_params.runtime_metrics_prefix
         t0 = time.monotonic()
-        num_pages = self._rd_dataset.count()
+        rows_written = self._rd_dataset.count()
+        true_pages_processed = rows_written
+        try:
+            # Final dataset rows can be expanded by embed-time explode; count unique
+            # (path, page_number) to recover logical page count.
+            true_pages_processed = int(self._rd_dataset.groupby(["path", "page_number"]).count().count())
+        except Exception:
+            true_pages_processed = int(rows_written)
         elapsed = time.monotonic() - t0
 
-        print(f"[done] {len(self._input_documents)} files, {num_pages} pages in {elapsed:.1f}s")
+        print(
+            f"[done] {len(self._input_documents)} files, "
+            f"{true_pages_processed} unique pages ({rows_written} output rows) in {elapsed:.1f}s"
+        )
         # region agent log
         _debug_log(
             run_id=str(runtime_metrics_prefix or "unknown"),
@@ -1000,9 +1010,11 @@ class BatchIngestor(Ingestor):
             message="Pipeline completed with aggregate throughput",
             data={
                 "input_files": len(self._input_documents),
-                "num_pages": int(num_pages),
+                "num_pages": int(rows_written),
+                "true_pages_processed": int(true_pages_processed),
+                "rows_written": int(rows_written),
                 "elapsed_seconds": float(elapsed),
-                "pages_per_second_total": float(num_pages / elapsed) if elapsed > 0 else None,
+                "pages_per_second_total": float(rows_written / elapsed) if elapsed > 0 else None,
                 "runtime_metrics_dir": runtime_metrics_dir,
             },
         )
@@ -1033,7 +1045,9 @@ class BatchIngestor(Ingestor):
             try:
                 summary = {
                     "input_files": int(len(self._input_documents)),
-                    "num_pages": int(num_pages),
+                    "num_pages": int(rows_written),
+                    "true_pages_processed": int(true_pages_processed),
+                    "rows_written": int(rows_written),
                     "elapsed_seconds": float(elapsed),
                     "stats_path": str(stats_path),
                     "timeline_path": str(timeline_path),
@@ -1046,7 +1060,14 @@ class BatchIngestor(Ingestor):
         if hasattr(self, "_vdb_upload_kwargs") and self._vdb_upload_kwargs:
             self._create_lancedb_index()
 
-        return num_pages
+        return {
+            "input_files": int(len(self._input_documents)),
+            "true_pages_processed": int(true_pages_processed),
+            "rows_written": int(rows_written),
+            "elapsed_seconds": float(elapsed),
+            "pages_per_second_rows": float(rows_written / elapsed) if elapsed > 0 else None,
+            "pages_per_second_true": float(true_pages_processed / elapsed) if elapsed > 0 else None,
+        }
 
     def _create_lancedb_index(self) -> None:
         """Create the LanceDB vector index after streaming writes finish."""
