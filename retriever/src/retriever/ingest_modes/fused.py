@@ -227,7 +227,7 @@ class FusedIngestor(BatchIngestor):
             batch_format="pandas",
             num_cpus=fused_cpus_per_actor,
             num_gpus=fused_gpus_per_actor,
-            compute=rd.ActorPoolStrategy(min_size=1, max_size=fused_workers),
+            compute=rd.ActorPoolStrategy(size=fused_workers),
             fn_constructor_kwargs=stage_kwargs,
         )
 
