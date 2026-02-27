@@ -9,6 +9,7 @@ Run with: uv run python -m retriever.examples.fused_pipeline <input-dir>
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import time
@@ -165,6 +166,11 @@ def main(
         dir_okay=False,
         help="Optional JSON file path to write end-of-run detection counts summary.",
     ),
+    print_actor_metrics_json: bool = typer.Option(
+        False,
+        "--print-actor-metrics-json",
+        help="Print end-of-run actor metrics report JSON emitted by the MetricsActor.",
+    ),
 ) -> None:
     log_handle, original_stdout, original_stderr = _configure_logging(log_file)
     try:
@@ -230,6 +236,13 @@ def main(
                 runtime_metrics_prefix=runtime_metrics_prefix,
             )
         )
+        if print_actor_metrics_json:
+            actor_report = getattr(ingestor, "_last_actor_metrics_report", None)
+            if isinstance(actor_report, dict):
+                print("\nActor metrics report (JSON):")
+                print(json.dumps(actor_report, indent=2, sort_keys=True))
+            else:
+                print("\nActor metrics report unavailable.")
         ingest_elapsed_s = time.perf_counter() - ingest_start
         processed_pages = _estimate_processed_pages(lancedb_uri, LANCEDB_TABLE)
         detection_summary = _collect_detection_summary(lancedb_uri, LANCEDB_TABLE)

@@ -481,6 +481,11 @@ def main(
         path_type=Path,
         help="Optional path to write detection summary JSON after ingest.",
     ),
+    print_actor_metrics_json: bool = typer.Option(
+        False,
+        "--print-actor-metrics-json",
+        help="Print end-of-run actor metrics report JSON emitted by the MetricsActor.",
+    ),
 ) -> None:
     try:
         system_resources = _validate_system_resources(
@@ -724,6 +729,13 @@ def main(
                 runtime_metrics_prefix=runtime_metrics_prefix,
             )
         )
+        if print_actor_metrics_json:
+            actor_report = getattr(ingestor, "_last_actor_metrics_report", None)
+            if isinstance(actor_report, dict):
+                print("\nActor metrics report (JSON):")
+                print(json.dumps(actor_report, indent=2, sort_keys=True))
+            else:
+                print("\nActor metrics report unavailable.")
         ingest_elapsed_s = time.perf_counter() - ingest_start
         processed_pages = _estimate_processed_pages(lancedb_uri, LANCEDB_TABLE)
         detection_summary = _collect_detection_summary(lancedb_uri, LANCEDB_TABLE)
