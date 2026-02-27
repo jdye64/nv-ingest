@@ -169,7 +169,7 @@ def pdf_extraction(
     extract_charts: bool = False,
     extract_infographics: bool = False,
     dpi: int = 100,
-    image_format: str = "png",
+    image_format: str = "jpeg",
     text_extraction_method: str = "pdfium_hybrid",
     text_depth: str = "page",
     **kwargs: Any,
@@ -224,10 +224,6 @@ def pdf_extraction(
                     doc = pdfium.PdfDocument(pdf_bytes)
                 except Exception:
                     doc = pdfium.PdfDocument(BytesIO(bytes(pdf_bytes)))
-
-                # TODO: Extend to support more image formats
-                if image_format not in {"png"}:
-                    raise ValueError(f"Unsupported image_format: {image_format!r}")
 
                 # Step 2: process only the first page (single-page doc).
                 page = None
