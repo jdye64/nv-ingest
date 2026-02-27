@@ -13,6 +13,7 @@ import traceback
 import pypdfium2.raw as pdfium_c
 
 import pandas as pd
+from retriever.utils.actor_runtime import execute_actor_call
 
 try:
     import pypdfium2 as pdfium
@@ -337,10 +338,10 @@ class PDFExtractionActor:
         self.extract_kwargs = dict(extract_kwargs)
 
     def __call__(self, pdf: Any, **override_kwargs: Any) -> Optional[Any]:
-        try:
+        def _invoke() -> Optional[Any]:
             return pdf_extraction(pdf, **self.extract_kwargs, **override_kwargs)
-        except BaseException as e:
-            # As a last line of defense, never let the Ray UDF raise.
+
+        def _error_rows(exc: BaseException) -> list[dict[str, Any]]:
             source_path = None
             try:
                 if isinstance(pdf, pd.DataFrame) and "path" in pdf.columns and len(pdf.index) > 0:
@@ -351,7 +352,14 @@ class PDFExtractionActor:
                 _error_record(
                     source_path=source_path,
                     stage="actor_call",
-                    exc=e,
+                    exc=exc,
                     page_number=0,
                 )
             ]
+
+        return execute_actor_call(
+            pdf,
+            invoke=_invoke,
+            dataframe_error=lambda _df, exc: _error_rows(exc),
+            other_error=_error_rows,
+        )

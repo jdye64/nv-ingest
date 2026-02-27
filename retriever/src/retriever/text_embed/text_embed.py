@@ -22,6 +22,7 @@ import time
 import traceback
 
 import pandas as pd
+from retriever.utils.actor_runtime import apply_dataframe_defaults, execute_actor_call
 
 try:
     import torch
@@ -212,19 +213,31 @@ class TextEmbedActor:
             )
 
     def __call__(self, batch_df: Any, **override_kwargs: Any) -> Any:
-        try:
+        def _invoke() -> Any:
             return embed_text_1b_v2(
                 batch_df,
                 model=self._model,
                 **self.detect_kwargs,
                 **override_kwargs,
             )
-        except BaseException as e:
-            if isinstance(batch_df, pd.DataFrame):
-                out = batch_df.copy()
-                payload = _error_payload(stage="actor_call", exc=e)
-                out["text_embeddings_1b_v2"] = [payload for _ in range(len(out.index))]
-                out["text_embeddings_1b_v2_dim"] = [0 for _ in range(len(out.index))]
-                out["text_embeddings_1b_v2_has_embedding"] = [False for _ in range(len(out.index))]
-                return out
-            return [{"text_embeddings_1b_v2": _error_payload(stage="actor_call", exc=e)}]
+
+        def _df_error(df: pd.DataFrame, exc: BaseException) -> Any:
+            payload = _error_payload(stage="actor_call", exc=exc)
+            return apply_dataframe_defaults(
+                df,
+                column_defaults={
+                    "text_embeddings_1b_v2": payload,
+                    "text_embeddings_1b_v2_dim": 0,
+                    "text_embeddings_1b_v2_has_embedding": False,
+                },
+            )
+
+        def _other_error(exc: BaseException) -> Any:
+            return [{"text_embeddings_1b_v2": _error_payload(stage="actor_call", exc=exc)}]
+
+        return execute_actor_call(
+            batch_df,
+            invoke=_invoke,
+            dataframe_error=_df_error,
+            other_error=_other_error,
+        )

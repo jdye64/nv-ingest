@@ -23,6 +23,7 @@ import numpy as np
 import pandas as pd
 from retriever.params import RemoteRetryParams
 from retriever.nim.nim import invoke_image_inference_batches
+from retriever.utils.actor_runtime import apply_dataframe_defaults, execute_actor_call
 
 try:
     from PIL import Image
@@ -620,7 +621,7 @@ class OCRActor:
         self._extract_infographics = bool(extract_infographics)
 
     def __call__(self, batch_df: Any, **override_kwargs: Any) -> Any:
-        try:
+        def _invoke() -> Any:
             return ocr_page_elements(
                 batch_df,
                 model=self._model,
@@ -633,15 +634,25 @@ class OCRActor:
                 remote_retry=self._remote_retry,
                 **override_kwargs,
             )
-        except BaseException as e:
-            # Never let the Ray UDF raise — return a DataFrame with error metadata.
-            if isinstance(batch_df, pd.DataFrame):
-                out = batch_df.copy()
-                payload = _error_payload(stage="actor_call", exc=e)
-                n = len(out.index)
-                out["table"] = [[] for _ in range(n)]
-                out["chart"] = [[] for _ in range(n)]
-                out["infographic"] = [[] for _ in range(n)]
-                out["ocr_v1"] = [payload for _ in range(n)]
-                return out
-            return [{"ocr_v1": _error_payload(stage="actor_call", exc=e)}]
+
+        def _df_error(df: pd.DataFrame, exc: BaseException) -> Any:
+            payload = _error_payload(stage="actor_call", exc=exc)
+            return apply_dataframe_defaults(
+                df,
+                column_defaults={
+                    "table": list,
+                    "chart": list,
+                    "infographic": list,
+                    "ocr_v1": payload,
+                },
+            )
+
+        def _other_error(exc: BaseException) -> Any:
+            return [{"ocr_v1": _error_payload(stage="actor_call", exc=exc)}]
+
+        return execute_actor_call(
+            batch_df,
+            invoke=_invoke,
+            dataframe_error=_df_error,
+            other_error=_other_error,
+        )

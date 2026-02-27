@@ -9,11 +9,16 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 import base64
 import io
 import time
-import traceback
 
 from nemotron_page_elements_v3.utils import postprocess_preds_page_element
 import pandas as pd
 from retriever.params import RemoteRetryParams
+from retriever.utils.actor_runtime import apply_dataframe_defaults, execute_actor_call
+from retriever.utils.detection_common import (
+    counts_by_label as _counts_by_label,
+    decode_b64_image_to_chw_tensor as _shared_decode_b64_image_to_chw_tensor,
+    detection_error_payload as _error_payload,
+)
 
 try:
     import numpy as np
@@ -87,31 +92,11 @@ def _ensure_chw_float_tensor(x: TensorOrArray) -> "torch.Tensor":
     return t.contiguous()
 
 
-def _error_payload(*, stage: str, exc: BaseException) -> Dict[str, Any]:
-    return {
-        "detections": [],
-        "error": {
-            "stage": str(stage),
-            "type": exc.__class__.__name__,
-            "message": str(exc),
-            "traceback": "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
-        },
-    }
-
-
 def _decode_b64_image_to_chw_tensor(image_b64: str) -> Tuple["torch.Tensor", Tuple[int, int]]:
-    if torch is None or Image is None or np is None:  # pragma: no cover
-        raise ImportError("page element detection requires torch, pillow, and numpy.")
-
-    raw = base64.b64decode(image_b64)
-    with Image.open(io.BytesIO(raw)) as im0:
-        im = im0.convert("RGB")
-        w, h = im.size
-        arr = np.array(im)  # (H,W,3)
-
-    t = torch.from_numpy(arr).permute(2, 0, 1).contiguous()  # (3,H,W) uint8
-    t = t.to(dtype=torch.float32) / 255.0
-    return t, (int(h), int(w))
+    return _shared_decode_b64_image_to_chw_tensor(
+        image_b64,
+        import_error_message="page element detection requires torch, pillow, and numpy.",
+    )
 
 
 def _decode_b64_image_to_np_array(image_b64: str) -> Tuple["np.array", Tuple[int, int]]:
@@ -136,19 +121,6 @@ def _labels_from_model(_model: Any) -> List[str]:
         "text",
         "header_footer",
     ]
-
-
-def _counts_by_label(detections: Sequence[Dict[str, Any]]) -> Dict[str, int]:
-    out: Dict[str, int] = {}
-    for d in detections:
-        if not isinstance(d, dict):
-            continue
-        name = d.get("label_name")
-        if not isinstance(name, str) or not name.strip():
-            name = f"label_{d.get('label')}"
-        k = str(name)
-        out[k] = int(out.get(k, 0) + 1)
-    return out
 
 
 def _postprocess_to_per_image_detections(
@@ -730,20 +702,31 @@ class PageElementDetectionActor:
             self._model = NemotronPageElementsV3()
 
     def __call__(self, pages_df: Any, **override_kwargs: Any) -> Any:
-        try:
+        def _invoke() -> Any:
             return detect_page_elements_v3(
                 pages_df,
                 model=self._model,
                 **self.detect_kwargs,
                 **override_kwargs,
             )
-        except Exception as e:
-            # As a last line of defense, never let the Ray UDF raise.
-            if isinstance(pages_df, pd.DataFrame):
-                out = pages_df.copy()
-                payload = _error_payload(stage="actor_call", exc=e)
-                out["page_elements_v3"] = [payload for _ in range(len(out.index))]
-                out["page_elements_v3_num_detections"] = [0 for _ in range(len(out.index))]
-                out["page_elements_v3_counts_by_label"] = [{} for _ in range(len(out.index))]
-                return out
-            return [{"page_elements_v3": _error_payload(stage="actor_call", exc=e)}]
+
+        def _df_error(df: pd.DataFrame, exc: BaseException) -> Any:
+            payload = _error_payload(stage="actor_call", exc=exc)
+            return apply_dataframe_defaults(
+                df,
+                column_defaults={
+                    "page_elements_v3": payload,
+                    "page_elements_v3_num_detections": 0,
+                    "page_elements_v3_counts_by_label": dict,
+                },
+            )
+
+        def _other_error(exc: BaseException) -> Any:
+            return [{"page_elements_v3": _error_payload(stage="actor_call", exc=exc)}]
+
+        return execute_actor_call(
+            pages_df,
+            invoke=_invoke,
+            dataframe_error=_df_error,
+            other_error=_other_error,
+        )
