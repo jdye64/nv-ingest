@@ -218,8 +218,6 @@ class FusedIngestor(BatchIngestor):
 
         stage_kwargs = dict(getattr(self, "_fused_extract_flags", {}))
         stage_kwargs.update(dict(kwargs))
-        stage_kwargs["metrics_actor"] = self._metrics_actor
-        stage_kwargs["stage_name"] = "fused_model"
 
         self._tasks.append(("embed", dict(stage_kwargs)))
         self._rd_dataset = self._rd_dataset.repartition(target_num_rows_per_block=max(16, fused_batch_size))

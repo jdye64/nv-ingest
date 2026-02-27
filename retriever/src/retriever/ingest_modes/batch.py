@@ -644,11 +644,7 @@ class BatchIngestor(Ingestor):
             num_cpus=page_elements_cpus_per_actor,
             num_gpus=gpu_page_elements,
             compute=rd.ActorPoolStrategy(size=page_elements_workers),
-            fn_constructor_kwargs={
-                **dict(detect_kwargs),
-                "metrics_actor": self._metrics_actor,
-                "stage_name": "page_elements",
-            },
+            fn_constructor_kwargs=dict(detect_kwargs),
         )
 
         # OCR-based extraction for tables/charts/infographics (single stage).
@@ -684,7 +680,7 @@ class BatchIngestor(Ingestor):
                 num_cpus=ocr_cpus_per_actor,
                 num_gpus=gpu_ocr,
                 compute=rd.ActorPoolStrategy(size=detect_workers),
-                fn_constructor_kwargs={**ocr_flags, "metrics_actor": self._metrics_actor, "stage_name": "ocr"},
+                fn_constructor_kwargs=ocr_flags,
             )
 
         return self
@@ -829,7 +825,7 @@ class BatchIngestor(Ingestor):
             num_cpus=embed_cpus_per_actor,
             num_gpus=gpu_per_stage,
             compute=rd.ActorPoolStrategy(size=embed_workers),
-            fn_constructor_kwargs={"params": resolved, "metrics_actor": self._metrics_actor, "stage_name": "embed"},
+            fn_constructor_kwargs={"params": resolved},
         )
 
         return self
@@ -865,7 +861,7 @@ class BatchIngestor(Ingestor):
             num_cpus=1,
             num_gpus=0,
             compute=rd.ActorPoolStrategy(size=1),
-            fn_constructor_kwargs={"params": p, "metrics_actor": self._metrics_actor, "stage_name": "vdb_upload"},
+            fn_constructor_kwargs={"params": p},
         )
 
         return self
