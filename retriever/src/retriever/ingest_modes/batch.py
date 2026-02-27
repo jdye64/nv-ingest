@@ -800,19 +800,19 @@ class BatchIngestor(Ingestor):
         # Remaining kwargs are forwarded to the actor constructor.
         self._tasks.append(("embed", dict(kwargs)))
 
-        # # Explode content rows before embedding so each table/chart/infographic
-        # # gets its own embedding vector (mirrors nv-ingest per-element embeddings).
-        # self._rd_dataset = self._rd_dataset.repartition(target_num_rows_per_block=256)
+        # Explode content rows before embedding so each table/chart/infographic
+        # gets its own embedding vector (mirrors nv-ingest per-element embeddings).
+        self._rd_dataset = self._rd_dataset.repartition(target_num_rows_per_block=256)
 
-        # from retriever.ingest_modes.inprocess import explode_content_to_rows
+        from retriever.ingest_modes.inprocess import explode_content_to_rows
 
-        # self._rd_dataset = self._rd_dataset.map_batches(
-        #     explode_content_to_rows,
-        #     batch_size=embed_batch_size,
-        #     batch_format="pandas",
-        #     num_cpus=1,
-        #     num_gpus=0,
-        # )
+        self._rd_dataset = self._rd_dataset.map_batches(
+            explode_content_to_rows,
+            batch_size=embed_batch_size,
+            batch_format="pandas",
+            num_cpus=1,
+            num_gpus=0,
+        )
 
         # When using a remote NIM endpoint, no GPU is needed for embedding.
         endpoint = (kwargs.get("embedding_endpoint") or kwargs.get("embed_invoke_url") or "").strip()
