@@ -53,6 +53,7 @@ class LlamaNemotronEmbedVL1BV2Embedder:
                     "torch_dtype": torch.bfloat16,
                     "attn_implementation": attn_impl,
                     "cache_dir": hf_cache_dir,
+                    "local_files_only": True,
                 }
                 if attn_impl == "flash_attention_2" and use_gpu:
                     kwargs["device_map"] = dev
