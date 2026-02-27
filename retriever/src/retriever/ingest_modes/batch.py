@@ -617,6 +617,12 @@ class BatchIngestor(Ingestor):
             num_gpus=0,
             batch_format="pandas",
         )
+        # Rebalance page rows globally before extraction so large PDFs do not
+        # concentrate work into a few skewed blocks.
+        self._rd_dataset = self._rd_dataset.repartition(
+            target_num_rows_per_block=max(1, int(pdf_extract_batch_size) * 4),
+            shuffle=True,
+        )
 
         # Pre-split pdfs are now ready for extraction — the main CPU bottleneck.
         extraction_actor = PDFExtractionActor(
