@@ -988,20 +988,35 @@ class BatchIngestor(Ingestor):
         runtime_metrics_dir = run_params.runtime_metrics_dir
         runtime_metrics_prefix = run_params.runtime_metrics_prefix
         t0 = time.monotonic()
-        rows_written = self._rd_dataset.count()
-        true_pages_processed = rows_written
+        rows_written: Optional[int] = None
+        true_pages_processed = 0
         try:
+            # Execute pipeline once while counting logical pages.
             # Final dataset rows can be expanded by embed-time explode; count unique
-            # (path, page_number) to recover logical page count.
+            # (path, page_number) to recover logical page count directly.
             true_pages_processed = int(self._rd_dataset.groupby(["path", "page_number"]).count().count())
         except Exception:
-            true_pages_processed = int(rows_written)
+            true_pages_processed = 0
         elapsed = time.monotonic() - t0
 
-        print(
-            f"[done] {len(self._input_documents)} files, "
-            f"{true_pages_processed} unique pages ({rows_written} output rows) in {elapsed:.1f}s"
-        )
+        # Best-effort row count from LanceDB when upload stage is present.
+        if hasattr(self, "_vdb_upload_kwargs") and self._vdb_upload_kwargs:
+            try:
+                import lancedb  # type: ignore
+
+                db = lancedb.connect(uri=str(self._vdb_upload_kwargs.get("lancedb_uri", "lancedb")))
+                table = db.open_table(str(self._vdb_upload_kwargs.get("table_name", "nv-ingest")))
+                rows_written = int(table.count_rows())
+            except Exception:
+                rows_written = None
+
+        if rows_written is None:
+            print(f"[done] {len(self._input_documents)} files, {true_pages_processed} unique pages in {elapsed:.1f}s")
+        else:
+            print(
+                f"[done] {len(self._input_documents)} files, "
+                f"{true_pages_processed} unique pages ({rows_written} output rows) in {elapsed:.1f}s"
+            )
         # region agent log
         _debug_log(
             run_id=str(runtime_metrics_prefix or "unknown"),
@@ -1010,11 +1025,11 @@ class BatchIngestor(Ingestor):
             message="Pipeline completed with aggregate throughput",
             data={
                 "input_files": len(self._input_documents),
-                "num_pages": int(rows_written),
+                "num_pages": int(true_pages_processed),
                 "true_pages_processed": int(true_pages_processed),
-                "rows_written": int(rows_written),
+                "rows_written": (int(rows_written) if rows_written is not None else None),
                 "elapsed_seconds": float(elapsed),
-                "pages_per_second_total": float(rows_written / elapsed) if elapsed > 0 else None,
+                "pages_per_second_total": float(true_pages_processed / elapsed) if elapsed > 0 else None,
                 "runtime_metrics_dir": runtime_metrics_dir,
             },
         )
@@ -1045,9 +1060,9 @@ class BatchIngestor(Ingestor):
             try:
                 summary = {
                     "input_files": int(len(self._input_documents)),
-                    "num_pages": int(rows_written),
+                    "num_pages": int(true_pages_processed),
                     "true_pages_processed": int(true_pages_processed),
-                    "rows_written": int(rows_written),
+                    "rows_written": (int(rows_written) if rows_written is not None else None),
                     "elapsed_seconds": float(elapsed),
                     "stats_path": str(stats_path),
                     "timeline_path": str(timeline_path),
@@ -1063,9 +1078,11 @@ class BatchIngestor(Ingestor):
         return {
             "input_files": int(len(self._input_documents)),
             "true_pages_processed": int(true_pages_processed),
-            "rows_written": int(rows_written),
+            "rows_written": (int(rows_written) if rows_written is not None else None),
             "elapsed_seconds": float(elapsed),
-            "pages_per_second_rows": float(rows_written / elapsed) if elapsed > 0 else None,
+            "pages_per_second_rows": (
+                float(rows_written / elapsed) if (elapsed > 0 and rows_written is not None) else None
+            ),
             "pages_per_second_true": float(true_pages_processed / elapsed) if elapsed > 0 else None,
         }
 
