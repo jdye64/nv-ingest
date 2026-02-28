@@ -169,7 +169,7 @@ def pdf_extraction(
     extract_charts: bool = False,
     extract_infographics: bool = False,
     dpi: int = 100,
-    image_format: str = "jpeg",
+    image_format: str = "png",
     text_extraction_method: str = "pdfium_hybrid",
     text_depth: str = "page",
     **kwargs: Any,

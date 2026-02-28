@@ -106,6 +106,7 @@ class _LanceDBWriteActor:
         self._schema = None
         self._first_batch = True
         self._total_rows = 0
+        self._empty_embedding_batches = 0
         self._table = None
         mode = "overwrite" if self._overwrite else "create"
         fields = [
@@ -228,6 +229,39 @@ class _LanceDBWriteActor:
             self._table.add(rows)
 
             self._total_rows += len(rows)
+        else:
+            # Diagnose cases where upstream embedding failed silently and produced
+            # rows with no usable vectors. Limit log volume to first few batches.
+            self._empty_embedding_batches += 1
+            if self._empty_embedding_batches <= 5 and hasattr(batch_df, "columns"):
+                n_rows = len(batch_df.index)
+                contains_true = (
+                    int(batch_df["_contains_embeddings"].fillna(False).astype(bool).sum())
+                    if "_contains_embeddings" in batch_df.columns
+                    else None
+                )
+                has_embedding_true = (
+                    int(batch_df["text_embeddings_1b_v2_has_embedding"].fillna(False).astype(bool).sum())
+                    if "text_embeddings_1b_v2_has_embedding" in batch_df.columns
+                    else None
+                )
+                payload_errors = 0
+                if self._embedding_column in batch_df.columns:
+                    try:
+                        payload_errors = int(
+                            sum(
+                                1
+                                for p in batch_df[self._embedding_column].tolist()
+                                if isinstance(p, dict) and isinstance(p.get("error"), dict)
+                            )
+                        )
+                    except Exception:
+                        payload_errors = 0
+                print(
+                    "[warn] LanceDB writer received batch with no vectors: "
+                    f"batch_rows={n_rows}, _contains_embeddings_true={contains_true}, "
+                    f"has_embedding_true={has_embedding_true}, payload_errors={payload_errors}"
+                )
 
         return batch_df
 

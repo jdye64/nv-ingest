@@ -399,6 +399,8 @@ def embed_text_main_text_embed(
         import traceback as _tb
 
         print(f"Warning: embedding failed: {type(e).__name__}: {e}")
+        # Common root causes are CUDA OOM (batch too large / max_length too high)
+        # and remote endpoint failures. Print full traceback once per failed batch.
         _tb.print_exc()
         err_payload = {"embedding": None, "error": {"stage": "embed", "type": e.__class__.__name__, "message": str(e)}}
         out_df = batch_df.copy()
