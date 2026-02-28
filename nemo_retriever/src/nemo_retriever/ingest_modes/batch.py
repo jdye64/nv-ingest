@@ -1027,40 +1027,6 @@ class BatchIngestor(Ingestor):
         true_pages_processed = int(rows_written)
         elapsed = time.monotonic() - t0
 
-        # Best-effort true page count from LanceDB when upload stage is present.
-        if hasattr(self, "_vdb_upload_kwargs") and self._vdb_upload_kwargs:
-            try:
-                import lancedb  # type: ignore
-
-                db = lancedb.connect(uri=str(self._vdb_upload_kwargs.get("lancedb_uri", "lancedb")))
-                table = db.open_table(str(self._vdb_upload_kwargs.get("table_name", "nv-ingest")))
-                lancedb_rows = int(table.count_rows())
-                if lancedb_rows > 0:
-                    try:
-                        df = table.to_pandas()
-                        if {"source_id", "page_number"}.issubset(df.columns):
-                            true_pages_processed = int(
-                                df[["source_id", "page_number"]]
-                                .dropna(subset=["source_id", "page_number"])
-                                .drop_duplicates()
-                                .shape[0]
-                            )
-                        elif {"path", "page_number"}.issubset(df.columns):
-                            true_pages_processed = int(
-                                df[["path", "page_number"]]
-                                .dropna(subset=["path", "page_number"])
-                                .drop_duplicates()
-                                .shape[0]
-                            )
-                        else:
-                            true_pages_processed = int(rows_written)
-                    except Exception:
-                        true_pages_processed = int(rows_written)
-                else:
-                    true_pages_processed = 0
-            except Exception:
-                true_pages_processed = int(rows_written)
-
         print(
             f"[done] {len(self._input_documents)} files, "
             f"{true_pages_processed} unique pages ({rows_written} output rows) in {elapsed:.1f}s"
