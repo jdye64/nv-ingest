@@ -9,6 +9,7 @@ from io import BytesIO
 from typing import Any, Dict, List, Optional
 
 import base64
+import time
 import traceback
 import pypdfium2.raw as pdfium_c
 
@@ -111,6 +112,8 @@ def _error_record(
     exc: BaseException,
     page_number: int = 0,
     dpi: int = 100,
+    extract_timing: Optional[Dict[str, Any]] = None,
+    extract_debug: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Return a single output record with the same shape as a normal page record,
@@ -132,6 +135,8 @@ def _error_record(
             "needs_ocr": False,
             "dpi": int(dpi),
             "source_path": source_path,
+            "extract_timing": dict(extract_timing or {}),
+            "extract_debug": dict(extract_debug or {}),
             "error": {
                 "stage": str(stage),
                 "type": exc.__class__.__name__,
@@ -140,6 +145,23 @@ def _error_record(
                 "traceback": "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
             },
         },
+    }
+
+
+def _ns_to_ms(ns: int) -> float:
+    return float(ns) / 1_000_000.0
+
+
+def _make_extract_timing_template() -> Dict[str, float]:
+    # Keep all expected keys present even when a step is skipped.
+    return {
+        "open_doc_ms": 0.0,
+        "get_page_ms": 0.0,
+        "is_scanned_check_ms": 0.0,
+        "text_extract_ms": 0.0,
+        "render_page_image_ms": 0.0,
+        "close_ms": 0.0,
+        "total_actor_ms": 0.0,
     }
 
 
@@ -214,23 +236,38 @@ def pdf_extraction(
             pdf_bytes = row["bytes"] if "bytes" in pdf_binary.columns else None
             pdf_path = row["path"] if "path" in pdf_binary.columns else None
             page_number = int(row["page_number"]) if "page_number" in pdf_binary.columns else 1
+            row_t0_ns = time.perf_counter_ns()
+            extract_timing = _make_extract_timing_template()
+            extract_debug: Dict[str, Any] = {
+                "did_extract_text": False,
+                "did_render_image": False,
+                "text_extraction_method": str(text_extraction_method),
+            }
 
             try:
                 if not isinstance(pdf_bytes, (bytes, bytearray, memoryview)):
                     raise RuntimeError(f"Unsupported bytes payload type: {type(pdf_bytes)!r}")
 
                 # Step 1: load the *single-page* PDF bytes.
+                open_t0_ns = time.perf_counter_ns()
                 try:
                     doc = pdfium.PdfDocument(pdf_bytes)
                 except Exception:
                     doc = pdfium.PdfDocument(BytesIO(bytes(pdf_bytes)))
+                extract_timing["open_doc_ms"] = _ns_to_ms(time.perf_counter_ns() - open_t0_ns)
 
                 # Step 2: process only the first page (single-page doc).
                 page = None
+                close_t0_ns = 0
                 try:
                     # we can safely assume page[0] only because pre-splitting has already occurred.
+                    page_t0_ns = time.perf_counter_ns()
                     page = doc.get_page(0)
+                    extract_timing["get_page_ms"] = _ns_to_ms(time.perf_counter_ns() - page_t0_ns)
+
+                    scan_t0_ns = time.perf_counter_ns()
                     is_scanned_page = _is_scanned_page(page)
+                    extract_timing["is_scanned_check_ms"] = _ns_to_ms(time.perf_counter_ns() - scan_t0_ns)
 
                     ocr_extraction_needed_for_text = extract_text and (
                         (text_extraction_method == "pdfium_hybrid" and is_scanned_page)
@@ -246,7 +283,10 @@ def pdf_extraction(
 
                     # Text extraction
                     if extract_text and not ocr_extraction_needed_for_text:
+                        text_t0_ns = time.perf_counter_ns()
                         page_text = _extract_page_text(page)
+                        extract_timing["text_extract_ms"] = _ns_to_ms(time.perf_counter_ns() - text_t0_ns)
+                        extract_debug["did_extract_text"] = True
                         # TODO: Tiddy up logic here for document depth option
                         if text_depth == "page":
                             text = page_text
@@ -264,7 +304,16 @@ def pdf_extraction(
                     )
                     render_info: Optional[Dict[str, Any]] = None
                     if want_any_raster:
+                        render_t0_ns = time.perf_counter_ns()
                         render_info = _render_page_to_base64(page, dpi=dpi, image_format=image_format)
+                        extract_timing["render_page_image_ms"] = _ns_to_ms(time.perf_counter_ns() - render_t0_ns)
+                        extract_debug["did_render_image"] = True
+                        if isinstance(render_info, dict):
+                            enc = render_info.get("encoding")
+                            if enc is not None:
+                                extract_debug["render_encoding"] = str(enc)
+                            if "orig_shape_hw" in render_info:
+                                extract_debug["orig_shape_hw"] = render_info.get("orig_shape_hw")
 
                     page_record: Dict[str, Any] = {
                         "path": pdf_path,
@@ -280,6 +329,8 @@ def pdf_extraction(
                             "needs_ocr_for_text": ocr_extraction_needed_for_text,
                             "dpi": dpi,
                             "source_path": pdf_path,
+                            "extract_timing": dict(extract_timing),
+                            "extract_debug": dict(extract_debug),
                             "error": None,
                         },
                     }
@@ -290,8 +341,11 @@ def pdf_extraction(
                         # place to find the page image.
                         page_record["page_image"] = render_info
 
+                    extract_timing["total_actor_ms"] = _ns_to_ms(time.perf_counter_ns() - row_t0_ns)
+                    page_record["metadata"]["extract_timing"] = dict(extract_timing)
                     outputs.append(page_record)
                 finally:
+                    close_t0_ns = time.perf_counter_ns()
                     try:
                         if page is not None and hasattr(page, "close"):
                             page.close()
@@ -301,7 +355,12 @@ def pdf_extraction(
                         doc.close()
                     except Exception:
                         pass
+                    extract_timing["close_ms"] = _ns_to_ms(time.perf_counter_ns() - close_t0_ns)
+                    if extract_timing["total_actor_ms"] <= 0:
+                        extract_timing["total_actor_ms"] = _ns_to_ms(time.perf_counter_ns() - row_t0_ns)
             except BaseException as e:
+                if extract_timing["total_actor_ms"] <= 0:
+                    extract_timing["total_actor_ms"] = _ns_to_ms(time.perf_counter_ns() - row_t0_ns)
                 outputs.append(
                     _error_record(
                         source_path=str(pdf_path) if pdf_path is not None else None,
@@ -309,6 +368,8 @@ def pdf_extraction(
                         exc=e,
                         page_number=page_number,
                         dpi=dpi,
+                        extract_timing=extract_timing,
+                        extract_debug=extract_debug,
                     )
                 )
 

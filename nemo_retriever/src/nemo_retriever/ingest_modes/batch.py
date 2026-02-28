@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import time
+import statistics
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from datetime import timedelta
@@ -71,6 +72,135 @@ def _debug_log(*, run_id: str, hypothesis_id: str, location: str, message: str, 
 
 
 # endregion
+
+
+def _safe_float(v: Any) -> Optional[float]:
+    try:
+        out = float(v)
+    except (TypeError, ValueError):
+        return None
+    if out != out:  # NaN guard
+        return None
+    return out
+
+
+def _percentile(sorted_values: list[float], pct: float) -> Optional[float]:
+    if not sorted_values:
+        return None
+    if len(sorted_values) == 1:
+        return float(sorted_values[0])
+    rank = (float(pct) / 100.0) * float(len(sorted_values) - 1)
+    lo = int(rank)
+    hi = min(lo + 1, len(sorted_values) - 1)
+    frac = rank - lo
+    return float(sorted_values[lo] + (sorted_values[hi] - sorted_values[lo]) * frac)
+
+
+def _summarize_timing_values(values: list[float]) -> Dict[str, Any]:
+    if not values:
+        return {
+            "count": 0,
+            "mean_ms": None,
+            "min_ms": None,
+            "max_ms": None,
+            "p50_ms": None,
+            "p90_ms": None,
+            "p95_ms": None,
+            "p99_ms": None,
+        }
+    sorted_vals = sorted(values)
+    return {
+        "count": int(len(sorted_vals)),
+        "mean_ms": float(statistics.fmean(sorted_vals)),
+        "min_ms": float(sorted_vals[0]),
+        "max_ms": float(sorted_vals[-1]),
+        "p50_ms": _percentile(sorted_vals, 50),
+        "p90_ms": _percentile(sorted_vals, 90),
+        "p95_ms": _percentile(sorted_vals, 95),
+        "p99_ms": _percentile(sorted_vals, 99),
+    }
+
+
+def _collect_pdf_extract_timing_summary(
+    dataset: Any,
+    *,
+    batch_size: int = 1024,
+    top_k: int = 25,
+) -> Dict[str, Any]:
+    """
+    Collect per-page PDF extraction timing summary from `metadata.extract_timing`.
+
+    Note: this iterates the dataset and may trigger a second pipeline execution.
+    Callers must avoid this when side-effecting stages (e.g. LanceDB upload) are present.
+    """
+    rows_seen = 0
+    rows_with_extract_timing = 0
+    rows_with_errors = 0
+    total_ms: list[float] = []
+    text_ms: list[float] = []
+    render_ms: list[float] = []
+    slow_pages: list[Dict[str, Any]] = []
+
+    for batch in dataset.iter_batches(batch_format="pandas", batch_size=int(batch_size)):
+        for _, row in batch.iterrows():
+            rows_seen += 1
+            row_dict = row.to_dict()
+            meta = row_dict.get("metadata")
+            if isinstance(meta, str):
+                try:
+                    meta = json.loads(meta)
+                except Exception:
+                    meta = {}
+            if not isinstance(meta, dict):
+                continue
+
+            if meta.get("error") is not None:
+                rows_with_errors += 1
+
+            timing = meta.get("extract_timing")
+            if not isinstance(timing, dict):
+                continue
+
+            rows_with_extract_timing += 1
+
+            total = _safe_float(timing.get("total_actor_ms"))
+            text = _safe_float(timing.get("text_extract_ms"))
+            render = _safe_float(timing.get("render_page_image_ms"))
+
+            if total is not None:
+                total_ms.append(total)
+            if text is not None:
+                text_ms.append(text)
+            if render is not None:
+                render_ms.append(render)
+
+            if total is not None and total > 0:
+                try:
+                    page_number = int(row_dict.get("page_number", -1))
+                except (TypeError, ValueError):
+                    page_number = -1
+                slow_pages.append(
+                    {
+                        "path": str(row_dict.get("path") or meta.get("source_path") or ""),
+                        "page_number": page_number,
+                        "total_actor_ms": float(total),
+                        "text_extract_ms": float(text) if text is not None else None,
+                        "render_page_image_ms": float(render) if render is not None else None,
+                    }
+                )
+
+    slow_pages = sorted(slow_pages, key=lambda x: float(x["total_actor_ms"]), reverse=True)[: int(top_k)]
+    return {
+        "rows_seen": int(rows_seen),
+        "rows_with_extract_timing": int(rows_with_extract_timing),
+        "rows_with_errors": int(rows_with_errors),
+        "timing_ms": {
+            "total_actor_ms": _summarize_timing_values(total_ms),
+            "text_extract_ms": _summarize_timing_values(text_ms),
+            "render_page_image_ms": _summarize_timing_values(render_ms),
+        },
+        "slowest_pages_by_total_actor_ms": slow_pages,
+    }
 
 
 class _LanceDBWriteActor:
@@ -1058,6 +1188,7 @@ class BatchIngestor(Ingestor):
             stats_path = metrics_dir / f"{prefix}.rd_dataset.stats.txt"
             timeline_path = metrics_dir / f"{prefix}.ray.timeline.json"
             summary_path = metrics_dir / f"{prefix}.runtime.summary.json"
+            extract_timing_path = metrics_dir / f"{prefix}.extract_timing.summary.json"
 
             stats_text = ""
             try:
@@ -1071,6 +1202,19 @@ class BatchIngestor(Ingestor):
             except Exception as e:
                 print(f"Warning: failed writing ray timeline: {e}")
 
+            extract_timing_written = False
+            if hasattr(self, "_vdb_upload_kwargs") and self._vdb_upload_kwargs:
+                # Avoid duplicate writes: collecting per-page timing summary requires
+                # iterating the dataset, which would re-run side-effecting upload stages.
+                print("Info: skipping extract timing summary because vdb_upload stage is enabled.")
+            else:
+                try:
+                    extract_timing_summary = _collect_pdf_extract_timing_summary(self._rd_dataset)
+                    extract_timing_path.write_text(json.dumps(extract_timing_summary, indent=2), encoding="utf-8")
+                    extract_timing_written = True
+                except Exception as e:
+                    print(f"Warning: failed writing extract timing summary: {e}")
+
             try:
                 summary = {
                     "input_files": int(len(self._input_documents)),
@@ -1080,6 +1224,7 @@ class BatchIngestor(Ingestor):
                     "elapsed_seconds": float(elapsed),
                     "stats_path": str(stats_path),
                     "timeline_path": str(timeline_path),
+                    "extract_timing_summary_path": str(extract_timing_path) if extract_timing_written else None,
                 }
                 summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
             except Exception as e:
