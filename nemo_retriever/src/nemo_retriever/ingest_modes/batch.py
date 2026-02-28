@@ -988,35 +988,49 @@ class BatchIngestor(Ingestor):
         runtime_metrics_dir = run_params.runtime_metrics_dir
         runtime_metrics_prefix = run_params.runtime_metrics_prefix
         t0 = time.monotonic()
-        rows_written: Optional[int] = None
-        true_pages_processed = 0
-        try:
-            # Execute pipeline once while counting logical pages.
-            # Final dataset rows can be expanded by embed-time explode; count unique
-            # (path, page_number) to recover logical page count directly.
-            true_pages_processed = int(self._rd_dataset.groupby(["path", "page_number"]).count().count())
-        except Exception:
-            true_pages_processed = 0
+        # Single terminal Ray action to execute the full pipeline once.
+        rows_written = int(self._rd_dataset.count())
+        true_pages_processed = int(rows_written)
         elapsed = time.monotonic() - t0
 
-        # Best-effort row count from LanceDB when upload stage is present.
+        # Best-effort true page count from LanceDB when upload stage is present.
         if hasattr(self, "_vdb_upload_kwargs") and self._vdb_upload_kwargs:
             try:
                 import lancedb  # type: ignore
 
                 db = lancedb.connect(uri=str(self._vdb_upload_kwargs.get("lancedb_uri", "lancedb")))
                 table = db.open_table(str(self._vdb_upload_kwargs.get("table_name", "nv-ingest")))
-                rows_written = int(table.count_rows())
+                lancedb_rows = int(table.count_rows())
+                if lancedb_rows > 0:
+                    try:
+                        df = table.to_pandas()
+                        if {"source_id", "page_number"}.issubset(df.columns):
+                            true_pages_processed = int(
+                                df[["source_id", "page_number"]]
+                                .dropna(subset=["source_id", "page_number"])
+                                .drop_duplicates()
+                                .shape[0]
+                            )
+                        elif {"path", "page_number"}.issubset(df.columns):
+                            true_pages_processed = int(
+                                df[["path", "page_number"]]
+                                .dropna(subset=["path", "page_number"])
+                                .drop_duplicates()
+                                .shape[0]
+                            )
+                        else:
+                            true_pages_processed = int(rows_written)
+                    except Exception:
+                        true_pages_processed = int(rows_written)
+                else:
+                    true_pages_processed = 0
             except Exception:
-                rows_written = None
+                true_pages_processed = int(rows_written)
 
-        if rows_written is None:
-            print(f"[done] {len(self._input_documents)} files, {true_pages_processed} unique pages in {elapsed:.1f}s")
-        else:
-            print(
-                f"[done] {len(self._input_documents)} files, "
-                f"{true_pages_processed} unique pages ({rows_written} output rows) in {elapsed:.1f}s"
-            )
+        print(
+            f"[done] {len(self._input_documents)} files, "
+            f"{true_pages_processed} unique pages ({rows_written} output rows) in {elapsed:.1f}s"
+        )
         # region agent log
         _debug_log(
             run_id=str(runtime_metrics_prefix or "unknown"),
@@ -1027,7 +1041,7 @@ class BatchIngestor(Ingestor):
                 "input_files": len(self._input_documents),
                 "num_pages": int(true_pages_processed),
                 "true_pages_processed": int(true_pages_processed),
-                "rows_written": (int(rows_written) if rows_written is not None else None),
+                "rows_written": int(rows_written),
                 "elapsed_seconds": float(elapsed),
                 "pages_per_second_total": float(true_pages_processed / elapsed) if elapsed > 0 else None,
                 "runtime_metrics_dir": runtime_metrics_dir,
@@ -1062,7 +1076,7 @@ class BatchIngestor(Ingestor):
                     "input_files": int(len(self._input_documents)),
                     "num_pages": int(true_pages_processed),
                     "true_pages_processed": int(true_pages_processed),
-                    "rows_written": (int(rows_written) if rows_written is not None else None),
+                    "rows_written": int(rows_written),
                     "elapsed_seconds": float(elapsed),
                     "stats_path": str(stats_path),
                     "timeline_path": str(timeline_path),
@@ -1078,11 +1092,9 @@ class BatchIngestor(Ingestor):
         return {
             "input_files": int(len(self._input_documents)),
             "true_pages_processed": int(true_pages_processed),
-            "rows_written": (int(rows_written) if rows_written is not None else None),
+            "rows_written": int(rows_written),
             "elapsed_seconds": float(elapsed),
-            "pages_per_second_rows": (
-                float(rows_written / elapsed) if (elapsed > 0 and rows_written is not None) else None
-            ),
+            "pages_per_second_rows": (float(rows_written / elapsed) if elapsed > 0 else None),
             "pages_per_second_true": float(true_pages_processed / elapsed) if elapsed > 0 else None,
         }
 
