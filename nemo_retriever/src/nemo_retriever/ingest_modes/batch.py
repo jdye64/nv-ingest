@@ -203,6 +203,63 @@ def _collect_pdf_extract_timing_summary(
     }
 
 
+def _accumulate_extract_timing_from_batch(
+    batch_df: Any,
+    *,
+    total_ms: list[float],
+    text_ms: list[float],
+    render_ms: list[float],
+    slow_pages: list[Dict[str, Any]],
+    counters: Dict[str, int],
+) -> None:
+    """Accumulate per-page extract timing stats from one pandas batch."""
+    for _, row in batch_df.iterrows():
+        counters["rows_seen"] += 1
+        row_dict = row.to_dict()
+        meta = row_dict.get("metadata")
+        if isinstance(meta, str):
+            try:
+                meta = json.loads(meta)
+            except Exception:
+                meta = {}
+        if not isinstance(meta, dict):
+            continue
+
+        if meta.get("error") is not None:
+            counters["rows_with_errors"] += 1
+
+        timing = meta.get("extract_timing")
+        if not isinstance(timing, dict):
+            continue
+
+        counters["rows_with_extract_timing"] += 1
+        total = _safe_float(timing.get("total_actor_ms"))
+        text = _safe_float(timing.get("text_extract_ms"))
+        render = _safe_float(timing.get("render_page_image_ms"))
+
+        if total is not None:
+            total_ms.append(total)
+        if text is not None:
+            text_ms.append(text)
+        if render is not None:
+            render_ms.append(render)
+
+        if total is not None and total > 0:
+            try:
+                page_number = int(row_dict.get("page_number", -1))
+            except (TypeError, ValueError):
+                page_number = -1
+            slow_pages.append(
+                {
+                    "path": str(row_dict.get("path") or meta.get("source_path") or ""),
+                    "page_number": page_number,
+                    "total_actor_ms": float(total),
+                    "text_extract_ms": float(text) if text is not None else None,
+                    "render_page_image_ms": float(render) if render is not None else None,
+                }
+            )
+
+
 class _LanceDBWriteActor:
     """Ray Data actor that streams batches into LanceDB as they arrive.
 
@@ -1137,10 +1194,9 @@ class BatchIngestor(Ingestor):
         """
         Execute the Ray Data pipeline and return ingest metrics.
 
-        If a VDB upload stage was added (via ``vdb_upload()``), data is written
-        to LanceDB in a streaming fashion by ``_LanceDBWriteActor``.  After the
-        pipeline finishes, we create the LanceDB vector index (which must happen
-        after all writes are complete).
+        If a VDB upload stage was added (via ``vdb_upload()``), this method
+        executes upload as a terminal sink in the same streaming pass used for
+        metric collection.  After upload completes, we create the LanceDB index.
         """
         run_params = _coerce_params(params, IngestExecuteParams, kwargs)
         _ = (
@@ -1152,9 +1208,51 @@ class BatchIngestor(Ingestor):
         runtime_metrics_dir = run_params.runtime_metrics_dir
         runtime_metrics_prefix = run_params.runtime_metrics_prefix
         t0 = time.monotonic()
-        # Single terminal Ray action to execute the full pipeline once.
-        rows_written = int(self._rd_dataset.count())
-        true_pages_processed = int(rows_written)
+        extract_timing_summary_from_upload: Optional[Dict[str, Any]] = None
+        if self._vdb_upload_kwargs:
+            upload_sink = _LanceDBWriteActor(params=self._vdb_upload_params)
+            rows_written = 0
+            timing_total_ms: list[float] = []
+            timing_text_ms: list[float] = []
+            timing_render_ms: list[float] = []
+            timing_slow_pages: list[Dict[str, Any]] = []
+            timing_counters = {"rows_seen": 0, "rows_with_extract_timing": 0, "rows_with_errors": 0}
+
+            for batch_df in self._rd_dataset.iter_batches(batch_format="pandas", batch_size=1024):
+                upload_sink(batch_df)
+                try:
+                    rows_written += int(len(batch_df.index))
+                except Exception:
+                    pass
+                _accumulate_extract_timing_from_batch(
+                    batch_df,
+                    total_ms=timing_total_ms,
+                    text_ms=timing_text_ms,
+                    render_ms=timing_render_ms,
+                    slow_pages=timing_slow_pages,
+                    counters=timing_counters,
+                )
+
+            true_pages_processed = int(rows_written)
+            extract_timing_summary_from_upload = {
+                "rows_seen": int(timing_counters["rows_seen"]),
+                "rows_with_extract_timing": int(timing_counters["rows_with_extract_timing"]),
+                "rows_with_errors": int(timing_counters["rows_with_errors"]),
+                "timing_ms": {
+                    "total_actor_ms": _summarize_timing_values(timing_total_ms),
+                    "text_extract_ms": _summarize_timing_values(timing_text_ms),
+                    "render_page_image_ms": _summarize_timing_values(timing_render_ms),
+                },
+                "slowest_pages_by_total_actor_ms": sorted(
+                    timing_slow_pages,
+                    key=lambda x: float(x["total_actor_ms"]),
+                    reverse=True,
+                )[:25],
+            }
+        else:
+            # Single terminal Ray action to execute the full pipeline once.
+            rows_written = int(self._rd_dataset.count())
+            true_pages_processed = int(rows_written)
         elapsed = time.monotonic() - t0
 
         print(
@@ -1203,10 +1301,14 @@ class BatchIngestor(Ingestor):
                 print(f"Warning: failed writing ray timeline: {e}")
 
             extract_timing_written = False
-            if hasattr(self, "_vdb_upload_kwargs") and self._vdb_upload_kwargs:
-                # Avoid duplicate writes: collecting per-page timing summary requires
-                # iterating the dataset, which would re-run side-effecting upload stages.
-                print("Info: skipping extract timing summary because vdb_upload stage is enabled.")
+            if extract_timing_summary_from_upload is not None:
+                try:
+                    extract_timing_path.write_text(
+                        json.dumps(extract_timing_summary_from_upload, indent=2), encoding="utf-8"
+                    )
+                    extract_timing_written = True
+                except Exception as e:
+                    print(f"Warning: failed writing extract timing summary: {e}")
             else:
                 try:
                     extract_timing_summary = _collect_pdf_extract_timing_summary(self._rd_dataset)
@@ -1231,7 +1333,7 @@ class BatchIngestor(Ingestor):
                 print(f"Warning: failed writing runtime summary: {e}")
 
         # Create LanceDB vector index after all streaming writes are complete.
-        if hasattr(self, "_vdb_upload_kwargs") and self._vdb_upload_kwargs:
+        if self._vdb_upload_kwargs:
             self._create_lancedb_index()
 
         return {

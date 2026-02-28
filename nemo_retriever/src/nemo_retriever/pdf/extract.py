@@ -381,12 +381,6 @@ def pdf_extraction(
 
 @dataclass(slots=True)
 class PDFExtractionActor:
-    """
-    Skeleton PDF extraction callable.
-
-    `__call__` uses `pdf_extract_config_from_kwargs()` to normalize configuration
-    before running the (not yet implemented) extraction logic.
-    """
 
     extract_kwargs: Dict[str, Any]
 
