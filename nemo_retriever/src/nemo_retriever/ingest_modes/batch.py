@@ -550,6 +550,8 @@ class BatchIngestor(Ingestor):
         self._pipeline_type: str = "pdf"  # "pdf" | "txt" | "html"
         self._extract_txt_kwargs: Dict[str, Any] = {}  # noqa: F821
         self._extract_html_kwargs: Dict[str, Any] = {}  # noqa: F821
+        self._vdb_upload_kwargs: Dict[str, Any] = {}
+        self._vdb_upload_params: Optional[VdbUploadParams] = None
 
     def files(self, documents: Union[str, List[str]]) -> "BatchIngestor":
         """
