@@ -991,12 +991,17 @@ def main(
 
         print("Running extraction...")
         ingest_start = time.perf_counter()
-        ingestor.ingest(
+        ingest_result = ingestor.ingest(
             params=IngestExecuteParams(
+                return_failures=True,
                 runtime_metrics_dir=str(runtime_metrics_dir) if runtime_metrics_dir is not None else None,
                 runtime_metrics_prefix=runtime_metrics_prefix,
             )
         )
+        if isinstance(ingest_result, tuple) and len(ingest_result) >= 2:
+            _, failures = ingest_result
+        else:
+            failures = []
         ingest_elapsed_s = time.perf_counter() - ingest_start
         processed_pages = _estimate_processed_pages(lancedb_uri, LANCEDB_TABLE)
         detection_summary = _collect_detection_summary(lancedb_uri, LANCEDB_TABLE)
@@ -1006,28 +1011,18 @@ def main(
             _write_detection_summary(detection_summary_file, detection_summary)
             print(f"Wrote detection summary JSON to {Path(detection_summary_file).expanduser().resolve()}")
 
-        error_count, error_preview = _collect_ingest_row_errors(
-            lancedb_uri,
-            LANCEDB_TABLE,
-            preview_limit=20,
-        )
-        if error_count > 0:
-            print("\nDetected row-level errors in ingestion output.")
-            print(f"First {min(20, len(error_preview))} error rows:")
+        if failures:
+            print("\nDetected row-level errors returned by ingest().")
+            error_preview = failures[:20]
+            print(f"First {len(error_preview)} error rows:")
             for i, item in enumerate(error_preview, start=1):
                 print(
                     f"  {i:02d}. source_id={item.get('source_id')!r}, "
+                    f"path={item.get('path')!r}, "
                     f"page_number={item.get('page_number')!r}, "
-                    f"signals={item.get('signals')}"
+                    f"errors={item.get('errors')}"
                 )
-                error_details = item.get("errors") or []
-                if error_details:
-                    for err in error_details:
-                        stage = err.get("stage", "unknown")
-                        typ = err.get("type", "unknown")
-                        msg = err.get("message", "")
-                        print(f"      - stage={stage}, type={typ}, message={msg}")
-            print(f"Total error rows detected: {error_count}")
+            print(f"Total error rows returned: {len(failures)}")
             print("Skipping recall because ingestion errors were detected.")
             ray.shutdown()
             _print_pages_per_second(processed_pages, ingest_elapsed_s)

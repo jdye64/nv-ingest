@@ -52,6 +52,81 @@ def _coerce_params[T](params: T | None, model_cls: type[T], kwargs: dict[str, An
     return params
 
 
+def _extract_row_errors_for_driver(row: dict[str, Any], embedding_column: str) -> list[dict[str, str]]:
+    """Extract structured error details from known row payloads."""
+    out: list[dict[str, str]] = []
+
+    def _add(err: Any, default_stage: str) -> None:
+        if err in (None, "", {}, []):
+            return
+        if isinstance(err, dict):
+            out.append(
+                {
+                    "stage": str(err.get("stage") or default_stage),
+                    "type": str(err.get("type") or "unknown"),
+                    "message": str(err.get("message") or ""),
+                }
+            )
+            return
+        out.append({"stage": str(default_stage), "type": "unknown", "message": str(err)})
+
+    meta = row.get("metadata")
+    parsed_meta: dict[str, Any] = {}
+    if isinstance(meta, dict):
+        parsed_meta = meta
+    elif isinstance(meta, str) and meta.strip():
+        try:
+            parsed = json.loads(meta)
+            if isinstance(parsed, dict):
+                parsed_meta = parsed
+        except Exception:
+            parsed_meta = {}
+
+    _add(parsed_meta.get("error"), "metadata")
+    _add(row.get("error"), "row")
+
+    payload = row.get(embedding_column)
+    if isinstance(payload, dict):
+        _add(payload.get("error"), embedding_column)
+
+    # De-duplicate while preserving order.
+    deduped: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for item in out:
+        key = (item.get("stage", ""), item.get("type", ""), item.get("message", ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+def _collect_driver_failures_from_dataset(ds: "rd.Dataset", *, embedding_column: str) -> list[dict[str, Any]]:
+    """
+    Collect row-level failures from the final Ray Dataset for return to the driver.
+
+    This avoids relying on LanceDB persistence for error visibility.
+    """
+    failures: list[dict[str, Any]] = []
+    for batch_df in ds.iter_batches(batch_format="pandas", batch_size=1024):
+        if batch_df is None or batch_df.empty:
+            continue
+        for row in batch_df.itertuples(index=False):
+            row_dict = row._asdict() if hasattr(row, "_asdict") else {}
+            errors = _extract_row_errors_for_driver(row_dict, embedding_column=embedding_column)
+            if not errors:
+                continue
+            failures.append(
+                {
+                    "source_id": row_dict.get("source_id"),
+                    "path": row_dict.get("path"),
+                    "page_number": row_dict.get("page_number"),
+                    "errors": errors,
+                }
+            )
+    return failures
+
+
 # region agent log
 def _debug_log(*, run_id: str, hypothesis_id: str, location: str, message: str, data: dict[str, Any]) -> None:
     payload = {
@@ -164,7 +239,8 @@ class _LanceDBWriteActor:
             if isinstance(sp, str) and sp.strip():
                 path = sp.strip()
 
-            row_errors = self._collect_row_errors(row=row, parsed_metadata=meta)
+            row_dict = row._asdict() if hasattr(row, "_asdict") else {}
+            row_errors = _extract_row_errors_for_driver(row_dict, self._embedding_column)
 
             # Extract embedding
             emb = None
@@ -218,8 +294,6 @@ class _LanceDBWriteActor:
                 entries = getattr(row, ocr_col, None)
                 if isinstance(entries, list):
                     metadata_obj[f"ocr_{ocr_col}_detections"] = int(len(entries))
-            if row_errors:
-                metadata_obj["errors"] = row_errors
             source_obj = {"source_id": str(path)}
 
             row_out = {
@@ -242,44 +316,6 @@ class _LanceDBWriteActor:
 
             rows.append(row_out)
         return rows
-
-    def _collect_row_errors(self, *, row: Any, parsed_metadata: dict[str, Any]) -> list[dict[str, str]]:
-        """Extract structured error details from known payload fields."""
-        out: list[dict[str, str]] = []
-
-        def _add(err: Any, default_stage: str) -> None:
-            if err in (None, "", {}, []):
-                return
-            if isinstance(err, dict):
-                out.append(
-                    {
-                        "stage": str(err.get("stage") or default_stage),
-                        "type": str(err.get("type") or "unknown"),
-                        "message": str(err.get("message") or ""),
-                    }
-                )
-                return
-            out.append({"stage": str(default_stage), "type": "unknown", "message": str(err)})
-
-        _add(parsed_metadata.get("error"), "metadata")
-
-        payload = getattr(row, self._embedding_column, None)
-        if isinstance(payload, dict):
-            _add(payload.get("error"), str(self._embedding_column))
-
-        direct_error = getattr(row, "error", None)
-        _add(direct_error, "row")
-
-        # De-duplicate while preserving order.
-        deduped: list[dict[str, str]] = []
-        seen: set[tuple[str, str, str]] = set()
-        for item in out:
-            key = (item.get("stage", ""), item.get("type", ""), item.get("message", ""))
-            if key in seen:
-                continue
-            seen.add(key)
-            deduped.append(item)
-        return deduped
 
     def __call__(self, batch_df: Any) -> Any:
         rows = self._build_rows(batch_df)
@@ -1031,7 +1067,9 @@ class BatchIngestor(Ingestor):
     def write_to_disk(self, output_dir: str) -> "BatchIngestor":
         return self.save_intermediate_results(output_dir=output_dir)
 
-    def ingest(self, params: IngestExecuteParams | None = None, **kwargs: Any) -> int:
+    def ingest(
+        self, params: IngestExecuteParams | None = None, **kwargs: Any
+    ) -> int | tuple[int, list[dict[str, Any]]]:
         """
         Execute the Ray Data pipeline and return the total number of pages.
 
@@ -1041,16 +1079,16 @@ class BatchIngestor(Ingestor):
         after all writes are complete).
         """
         run_params = _coerce_params(params, IngestExecuteParams, kwargs)
-        _ = (
-            run_params.show_progress,
-            run_params.return_failures,
-            run_params.save_to_disk,
-            run_params.return_traces,
-        )
+        return_failures = bool(run_params.return_failures)
+        _ = (run_params.show_progress, run_params.save_to_disk, run_params.return_traces)
         runtime_metrics_dir = run_params.runtime_metrics_dir
         runtime_metrics_prefix = run_params.runtime_metrics_prefix
         t0 = time.monotonic()
-        num_pages = self._rd_dataset.count()
+        executed_ds = self._rd_dataset
+        if return_failures:
+            # Materialize once so count + failure collection reuse one execution graph.
+            executed_ds = executed_ds.materialize()
+        num_pages = executed_ds.count()
         elapsed = time.monotonic() - t0
 
         print(f"[done] {len(self._input_documents)} files, {num_pages} pages in {elapsed:.1f}s")
@@ -1082,7 +1120,7 @@ class BatchIngestor(Ingestor):
 
             stats_text = ""
             try:
-                stats_text = str(self._rd_dataset.stats())
+                stats_text = str(executed_ds.stats())
                 stats_path.write_text(stats_text, encoding="utf-8")
             except Exception as e:
                 print(f"Warning: failed writing dataset stats: {e}")
@@ -1107,6 +1145,16 @@ class BatchIngestor(Ingestor):
         # Create LanceDB vector index after all streaming writes are complete.
         if hasattr(self, "_vdb_upload_kwargs") and self._vdb_upload_kwargs:
             self._create_lancedb_index()
+
+        if return_failures:
+            embed_col = "text_embeddings_1b_v2"
+            if hasattr(self, "_vdb_upload_kwargs") and isinstance(self._vdb_upload_kwargs, dict):
+                embed_col = str(self._vdb_upload_kwargs.get("embedding_column", embed_col))
+            failures = _collect_driver_failures_from_dataset(
+                executed_ds,
+                embedding_column=embed_col,
+            )
+            return int(num_pages), failures
 
         return num_pages
 
