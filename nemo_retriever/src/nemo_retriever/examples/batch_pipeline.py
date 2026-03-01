@@ -257,6 +257,124 @@ def _print_pages_per_second(processed_pages: Optional[int], ingest_elapsed_s: fl
     print(f"Pages/sec (ingest only; excludes Ray startup and recall): {pps:.2f}")
 
 
+def _extract_error_signals_from_value(value: object) -> list[str]:
+    """
+    Return human-readable error signals found in a value.
+
+    Supports nested dict/list content. This is intentionally heuristic so we can
+    surface swallowed errors from varied stage payload shapes.
+    """
+    signals: list[str] = []
+
+    if isinstance(value, dict):
+        if value.get("error") not in (None, "", {}, []):
+            err = value.get("error")
+            if isinstance(err, dict):
+                stage = err.get("stage")
+                typ = err.get("type")
+                msg = err.get("message")
+                parts = [p for p in (stage, typ, msg) if p]
+                signals.append("error=" + (" | ".join(str(p) for p in parts) if parts else str(err)))
+            else:
+                signals.append(f"error={err}")
+
+        if value.get("errors") not in (None, "", {}, []):
+            signals.append("errors field present")
+
+        status = value.get("status")
+        if isinstance(status, str) and status.lower() == "failed":
+            signals.append("status=failed")
+
+        if bool(value.get("cm_failed")):
+            signals.append("cm_failed=true")
+
+        for k in ("failed",):
+            v = value.get(k)
+            if isinstance(v, bool) and v:
+                signals.append(f"{k}=true")
+
+        # Recurse nested values to catch embedded stage payload errors.
+        for nested in value.values():
+            signals.extend(_extract_error_signals_from_value(nested))
+
+    elif isinstance(value, list):
+        for item in value:
+            signals.extend(_extract_error_signals_from_value(item))
+
+    elif isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return signals
+
+        # Try JSON first.
+        try:
+            parsed = json.loads(s)
+        except Exception:
+            parsed = None
+
+        if parsed is not None:
+            signals.extend(_extract_error_signals_from_value(parsed))
+        else:
+            lowered = s.lower()
+            if "traceback" in lowered or "error" in lowered or "exception" in lowered:
+                signals.append("string contains error-like text")
+
+    return signals
+
+
+def _collect_ingest_row_errors(
+    uri: str,
+    table_name: str,
+    *,
+    preview_limit: int = 20,
+) -> tuple[int, list[dict]]:
+    """
+    Scan LanceDB rows for error signals.
+
+    Returns
+    -------
+    (total_error_rows, preview_rows)
+      - total_error_rows: number of rows where any error signal was found
+      - preview_rows: up to `preview_limit` row summaries
+    """
+    try:
+        db = _lancedb().connect(uri)
+        table = db.open_table(table_name)
+        df = table.to_pandas()
+    except Exception:
+        return 0, []
+
+    if df.empty:
+        return 0, []
+
+    total = 0
+    preview: list[dict] = []
+    inspect_cols = [c for c in ("source_id", "page_number", "metadata", "source", "text") if c in df.columns]
+
+    for row in df.itertuples(index=False):
+        row_dict = row._asdict() if hasattr(row, "_asdict") else {}
+        signals: list[str] = []
+        for col in inspect_cols:
+            signals.extend(_extract_error_signals_from_value(row_dict.get(col)))
+
+        # De-duplicate while preserving order.
+        deduped_signals = list(dict.fromkeys(signals))
+        if not deduped_signals:
+            continue
+
+        total += 1
+        if len(preview) < preview_limit:
+            preview.append(
+                {
+                    "source_id": row_dict.get("source_id"),
+                    "page_number": row_dict.get("page_number"),
+                    "signals": deduped_signals,
+                }
+            )
+
+    return total, preview
+
+
 def _ensure_lancedb_table(uri: str, table_name: str) -> None:
     """
     Ensure the local LanceDB URI exists and table can be opened.
@@ -815,6 +933,26 @@ def main(
         if detection_summary_file is not None:
             _write_detection_summary(detection_summary_file, detection_summary)
             print(f"Wrote detection summary JSON to {Path(detection_summary_file).expanduser().resolve()}")
+
+        error_count, error_preview = _collect_ingest_row_errors(
+            lancedb_uri,
+            LANCEDB_TABLE,
+            preview_limit=20,
+        )
+        if error_count > 0:
+            print("\nDetected row-level errors in ingestion output.")
+            print(f"First {min(20, len(error_preview))} error rows:")
+            for i, item in enumerate(error_preview, start=1):
+                print(
+                    f"  {i:02d}. source_id={item.get('source_id')!r}, "
+                    f"page_number={item.get('page_number')!r}, "
+                    f"signals={item.get('signals')}"
+                )
+            print(f"Total error rows detected: {error_count}")
+            print("Skipping recall because ingestion errors were detected.")
+            ray.shutdown()
+            _print_pages_per_second(processed_pages, ingest_elapsed_s)
+            return
 
         ray.shutdown()
 
