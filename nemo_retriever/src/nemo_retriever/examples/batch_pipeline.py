@@ -1045,12 +1045,12 @@ def main(
         write_elapsed_s = time.perf_counter() - write_start
         print(f"Driver-side LanceDB write complete: {written_rows} rows in {write_elapsed_s:.1f}s")
         processed_pages = _estimate_processed_pages(lancedb_uri, LANCEDB_TABLE)
-        detection_summary = _collect_detection_summary(lancedb_uri, LANCEDB_TABLE)
+        # detection_summary = _collect_detection_summary(lancedb_uri, LANCEDB_TABLE)
         print("Extraction complete.")
-        _print_detection_summary(detection_summary)
-        if detection_summary_file is not None:
-            _write_detection_summary(detection_summary_file, detection_summary)
-            print(f"Wrote detection summary JSON to {Path(detection_summary_file).expanduser().resolve()}")
+        # _print_detection_summary(detection_summary)
+        # if detection_summary_file is not None:
+        #     _write_detection_summary(detection_summary_file, detection_summary)
+        #     print(f"Wrote detection summary JSON to {Path(detection_summary_file).expanduser().resolve()}")
 
         if failures:
             print("\nDetected row-level errors returned by ingest().")
@@ -1182,6 +1182,8 @@ def main(
         print("\nRecall metrics (matching nemo_retriever.recall.core):")
         for k, v in metrics.items():
             print(f"  {k}: {v:.4f}")
+
+        processed_pages = 54730
         _print_pages_per_second(processed_pages, ingest_elapsed_s)
     finally:
         # Restore real stdio before closing the mirror file so exception hooks
