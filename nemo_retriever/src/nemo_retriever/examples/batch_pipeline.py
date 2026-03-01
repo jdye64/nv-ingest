@@ -322,6 +322,66 @@ def _extract_error_signals_from_value(value: object) -> list[str]:
     return signals
 
 
+def _extract_error_details_from_value(value: object) -> list[dict[str, str]]:
+    """Extract structured error details (stage/type/message) from nested values."""
+    details: list[dict[str, str]] = []
+
+    if isinstance(value, dict):
+        err = value.get("error")
+        if err not in (None, "", {}, []):
+            if isinstance(err, dict):
+                details.append(
+                    {
+                        "stage": str(err.get("stage") or "unknown"),
+                        "type": str(err.get("type") or "unknown"),
+                        "message": str(err.get("message") or ""),
+                    }
+                )
+            else:
+                details.append({"stage": "unknown", "type": "unknown", "message": str(err)})
+
+        errors_field = value.get("errors")
+        if isinstance(errors_field, list):
+            for item in errors_field:
+                if isinstance(item, dict):
+                    details.append(
+                        {
+                            "stage": str(item.get("stage") or "unknown"),
+                            "type": str(item.get("type") or "unknown"),
+                            "message": str(item.get("message") or ""),
+                        }
+                    )
+
+        for nested in value.values():
+            details.extend(_extract_error_details_from_value(nested))
+
+    elif isinstance(value, list):
+        for item in value:
+            details.extend(_extract_error_details_from_value(item))
+
+    elif isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return details
+        try:
+            parsed = json.loads(s)
+        except Exception:
+            parsed = None
+        if parsed is not None:
+            details.extend(_extract_error_details_from_value(parsed))
+
+    # De-duplicate while preserving order.
+    deduped: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for d in details:
+        key = (d.get("stage", ""), d.get("type", ""), d.get("message", ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(d)
+    return deduped
+
+
 def _collect_ingest_row_errors(
     uri: str,
     table_name: str,
@@ -354,11 +414,22 @@ def _collect_ingest_row_errors(
     for row in df.itertuples(index=False):
         row_dict = row._asdict() if hasattr(row, "_asdict") else {}
         signals: list[str] = []
+        details: list[dict[str, str]] = []
         for col in inspect_cols:
-            signals.extend(_extract_error_signals_from_value(row_dict.get(col)))
+            value = row_dict.get(col)
+            signals.extend(_extract_error_signals_from_value(value))
+            details.extend(_extract_error_details_from_value(value))
 
         # De-duplicate while preserving order.
         deduped_signals = list(dict.fromkeys(signals))
+        deduped_details: list[dict[str, str]] = []
+        seen_details: set[tuple[str, str, str]] = set()
+        for item in details:
+            key = (item.get("stage", ""), item.get("type", ""), item.get("message", ""))
+            if key in seen_details:
+                continue
+            seen_details.add(key)
+            deduped_details.append(item)
         if not deduped_signals:
             continue
 
@@ -369,6 +440,7 @@ def _collect_ingest_row_errors(
                     "source_id": row_dict.get("source_id"),
                     "page_number": row_dict.get("page_number"),
                     "signals": deduped_signals,
+                    "errors": deduped_details,
                 }
             )
 
@@ -948,6 +1020,13 @@ def main(
                     f"page_number={item.get('page_number')!r}, "
                     f"signals={item.get('signals')}"
                 )
+                error_details = item.get("errors") or []
+                if error_details:
+                    for err in error_details:
+                        stage = err.get("stage", "unknown")
+                        typ = err.get("type", "unknown")
+                        msg = err.get("message", "")
+                        print(f"      - stage={stage}, type={typ}, message={msg}")
             print(f"Total error rows detected: {error_count}")
             print("Skipping recall because ingestion errors were detected.")
             ray.shutdown()

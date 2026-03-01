@@ -136,23 +136,19 @@ class _LanceDBWriteActor:
         """
         rows: list = []
         for row in df.itertuples(index=False):
-            # Extract embedding
-            emb = None
-            meta = getattr(row, "metadata", None)
-            if isinstance(meta, dict):
-                emb = meta.get("embedding")
-                if not (isinstance(emb, list) and emb):
-                    emb = None
-            if emb is None:
-                payload = getattr(row, self._embedding_column, None)
-                if isinstance(payload, dict):
-                    emb = payload.get(self._embedding_key)
-                    if not (isinstance(emb, list) and emb):
-                        emb = None
-            if emb is None:
-                continue
+            meta_raw = getattr(row, "metadata", None)
+            meta: dict[str, Any] = {}
+            if isinstance(meta_raw, dict):
+                meta = meta_raw
+            elif isinstance(meta_raw, str) and meta_raw.strip():
+                try:
+                    parsed = self._json.loads(meta_raw)
+                    if isinstance(parsed, dict):
+                        meta = parsed
+                except Exception:
+                    meta = {}
 
-            # Extract source path and page number
+            # Extract source path and page number early so dropped rows can be logged with context.
             path = ""
             page = -1
             v = getattr(row, "path", None)
@@ -164,10 +160,36 @@ class _LanceDBWriteActor:
                     page = int(v)
             except Exception:
                 pass
-            if isinstance(meta, dict):
-                sp = meta.get("source_path")
-                if isinstance(sp, str) and sp.strip():
-                    path = sp.strip()
+            sp = meta.get("source_path")
+            if isinstance(sp, str) and sp.strip():
+                path = sp.strip()
+
+            row_errors = self._collect_row_errors(row=row, parsed_metadata=meta)
+
+            # Extract embedding
+            emb = None
+            if meta:
+                emb = meta.get("embedding")
+                if not (isinstance(emb, list) and emb):
+                    emb = None
+            if emb is None:
+                payload = getattr(row, self._embedding_column, None)
+                if isinstance(payload, dict):
+                    emb = payload.get(self._embedding_key)
+                    if not (isinstance(emb, list) and emb):
+                        emb = None
+            if emb is None:
+                if row_errors:
+                    logging.warning(
+                        "Dropping row with missing embedding for source=%r page=%r; errors=%s",
+                        path or getattr(row, "source_id", "") or "<unknown>",
+                        page,
+                        "; ".join(
+                            f"{e.get('stage', 'unknown')}|{e.get('type', 'unknown')}|{e.get('message', '')}"
+                            for e in row_errors
+                        ),
+                    )
+                continue
 
             p = self._Path(path) if path else None
             filename = p.name if p is not None else ""
@@ -196,6 +218,8 @@ class _LanceDBWriteActor:
                 entries = getattr(row, ocr_col, None)
                 if isinstance(entries, list):
                     metadata_obj[f"ocr_{ocr_col}_detections"] = int(len(entries))
+            if row_errors:
+                metadata_obj["errors"] = row_errors
             source_obj = {"source_id": str(path)}
 
             row_out = {
@@ -218,6 +242,44 @@ class _LanceDBWriteActor:
 
             rows.append(row_out)
         return rows
+
+    def _collect_row_errors(self, *, row: Any, parsed_metadata: dict[str, Any]) -> list[dict[str, str]]:
+        """Extract structured error details from known payload fields."""
+        out: list[dict[str, str]] = []
+
+        def _add(err: Any, default_stage: str) -> None:
+            if err in (None, "", {}, []):
+                return
+            if isinstance(err, dict):
+                out.append(
+                    {
+                        "stage": str(err.get("stage") or default_stage),
+                        "type": str(err.get("type") or "unknown"),
+                        "message": str(err.get("message") or ""),
+                    }
+                )
+                return
+            out.append({"stage": str(default_stage), "type": "unknown", "message": str(err)})
+
+        _add(parsed_metadata.get("error"), "metadata")
+
+        payload = getattr(row, self._embedding_column, None)
+        if isinstance(payload, dict):
+            _add(payload.get("error"), str(self._embedding_column))
+
+        direct_error = getattr(row, "error", None)
+        _add(direct_error, "row")
+
+        # De-duplicate while preserving order.
+        deduped: list[dict[str, str]] = []
+        seen: set[tuple[str, str, str]] = set()
+        for item in out:
+            key = (item.get("stage", ""), item.get("type", ""), item.get("message", ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(item)
+        return deduped
 
     def __call__(self, batch_df: Any) -> Any:
         rows = self._build_rows(batch_df)
