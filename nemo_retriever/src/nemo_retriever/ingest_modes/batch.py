@@ -1211,6 +1211,7 @@ class BatchIngestor(Ingestor):
         runtime_metrics_prefix = run_params.runtime_metrics_prefix
         t0 = time.monotonic()
         extract_timing_summary_from_upload: Optional[Dict[str, Any]] = None
+        per_page_metrics_rows: Optional[list[Dict[str, Any]]] = None
         if self._vdb_upload_kwargs:
             upload_sink = _LanceDBWriteActor(params=self._vdb_upload_params)
             rows_written = 0
@@ -1219,6 +1220,7 @@ class BatchIngestor(Ingestor):
             timing_render_ms: list[float] = []
             timing_slow_pages: list[Dict[str, Any]] = []
             timing_counters = {"rows_seen": 0, "rows_with_extract_timing": 0, "rows_with_errors": 0}
+            per_page_metrics_rows = []
 
             for batch_df in self._rd_dataset.iter_batches(batch_format="pandas", batch_size=1024):
                 upload_sink(batch_df)
@@ -1226,6 +1228,7 @@ class BatchIngestor(Ingestor):
                     rows_written += int(len(batch_df.index))
                 except Exception:
                     pass
+                per_page_metrics_rows.extend(_extract_per_page_metrics_rows_from_batch(batch_df))
                 _accumulate_extract_timing_from_batch(
                     batch_df,
                     total_ms=timing_total_ms,
@@ -1289,6 +1292,8 @@ class BatchIngestor(Ingestor):
             timeline_path = metrics_dir / f"{prefix}.ray.timeline.json"
             summary_path = metrics_dir / f"{prefix}.runtime.summary.json"
             extract_timing_path = metrics_dir / f"{prefix}.extract_timing.summary.json"
+            per_page_metrics_path = metrics_dir / f"{prefix}.per_page_metrics.parquet"
+            per_page_metrics_jsonl_path = metrics_dir / f"{prefix}.per_page_metrics.jsonl"
 
             stats_text = ""
             try:
@@ -1319,6 +1324,22 @@ class BatchIngestor(Ingestor):
                 except Exception as e:
                     print(f"Warning: failed writing extract timing summary: {e}")
 
+            per_page_metrics_written_path: Optional[str] = None
+            try:
+                if per_page_metrics_rows is None:
+                    per_page_metrics_rows = _collect_per_page_metrics_rows(self._rd_dataset)
+                import pandas as pd
+
+                per_page_df = pd.DataFrame(per_page_metrics_rows)
+                try:
+                    per_page_df.to_parquet(per_page_metrics_path, index=False)
+                    per_page_metrics_written_path = str(per_page_metrics_path)
+                except Exception:
+                    per_page_df.to_json(per_page_metrics_jsonl_path, orient="records", lines=True)
+                    per_page_metrics_written_path = str(per_page_metrics_jsonl_path)
+            except Exception as e:
+                print(f"Warning: failed writing per-page metrics table: {e}")
+
             try:
                 summary = {
                     "input_files": int(len(self._input_documents)),
@@ -1329,6 +1350,7 @@ class BatchIngestor(Ingestor):
                     "stats_path": str(stats_path),
                     "timeline_path": str(timeline_path),
                     "extract_timing_summary_path": str(extract_timing_path) if extract_timing_written else None,
+                    "per_page_metrics_path": per_page_metrics_written_path,
                 }
                 summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
             except Exception as e:
