@@ -953,6 +953,8 @@ def main(
             ray.shutdown()
             _print_pages_per_second(processed_pages, ingest_elapsed_s)
             return
+        else:
+            print("No errors detected in ingestion output.")
 
         ray.shutdown()
 
