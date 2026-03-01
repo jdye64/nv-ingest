@@ -21,12 +21,12 @@ from typing import Optional, TextIO
 import ray
 import typer
 from nemo_retriever import create_ingestor
+from nemo_retriever.ingest_modes.inprocess import upload_embeddings_to_lancedb_inprocess
 from nemo_retriever.params import EmbedParams
 from nemo_retriever.params import ExtractParams
 from nemo_retriever.params import IngestExecuteParams
 from nemo_retriever.params import IngestorCreateParams
 from nemo_retriever.params import TextChunkParams
-from nemo_retriever.params import VdbUploadParams
 from nemo_retriever.recall.core import RecallConfig, retrieve_and_score
 
 app = typer.Typer()
@@ -242,6 +242,79 @@ def _write_detection_summary(path: Path, summary: Optional[dict]) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     payload = summary if summary is not None else {"error": "Detection summary unavailable."}
     target.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _create_lancedb_indices(uri: str, table_name: str, *, hybrid: bool = False) -> None:
+    """Create vector (and optional FTS) indices once after driver-side writes."""
+    try:
+        db = _lancedb().connect(uri)
+        table = db.open_table(table_name)
+        n_rows = int(table.count_rows())
+    except Exception as e:
+        print(f"Warning: could not open LanceDB table for index creation: {e}")
+        return
+
+    if n_rows < 2:
+        print("Skipping LanceDB index creation (not enough vectors).")
+        return
+
+    try:
+        table.create_index(
+            index_type="IVF_HNSW_SQ",
+            metric="l2",
+            num_partitions=16,
+            num_sub_vectors=256,
+            vector_column_name="vector",
+        )
+    except TypeError:
+        table.create_index(vector_column_name="vector")
+    except Exception as e:
+        print(f"Warning: failed to create LanceDB vector index: {e}")
+
+    if hybrid:
+        try:
+            table.create_fts_index("text", language="English")
+        except Exception as e:
+            print(f"Warning: failed to create LanceDB FTS index: {e}")
+
+
+def _stream_embeddings_to_driver_and_write_lancedb(
+    *,
+    ingestor: object,
+    lancedb_uri: str,
+    table_name: str,
+    hybrid: bool = False,
+    batch_size: int = 1024,
+) -> int:
+    """
+    Stream embedded batches from Ray to the driver and write them locally to LanceDB.
+    """
+    ds = getattr(ingestor, "_rd_dataset", None)
+    if ds is None:
+        raise RuntimeError("No Ray Dataset found on ingestor; call ingest() first.")
+
+    first_write = True
+    for batch_df in ds.iter_batches(batch_format="pandas", batch_size=int(batch_size)):
+        if batch_df is None or batch_df.empty:
+            continue
+        upload_embeddings_to_lancedb_inprocess(
+            batch_df,
+            lancedb_uri=str(lancedb_uri),
+            table_name=str(table_name),
+            overwrite=bool(first_write),
+            create_index=False,
+            hybrid=bool(hybrid),
+        )
+        first_write = False
+
+    _create_lancedb_indices(str(lancedb_uri), str(table_name), hybrid=bool(hybrid))
+
+    try:
+        db = _lancedb().connect(str(lancedb_uri))
+        table = db.open_table(str(table_name))
+        return int(table.count_rows())
+    except Exception:
+        return 0
 
 
 def _print_pages_per_second(processed_pages: Optional[int], ingest_elapsed_s: float) -> None:
@@ -819,17 +892,6 @@ def main(
                         structured_elements_modality=structured_elements_modality,
                     )
                 )
-                .vdb_upload(
-                    VdbUploadParams(
-                        lancedb={
-                            "lancedb_uri": lancedb_uri,
-                            "table_name": LANCEDB_TABLE,
-                            "overwrite": True,
-                            "create_index": True,
-                            "hybrid": hybrid,
-                        }
-                    )
-                )
             )
         elif input_type == "html":
             glob_pattern = str(input_dir / "*.html")
@@ -847,17 +909,6 @@ def main(
                         embed_modality=embed_modality,
                         text_elements_modality=text_elements_modality,
                         structured_elements_modality=structured_elements_modality,
-                    )
-                )
-                .vdb_upload(
-                    VdbUploadParams(
-                        lancedb={
-                            "lancedb_uri": lancedb_uri,
-                            "table_name": LANCEDB_TABLE,
-                            "overwrite": True,
-                            "create_index": True,
-                            "hybrid": hybrid,
-                        }
                     )
                 )
             )
@@ -913,17 +964,6 @@ def main(
                         },
                     )
                 )
-                .vdb_upload(
-                    VdbUploadParams(
-                        lancedb={
-                            "lancedb_uri": lancedb_uri,
-                            "table_name": LANCEDB_TABLE,
-                            "overwrite": True,
-                            "create_index": True,
-                            "hybrid": hybrid,
-                        }
-                    )
-                )
             )
         else:
             pdf_glob = str(input_dir / "*.pdf")
@@ -976,17 +1016,6 @@ def main(
                         },
                     )
                 )
-                .vdb_upload(
-                    VdbUploadParams(
-                        lancedb={
-                            "lancedb_uri": lancedb_uri,
-                            "table_name": LANCEDB_TABLE,
-                            "overwrite": True,
-                            "create_index": True,
-                            "hybrid": hybrid,
-                        }
-                    )
-                )
             )
 
         print("Running extraction...")
@@ -999,10 +1028,22 @@ def main(
             )
         )
         if isinstance(ingest_result, tuple) and len(ingest_result) >= 2:
-            _, failures = ingest_result
+            num_pages, failures = ingest_result
         else:
+            num_pages = int(ingest_result) if isinstance(ingest_result, int) else 0
             failures = []
         ingest_elapsed_s = time.perf_counter() - ingest_start
+        print(f"Ingest complete: {num_pages} pages. Streaming embeddings to driver for local LanceDB writes...")
+        write_start = time.perf_counter()
+        written_rows = _stream_embeddings_to_driver_and_write_lancedb(
+            ingestor=ingestor,
+            lancedb_uri=lancedb_uri,
+            table_name=LANCEDB_TABLE,
+            hybrid=hybrid,
+            batch_size=1024,
+        )
+        write_elapsed_s = time.perf_counter() - write_start
+        print(f"Driver-side LanceDB write complete: {written_rows} rows in {write_elapsed_s:.1f}s")
         processed_pages = _estimate_processed_pages(lancedb_uri, LANCEDB_TABLE)
         detection_summary = _collect_detection_summary(lancedb_uri, LANCEDB_TABLE)
         print("Extraction complete.")

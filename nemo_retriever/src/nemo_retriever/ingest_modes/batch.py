@@ -1088,6 +1088,9 @@ class BatchIngestor(Ingestor):
         if return_failures:
             # Materialize once so count + failure collection reuse one execution graph.
             executed_ds = executed_ds.materialize()
+            # Preserve the materialized dataset so callers can iterate batches on
+            # the driver without re-running the full pipeline graph.
+            self._rd_dataset = executed_ds
         num_pages = executed_ds.count()
         elapsed = time.monotonic() - t0
 
