@@ -328,6 +328,38 @@ def retrieve_and_score(
     return df_query, gold, raw_hits, retrieved_keys, metrics
 
 
+def gold_to_doc_page(golden_key: str) -> tuple[str, str]:
+    """Split a golden key like 'docname_42' into ('docname', '42')."""
+    s = str(golden_key)
+    if "_" not in s:
+        return s, ""
+    doc, page = s.rsplit("_", 1)
+    return doc, page
+
+
+def is_hit_at_k(golden_key: str, retrieved_keys: List[str], k: int) -> bool:
+    """Check if a golden key is found in the top-k retrieved keys."""
+    return _is_hit(golden_key, retrieved_keys, k)
+
+
+def hit_key_and_distance(hit: dict) -> tuple[str | None, float | None]:
+    """Extract the pdf_page key and distance/score from a raw LanceDB hit dict."""
+    try:
+        res = json.loads(hit.get("metadata", "{}"))
+        source = json.loads(hit.get("source", "{}"))
+    except Exception:
+        return None, None
+
+    source_id = source.get("source_id")
+    page_number = res.get("page_number")
+    if not source_id or page_number is None:
+        return None, float(hit["_distance"]) if "_distance" in hit else None
+
+    key = f"{Path(str(source_id)).stem}_{page_number}"
+    dist = float(hit["_distance"]) if "_distance" in hit else float(hit["_score"]) if "_score" in hit else None
+    return key, dist
+
+
 def evaluate_recall(
     query_csv: Path,
     *,

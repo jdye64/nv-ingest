@@ -7,37 +7,39 @@ Batch ingestion pipeline with optional recall evaluation.
 Run with: uv run python -m nemo_retriever.examples.batch_pipeline <input-dir>
 """
 
-import json
 import logging
 import os
 import subprocess
 import sys
 import time
-from collections import defaultdict
-from importlib import import_module
 from pathlib import Path
 from typing import Optional, TextIO
 
 import ray
 import typer
 from nemo_retriever import create_ingestor
-from nemo_retriever.ingest_modes.inprocess import upload_embeddings_to_lancedb_inprocess
 from nemo_retriever.params import EmbedParams
 from nemo_retriever.params import ExtractParams
 from nemo_retriever.params import IngestExecuteParams
 from nemo_retriever.params import IngestorCreateParams
 from nemo_retriever.params import TextChunkParams
-from nemo_retriever.recall.core import RecallConfig, retrieve_and_score
+from nemo_retriever.recall.core import (
+    RecallConfig,
+    gold_to_doc_page,
+    hit_key_and_distance,
+    is_hit_at_k,
+    retrieve_and_score,
+)
+from nemo_retriever.vector_store.lancedb_store import (
+    ensure_lancedb_table,
+    estimate_processed_pages,
+    stream_embeddings_to_driver_and_write_lancedb,
+)
 
 app = typer.Typer()
 
 LANCEDB_URI = "lancedb"
 LANCEDB_TABLE = "nv-ingest"
-
-
-def _lancedb():
-    """Import lancedb lazily to avoid fork warnings during early process setup."""
-    return import_module("lancedb")
 
 
 class _TeeStream:
@@ -102,221 +104,6 @@ def _configure_logging(log_file: Optional[Path]) -> tuple[Optional[TextIO], Text
     return fh, original_stdout, original_stderr
 
 
-def _estimate_processed_pages(uri: str, table_name: str) -> Optional[int]:
-    """
-    Estimate pages processed by counting unique (source_id, page_number) pairs.
-
-    Falls back to table row count if page-level fields are unavailable.
-    """
-    try:
-        db = _lancedb().connect(uri)
-        table = db.open_table(table_name)
-    except Exception:
-        return None
-
-    try:
-        df = table.to_pandas()[["source_id", "page_number"]]
-        return int(df.dropna(subset=["source_id", "page_number"]).drop_duplicates().shape[0])
-    except Exception:
-        try:
-            return int(table.count_rows())
-        except Exception:
-            return None
-
-
-def _to_int(value: object, default: int = 0) -> int:
-    try:
-        if value is None:
-            return default
-        return int(value)
-    except Exception:
-        return default
-
-
-def _collect_detection_summary(uri: str, table_name: str) -> Optional[dict]:
-    """
-    Collect per-model detection totals deduped by (source_id, page_number).
-
-    Counts are read from LanceDB row `metadata`, which is populated during batch
-    ingestion by the Ray write stage.
-    """
-    try:
-        db = _lancedb().connect(uri)
-        table = db.open_table(table_name)
-        df = table.to_pandas()[["source_id", "page_number", "metadata"]]
-    except Exception:
-        return None
-
-    # Deduplicate exploded rows by page key; keep max per-page counts.
-    per_page: dict[tuple[str, int], dict] = {}
-    for row in df.itertuples(index=False):
-        source_id = str(getattr(row, "source_id", "") or "")
-        page_number = _to_int(getattr(row, "page_number", -1), default=-1)
-        key = (source_id, page_number)
-
-        raw_metadata = getattr(row, "metadata", None)
-        meta: dict = {}
-        if isinstance(raw_metadata, str) and raw_metadata.strip():
-            try:
-                parsed = json.loads(raw_metadata)
-                if isinstance(parsed, dict):
-                    meta = parsed
-            except Exception:
-                meta = {}
-
-        entry = per_page.setdefault(
-            key,
-            {
-                "page_elements_total": 0,
-                "ocr_table_total": 0,
-                "ocr_chart_total": 0,
-                "ocr_infographic_total": 0,
-                "page_elements_by_label": defaultdict(int),
-            },
-        )
-
-        pe_total = _to_int(meta.get("page_elements_v3_num_detections"), default=0)
-        entry["page_elements_total"] = max(entry["page_elements_total"], pe_total)
-
-        ocr_table = _to_int(meta.get("ocr_table_detections"), default=0)
-        ocr_chart = _to_int(meta.get("ocr_chart_detections"), default=0)
-        ocr_infographic = _to_int(meta.get("ocr_infographic_detections"), default=0)
-        entry["ocr_table_total"] = max(entry["ocr_table_total"], ocr_table)
-        entry["ocr_chart_total"] = max(entry["ocr_chart_total"], ocr_chart)
-        entry["ocr_infographic_total"] = max(entry["ocr_infographic_total"], ocr_infographic)
-
-        label_counts = meta.get("page_elements_v3_counts_by_label")
-        if isinstance(label_counts, dict):
-            for label, count in label_counts.items():
-                if not isinstance(label, str):
-                    continue
-                entry["page_elements_by_label"][label] = max(
-                    entry["page_elements_by_label"][label],
-                    _to_int(count, default=0),
-                )
-
-    pe_by_label_totals: dict[str, int] = defaultdict(int)
-    page_elements_total = 0
-    ocr_table_total = 0
-    ocr_chart_total = 0
-    ocr_infographic_total = 0
-    for page_entry in per_page.values():
-        page_elements_total += int(page_entry["page_elements_total"])
-        ocr_table_total += int(page_entry["ocr_table_total"])
-        ocr_chart_total += int(page_entry["ocr_chart_total"])
-        ocr_infographic_total += int(page_entry["ocr_infographic_total"])
-        for label, count in page_entry["page_elements_by_label"].items():
-            pe_by_label_totals[label] += int(count)
-
-    return {
-        "pages_seen": int(len(per_page)),
-        "page_elements_v3_total_detections": int(page_elements_total),
-        "page_elements_v3_counts_by_label": dict(sorted(pe_by_label_totals.items())),
-        "ocr_table_total_detections": int(ocr_table_total),
-        "ocr_chart_total_detections": int(ocr_chart_total),
-        "ocr_infographic_total_detections": int(ocr_infographic_total),
-    }
-
-
-def _print_detection_summary(summary: Optional[dict]) -> None:
-    if summary is None:
-        print("Detection summary: unavailable (could not read LanceDB metadata).")
-        return
-    print("\nDetection summary (deduped by source_id/page_number):")
-    print(f"  Pages seen: {summary['pages_seen']}")
-    print(f"  PageElements v3 total detections: {summary['page_elements_v3_total_detections']}")
-    print(f"  OCR table detections: {summary['ocr_table_total_detections']}")
-    print(f"  OCR chart detections: {summary['ocr_chart_total_detections']}")
-    print(f"  OCR infographic detections: {summary['ocr_infographic_total_detections']}")
-    print("  PageElements v3 counts by label:")
-    by_label = summary.get("page_elements_v3_counts_by_label") or {}
-    if not by_label:
-        print("    (none)")
-    else:
-        for label, count in by_label.items():
-            print(f"    {label}: {count}")
-
-
-def _write_detection_summary(path: Path, summary: Optional[dict]) -> None:
-    target = Path(path).expanduser().resolve()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    payload = summary if summary is not None else {"error": "Detection summary unavailable."}
-    target.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-
-
-def _create_lancedb_indices(uri: str, table_name: str, *, hybrid: bool = False) -> None:
-    """Create vector (and optional FTS) indices once after driver-side writes."""
-    try:
-        db = _lancedb().connect(uri)
-        table = db.open_table(table_name)
-        n_rows = int(table.count_rows())
-    except Exception as e:
-        print(f"Warning: could not open LanceDB table for index creation: {e}")
-        return
-
-    if n_rows < 2:
-        print("Skipping LanceDB index creation (not enough vectors).")
-        return
-
-    try:
-        table.create_index(
-            index_type="IVF_HNSW_SQ",
-            metric="l2",
-            num_partitions=16,
-            num_sub_vectors=256,
-            vector_column_name="vector",
-        )
-    except TypeError:
-        table.create_index(vector_column_name="vector")
-    except Exception as e:
-        print(f"Warning: failed to create LanceDB vector index: {e}")
-
-    if hybrid:
-        try:
-            table.create_fts_index("text", language="English")
-        except Exception as e:
-            print(f"Warning: failed to create LanceDB FTS index: {e}")
-
-
-def _stream_embeddings_to_driver_and_write_lancedb(
-    *,
-    ingestor: object,
-    lancedb_uri: str,
-    table_name: str,
-    hybrid: bool = False,
-    batch_size: int = 1024,
-) -> int:
-    """
-    Stream embedded batches from Ray to the driver and write them locally to LanceDB.
-    """
-    ds = getattr(ingestor, "_rd_dataset", None)
-    if ds is None:
-        raise RuntimeError("No Ray Dataset found on ingestor; call ingest() first.")
-
-    first_write = True
-    for batch_df in ds.iter_batches(batch_format="pandas", batch_size=int(batch_size)):
-        if batch_df is None or batch_df.empty:
-            continue
-        upload_embeddings_to_lancedb_inprocess(
-            batch_df,
-            lancedb_uri=str(lancedb_uri),
-            table_name=str(table_name),
-            overwrite=bool(first_write),
-            create_index=False,
-            hybrid=bool(hybrid),
-        )
-        first_write = False
-
-    _create_lancedb_indices(str(lancedb_uri), str(table_name), hybrid=bool(hybrid))
-
-    try:
-        db = _lancedb().connect(str(lancedb_uri))
-        table = db.open_table(str(table_name))
-        return int(table.count_rows())
-    except Exception:
-        return 0
-
-
 def _print_pages_per_second(processed_pages: Optional[int], ingest_elapsed_s: float) -> None:
     if ingest_elapsed_s <= 0:
         print("Pages/sec: unavailable (ingest elapsed time was non-positive).")
@@ -328,279 +115,6 @@ def _print_pages_per_second(processed_pages: Optional[int], ingest_elapsed_s: fl
     pps = processed_pages / ingest_elapsed_s
     print(f"Pages processed: {processed_pages}")
     print(f"Pages/sec (ingest only; excludes Ray startup and recall): {pps:.2f}")
-
-
-def _extract_error_signals_from_value(value: object) -> list[str]:
-    """
-    Return human-readable error signals found in a value.
-
-    Supports nested dict/list content. This is intentionally heuristic so we can
-    surface swallowed errors from varied stage payload shapes.
-    """
-    signals: list[str] = []
-
-    if isinstance(value, dict):
-        if value.get("error") not in (None, "", {}, []):
-            err = value.get("error")
-            if isinstance(err, dict):
-                stage = err.get("stage")
-                typ = err.get("type")
-                msg = err.get("message")
-                parts = [p for p in (stage, typ, msg) if p]
-                signals.append("error=" + (" | ".join(str(p) for p in parts) if parts else str(err)))
-            else:
-                signals.append(f"error={err}")
-
-        if value.get("errors") not in (None, "", {}, []):
-            signals.append("errors field present")
-
-        status = value.get("status")
-        if isinstance(status, str) and status.lower() == "failed":
-            signals.append("status=failed")
-
-        if bool(value.get("cm_failed")):
-            signals.append("cm_failed=true")
-
-        for k in ("failed",):
-            v = value.get(k)
-            if isinstance(v, bool) and v:
-                signals.append(f"{k}=true")
-
-        # Recurse nested values to catch embedded stage payload errors.
-        for nested in value.values():
-            signals.extend(_extract_error_signals_from_value(nested))
-
-    elif isinstance(value, list):
-        for item in value:
-            signals.extend(_extract_error_signals_from_value(item))
-
-    elif isinstance(value, str):
-        s = value.strip()
-        if not s:
-            return signals
-
-        # Try JSON first.
-        try:
-            parsed = json.loads(s)
-        except Exception:
-            parsed = None
-
-        if parsed is not None:
-            signals.extend(_extract_error_signals_from_value(parsed))
-        else:
-            lowered = s.lower()
-            if "traceback" in lowered or "error" in lowered or "exception" in lowered:
-                signals.append("string contains error-like text")
-
-    return signals
-
-
-def _extract_error_details_from_value(value: object) -> list[dict[str, str]]:
-    """Extract structured error details (stage/type/message) from nested values."""
-    details: list[dict[str, str]] = []
-
-    if isinstance(value, dict):
-        err = value.get("error")
-        if err not in (None, "", {}, []):
-            if isinstance(err, dict):
-                details.append(
-                    {
-                        "stage": str(err.get("stage") or "unknown"),
-                        "type": str(err.get("type") or "unknown"),
-                        "message": str(err.get("message") or ""),
-                    }
-                )
-            else:
-                details.append({"stage": "unknown", "type": "unknown", "message": str(err)})
-
-        errors_field = value.get("errors")
-        if isinstance(errors_field, list):
-            for item in errors_field:
-                if isinstance(item, dict):
-                    details.append(
-                        {
-                            "stage": str(item.get("stage") or "unknown"),
-                            "type": str(item.get("type") or "unknown"),
-                            "message": str(item.get("message") or ""),
-                        }
-                    )
-
-        for nested in value.values():
-            details.extend(_extract_error_details_from_value(nested))
-
-    elif isinstance(value, list):
-        for item in value:
-            details.extend(_extract_error_details_from_value(item))
-
-    elif isinstance(value, str):
-        s = value.strip()
-        if not s:
-            return details
-        try:
-            parsed = json.loads(s)
-        except Exception:
-            parsed = None
-        if parsed is not None:
-            details.extend(_extract_error_details_from_value(parsed))
-
-    # De-duplicate while preserving order.
-    deduped: list[dict[str, str]] = []
-    seen: set[tuple[str, str, str]] = set()
-    for d in details:
-        key = (d.get("stage", ""), d.get("type", ""), d.get("message", ""))
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(d)
-    return deduped
-
-
-def _collect_ingest_row_errors(
-    uri: str,
-    table_name: str,
-    *,
-    preview_limit: int = 20,
-) -> tuple[int, list[dict]]:
-    """
-    Scan LanceDB rows for error signals.
-
-    Returns
-    -------
-    (total_error_rows, preview_rows)
-      - total_error_rows: number of rows where any error signal was found
-      - preview_rows: up to `preview_limit` row summaries
-    """
-    try:
-        db = _lancedb().connect(uri)
-        table = db.open_table(table_name)
-        df = table.to_pandas()
-    except Exception:
-        return 0, []
-
-    if df.empty:
-        return 0, []
-
-    total = 0
-    preview: list[dict] = []
-    inspect_cols = [c for c in ("source_id", "page_number", "metadata", "source", "text") if c in df.columns]
-
-    for row in df.itertuples(index=False):
-        row_dict = row._asdict() if hasattr(row, "_asdict") else {}
-        signals: list[str] = []
-        details: list[dict[str, str]] = []
-        for col in inspect_cols:
-            value = row_dict.get(col)
-            signals.extend(_extract_error_signals_from_value(value))
-            details.extend(_extract_error_details_from_value(value))
-
-        # De-duplicate while preserving order.
-        deduped_signals = list(dict.fromkeys(signals))
-        deduped_details: list[dict[str, str]] = []
-        seen_details: set[tuple[str, str, str]] = set()
-        for item in details:
-            key = (item.get("stage", ""), item.get("type", ""), item.get("message", ""))
-            if key in seen_details:
-                continue
-            seen_details.add(key)
-            deduped_details.append(item)
-        if not deduped_signals:
-            continue
-
-        total += 1
-        if len(preview) < preview_limit:
-            preview.append(
-                {
-                    "source_id": row_dict.get("source_id"),
-                    "page_number": row_dict.get("page_number"),
-                    "signals": deduped_signals,
-                    "errors": deduped_details,
-                }
-            )
-
-    return total, preview
-
-
-def _ensure_lancedb_table(uri: str, table_name: str) -> None:
-    """
-    Ensure the local LanceDB URI exists and table can be opened.
-
-    Creates an empty table with the expected schema if it does not exist yet.
-    """
-    # Local path URI in this pipeline.
-    Path(uri).mkdir(parents=True, exist_ok=True)
-
-    db = _lancedb().connect(uri)
-    try:
-        db.open_table(table_name)
-        return
-    except Exception:
-        pass
-
-    import pyarrow as pa  # type: ignore
-
-    schema = pa.schema(
-        [
-            pa.field("vector", pa.list_(pa.float32(), 2048)),
-            pa.field("pdf_page", pa.string()),
-            pa.field("filename", pa.string()),
-            pa.field("pdf_basename", pa.string()),
-            pa.field("page_number", pa.int32()),
-            pa.field("source_id", pa.string()),
-            pa.field("path", pa.string()),
-            pa.field("text", pa.string()),
-            pa.field("metadata", pa.string()),
-            pa.field("source", pa.string()),
-        ]
-    )
-    empty = pa.table(
-        {
-            "vector": [],
-            "pdf_page": [],
-            "filename": [],
-            "pdf_basename": [],
-            "page_number": [],
-            "source_id": [],
-            "path": [],
-            "text": [],
-            "metadata": [],
-            "source": [],
-        },
-        schema=schema,
-    )
-    db.create_table(table_name, data=empty, schema=schema, mode="create")
-
-
-def _gold_to_doc_page(golden_key: str) -> tuple[str, str]:
-    s = str(golden_key)
-    if "_" not in s:
-        return s, ""
-    doc, page = s.rsplit("_", 1)
-    return doc, page
-
-
-def _is_hit_at_k(golden_key: str, retrieved_keys: list[str], k: int) -> bool:
-    doc, page = _gold_to_doc_page(golden_key)
-    specific_page = f"{doc}_{page}"
-    entire_document = f"{doc}_-1"
-    top = (retrieved_keys or [])[: int(k)]
-    return (specific_page in top) or (entire_document in top)
-
-
-def _hit_key_and_distance(hit: dict) -> tuple[str | None, float | None]:
-    try:
-        res = json.loads(hit.get("metadata", "{}"))
-        source = json.loads(hit.get("source", "{}"))
-    except Exception:
-        return None, None
-
-    source_id = source.get("source_id")
-    page_number = res.get("page_number")
-    if not source_id or page_number is None:
-        return None, float(hit.get("_distance")) if "_distance" in hit else None
-
-    key = f"{Path(str(source_id)).stem}_{page_number}"
-    dist = float(hit["_distance"]) if "_distance" in hit else float(hit["_score"]) if "_score" in hit else None
-    return key, dist
 
 
 @app.command()
@@ -850,7 +364,7 @@ def main(
         os.environ["RAY_LOG_TO_DRIVER"] = "1" if ray_log_to_driver else "0"
         # Use an absolute path so driver and Ray actors resolve the same LanceDB URI.
         lancedb_uri = str(Path(lancedb_uri).expanduser().resolve())
-        _ensure_lancedb_table(lancedb_uri, LANCEDB_TABLE)
+        ensure_lancedb_table(lancedb_uri, LANCEDB_TABLE)
 
         # Remote endpoints don't need local model GPUs for their stage.
         if page_elements_invoke_url and float(gpu_page_elements) != 0.0:
@@ -1035,7 +549,7 @@ def main(
         ingest_elapsed_s = time.perf_counter() - ingest_start
         print(f"Ingest complete: {num_pages} pages. Streaming embeddings to driver for local LanceDB writes...")
         write_start = time.perf_counter()
-        written_rows = _stream_embeddings_to_driver_and_write_lancedb(
+        written_rows = stream_embeddings_to_driver_and_write_lancedb(
             ingestor=ingestor,
             lancedb_uri=lancedb_uri,
             table_name=LANCEDB_TABLE,
@@ -1044,13 +558,8 @@ def main(
         )
         write_elapsed_s = time.perf_counter() - write_start
         print(f"Driver-side LanceDB write complete: {written_rows} rows in {write_elapsed_s:.1f}s")
-        processed_pages = _estimate_processed_pages(lancedb_uri, LANCEDB_TABLE)
-        # detection_summary = _collect_detection_summary(lancedb_uri, LANCEDB_TABLE)
+        processed_pages = estimate_processed_pages(lancedb_uri, LANCEDB_TABLE)
         print("Extraction complete.")
-        # _print_detection_summary(detection_summary)
-        # if detection_summary_file is not None:
-        #     _write_detection_summary(detection_summary_file, detection_summary)
-        #     print(f"Wrote detection summary JSON to {Path(detection_summary_file).expanduser().resolve()}")
 
         if failures:
             print("\nDetected row-level errors returned by ingest().")
@@ -1082,7 +591,9 @@ def main(
             _print_pages_per_second(processed_pages, ingest_elapsed_s)
             return
 
-        db = _lancedb().connect(lancedb_uri)
+        import lancedb  # noqa: PLC0415
+
+        db = lancedb.connect(lancedb_uri)
         table = None
         open_err: Optional[Exception] = None
         for _ in range(3):
@@ -1093,7 +604,7 @@ def main(
             except Exception as e:
                 open_err = e
                 # Create table if missing, then retry open.
-                _ensure_lancedb_table(lancedb_uri, LANCEDB_TABLE)
+                ensure_lancedb_table(lancedb_uri, LANCEDB_TABLE)
                 time.sleep(2)
         if table is None:
             raise RuntimeError(
@@ -1142,16 +653,16 @@ def main(
                 _raw_hits,
             )
         ):
-            doc, page = _gold_to_doc_page(g)
+            doc, page = gold_to_doc_page(g)
 
             scored_hits: list[tuple[str, float | None]] = []
             for h in hits:
-                key, dist = _hit_key_and_distance(h)
+                key, dist = hit_key_and_distance(h)
                 if key:
                     scored_hits.append((key, dist))
 
             top_keys = [k for (k, _d) in scored_hits]
-            hit = _is_hit_at_k(g, top_keys, cfg.top_k)
+            hit = is_hit_at_k(g, top_keys, cfg.top_k)
 
             if not no_recall_details:
                 print(f"\nQuery {i}: {q}")
