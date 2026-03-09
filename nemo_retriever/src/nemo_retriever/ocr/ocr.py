@@ -5,14 +5,26 @@
 from __future__ import annotations
 
 """
-Crop-based OCR stage.
+Crop-based OCR stage — GPU-throughput-optimized.
 
 Runs Nemotron OCR v1 on table / chart / infographic regions detected by
-PageElements v3. Text extraction for the full page is handled upstream
-by PDFium in the PDF extraction stage.
+PageElements v3.  The key design decisions for throughput are:
+
+1. **Cross-row batching** — crops are collected from *all* rows in the
+   DataFrame first, grouped by merge-level, then fed to the model in
+   maximally-packed batches.  This keeps the GPU saturated even when
+   individual pages have few detections.
+
+2. **Zero unnecessary copies** — crops use ``np.ascontiguousarray`` only
+   when the slice is non-contiguous; the output DataFrame is mutated
+   in-place rather than copied.
+
+3. **GPU-warm actor** — ``OCRActor.__init__`` casts submodules to fp16,
+   warms up the CUDA caching allocator, and sets ``expandable_segments``
+   so the hot path triggers no new CUDA mallocs.
 """
 
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 import base64
 import io
@@ -32,7 +44,20 @@ except Exception:  # pragma: no cover
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Named tuples for the cross-row batching pipeline
+# ---------------------------------------------------------------------------
+
+
+class _CropJob(NamedTuple):
+    row_idx: int
+    label: str
+    bbox: List[float]
+    crop: np.ndarray
+    crop_hw: Tuple[int, int]
+
+
+# ---------------------------------------------------------------------------
+# Lightweight helpers
 # ---------------------------------------------------------------------------
 
 
@@ -46,6 +71,17 @@ def _error_payload(*, stage: str, exc: BaseException) -> Dict[str, Any]:
             "traceback": "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
         },
     }
+
+
+def _clamp_int(v: float, lo: int, hi: int) -> int:
+    if v != v:  # NaN
+        return lo
+    return int(min(max(v, float(lo)), float(hi)))
+
+
+# ---------------------------------------------------------------------------
+# Image encoding / decoding helpers (shared with chart & table stages)
+# ---------------------------------------------------------------------------
 
 
 def _np_rgb_to_b64_png(arr: np.ndarray) -> str:
@@ -93,13 +129,7 @@ def _get_page_image_array(page_image: Any) -> Optional[np.ndarray]:
 
 
 def _get_page_image_b64(page_image: Any) -> Optional[str]:
-    """Extract or lazily encode the page image as a base64-encoded PNG string.
-
-    Accepts (in priority order):
-    * A ``dict`` with ``image_b64`` (zero-copy).
-    * A ``dict`` with ``image_png`` (base64-encode raw PNG bytes -- fast).
-    * A ``dict`` with ``image_array`` (PIL-encode to PNG then base64).
-    """
+    """Extract or lazily encode the page image as a base64-encoded PNG string."""
     if not isinstance(page_image, dict):
         return None
     b64 = page_image.get("image_b64")
@@ -114,10 +144,9 @@ def _get_page_image_b64(page_image: Any) -> Optional[str]:
     return None
 
 
-def _clamp_int(v: float, lo: int, hi: int) -> int:
-    if v != v:  # NaN
-        return lo
-    return int(min(max(v, float(lo)), float(hi)))
+# ---------------------------------------------------------------------------
+# Cropping
+# ---------------------------------------------------------------------------
 
 
 def _crop_b64_image_by_norm_bbox(
@@ -126,24 +155,13 @@ def _crop_b64_image_by_norm_bbox(
     bbox_xyxy_norm: Sequence[float],
     image_format: str = "png",
 ) -> Tuple[Optional[str], Optional[Tuple[int, int]]]:
-    """Crop a page image by a normalized xyxy bbox, returning base64 PNG.
-
-    *page_image* may be a numpy array, a base64 string, or a ``page_image``
-    dict containing ``image_png``, ``image_array``, or ``image_b64``.
-
-    Returns
-    -------
-    cropped_image_b64 : str | None
-        Base64-encoded cropped image (PNG), or *None* on failure.
-    cropped_shape_hw : tuple[int, int] | None
-        (H, W) of the crop, or *None* on failure.
-    """
+    """Crop a page image by a normalized xyxy bbox, returning base64 PNG."""
     arr = _get_page_image_array(page_image)
     if arr is None:
         return None, None
 
     try:
-        x1n, y1n, x2n, y2n = [float(x) for x in bbox_xyxy_norm]
+        x1n, y1n, x2n, y2n = (float(x) for x in bbox_xyxy_norm)
     except Exception:
         return None, None
 
@@ -173,11 +191,9 @@ def _crop_all_from_page(
 ) -> List[Tuple[str, List[float], np.ndarray]]:
     """Crop all matching detections from *page_image* using pure numpy slicing.
 
-    *page_image* may be an HWC uint8 numpy array, or a ``page_image`` dict
-    containing ``image_png``, ``image_array``, or ``image_b64``.
-
     Returns a list of ``(label_name, bbox_xyxy_norm, crop_array)`` tuples.
-    Crops are HWC uint8 numpy arrays.
+    Uses ``np.ascontiguousarray`` to ensure each crop is contiguous without
+    an unconditional ``copy()``.
     """
     arr = _get_page_image_array(page_image)
     if arr is None:
@@ -200,7 +216,7 @@ def _crop_all_from_page(
             continue
 
         try:
-            x1n, y1n, x2n, y2n = [float(x) for x in bbox]
+            x1n, y1n, x2n, y2n = (float(x) for x in bbox)
         except Exception:
             continue
 
@@ -212,7 +228,7 @@ def _crop_all_from_page(
         if x2 <= x1 or y2 <= y1:
             continue
 
-        crop_array = arr[y1:y2, x1:x2].copy()
+        crop_array = np.ascontiguousarray(arr[y1:y2, x1:x2])
         ch, cw = crop_array.shape[:2]
         if cw <= 1 or ch <= 1:
             continue
@@ -222,9 +238,13 @@ def _crop_all_from_page(
     return results
 
 
+# ---------------------------------------------------------------------------
+# OCR result parsing
+# ---------------------------------------------------------------------------
+
+
 def _extract_remote_ocr_item(response_item: Any) -> Any:
     if isinstance(response_item, dict):
-        # NIM text_detections format: return full list (not v[0])
         td = response_item.get("text_detections")
         if isinstance(td, list) and td:
             return td
@@ -238,15 +258,9 @@ def _extract_remote_ocr_item(response_item: Any) -> Any:
 
 
 def _parse_ocr_result(preds: Any) -> List[Dict[str, Any]]:
-    """
-    Parse the output of ``NemotronOCRV1.invoke()`` into a flat list of
-    ``{"text": str, "sort_y": float, "sort_x": float}`` blocks.
+    """Parse ``NemotronOCRV1.invoke()`` output into a flat list of text blocks.
 
-    The model may return:
-    * ``dict`` with ``boxes`` / ``texts`` keys (packed form), or
-    * ``list[dict]`` with ``left``/``right``/``upper``/``lower``/``text`` keys
-      (Nemotron OCR normalized-coord form), or
-    * ``list[dict]`` with generic ``text`` + ``box``/``bbox`` keys.
+    Each block is ``{"text": str, "sort_y": float, "sort_x": float}``.
     """
     blocks: List[Dict[str, Any]] = []
 
@@ -261,11 +275,9 @@ def _parse_ocr_result(preds: Any) -> List[Dict[str, Any]]:
                 sort_y, sort_x = 0.0, 0.0
                 if isinstance(b, list):
                     if len(b) == 4 and all(isinstance(p, (list, tuple)) and len(p) == 2 for p in b):
-                        # quadrilateral [[x1,y1], ...]
                         sort_y = float(b[0][1])
                         sort_x = float(b[0][0])
                     elif len(b) == 4 and all(isinstance(v, (int, float)) for v in b):
-                        # xyxy [x1, y1, x2, y2]
                         sort_y = float(b[1])
                         sort_x = float(b[0])
                 blocks.append({"text": txt.strip(), "sort_y": sort_y, "sort_x": sort_x})
@@ -281,9 +293,6 @@ def _parse_ocr_result(preds: Any) -> List[Dict[str, Any]]:
             if not isinstance(item, dict):
                 continue
 
-            # NIM text_detections format:
-            # {"text_prediction": {"text": "...", "confidence": ...},
-            #  "bounding_box": {"points": [{"x": ..., "y": ...}, ...]}}
             tp = item.get("text_prediction")
             if isinstance(tp, dict):
                 txt0 = str(tp.get("text") or "").strip()
@@ -301,7 +310,6 @@ def _parse_ocr_result(preds: Any) -> List[Dict[str, Any]]:
                     blocks.append({"text": txt0, "sort_y": sort_y, "sort_x": sort_x})
                 continue
 
-            # Nemotron OCR normalized-coord form
             if all(k in item for k in ("left", "right", "upper", "lower")) and isinstance(item.get("text"), str):
                 txt0 = str(item.get("text") or "").strip()
                 if not txt0 or txt0 == "nan":
@@ -314,7 +322,6 @@ def _parse_ocr_result(preds: Any) -> List[Dict[str, Any]]:
                 blocks.append({"text": txt0, "sort_y": sort_y, "sort_x": sort_x})
                 continue
 
-            # Generic text + box fallback
             txt = item.get("text") or item.get("ocr_text") or item.get("generated_text") or item.get("output_text")
             if not isinstance(txt, str) or not txt.strip():
                 continue
@@ -365,12 +372,11 @@ def _blocks_to_pseudo_markdown(blocks: List[Dict[str, Any]]) -> str:
 
     df = pd.DataFrame(valid)
 
-    # Normalize y-coordinates to [0,1] for scale-invariant clustering.
     y_vals = df["sort_y"].values
     y_range = y_vals.max() - y_vals.min()
     if y_range > 0:
         y_norm = (y_vals - y_vals.min()) / y_range
-        eps = 0.03  # ~3% of bbox height ≈ one text line
+        eps = 0.03
     else:
         y_norm = y_vals
         eps = 0.1
@@ -378,7 +384,6 @@ def _blocks_to_pseudo_markdown(blocks: List[Dict[str, Any]]) -> str:
     dbscan = DBSCAN(eps=eps, min_samples=1)
     dbscan.fit(y_norm.reshape(-1, 1))
     df["cluster"] = dbscan.labels_
-
     df = df.sort_values(["cluster", "sort_x"])
 
     rows = []
@@ -387,8 +392,12 @@ def _blocks_to_pseudo_markdown(blocks: List[Dict[str, Any]]) -> str:
     return "\n".join(rows)
 
 
+# ---------------------------------------------------------------------------
+# Graphic-elements integration
+# ---------------------------------------------------------------------------
+
+
 def _bboxes_close(a: Sequence[float], b: Sequence[float], tol: float = 1e-4) -> bool:
-    """Check if two normalized bboxes are approximately equal."""
     if len(a) != 4 or len(b) != 4:
         return False
     return all(abs(float(a[i]) - float(b[i])) < tol for i in range(4))
@@ -398,12 +407,7 @@ def _find_ge_detections_for_bbox(
     row: Any,
     chart_bbox: Sequence[float],
 ) -> Optional[List[Dict[str, Any]]]:
-    """Find graphic element detections for a chart bbox.
-
-    Reads the ``graphic_elements_v1`` column from *row* and returns the
-    detections list for the region whose ``bbox_xyxy_norm`` matches
-    *chart_bbox*, or ``None`` if no match is found.
-    """
+    """Find graphic-element detections whose bbox matches *chart_bbox*."""
     ge_col = getattr(row, "graphic_elements_v1", None)
     if not isinstance(ge_col, dict):
         return None
@@ -422,6 +426,125 @@ def _find_ge_detections_for_bbox(
             if isinstance(dets, list) and dets:
                 return dets
     return None
+
+
+# ---------------------------------------------------------------------------
+# Result formatting
+# ---------------------------------------------------------------------------
+
+
+def _format_ocr_result(
+    label: str,
+    preds: Any,
+    crop_hw: Tuple[int, int],
+    bbox: List[float],
+    *,
+    use_graphic_elements: bool,
+    row: Any,
+) -> Optional[Dict[str, Any]]:
+    """Convert raw OCR predictions into a ``{"bbox_xyxy_norm", "text"}`` entry.
+
+    Handles the graphic-elements integration path for charts and the
+    pseudo-markdown path for tables.  Returns *None* when preds are empty.
+    """
+    if label == "chart" and use_graphic_elements:
+        ge_dets = _find_ge_detections_for_bbox(row, bbox)
+        if ge_dets:
+            text = join_graphic_elements_and_ocr_output(ge_dets, preds, crop_hw)
+            if text:
+                return {"bbox_xyxy_norm": bbox, "text": text}
+
+    blocks = _parse_ocr_result(preds)
+    if label == "table":
+        text = _blocks_to_pseudo_markdown(blocks) or _blocks_to_text(blocks)
+    else:
+        text = _blocks_to_text(blocks)
+
+    return {"bbox_xyxy_norm": bbox, "text": text}
+
+
+# ---------------------------------------------------------------------------
+# Cross-row crop collection
+# ---------------------------------------------------------------------------
+
+
+def _collect_crop_jobs(
+    batch_df: pd.DataFrame,
+    wanted_labels: set,
+) -> Tuple[List[_CropJob], List[Any]]:
+    """Collect all crop jobs from every row in *batch_df*.
+
+    Returns ``(jobs, rows)`` where *rows* is the list of row namedtuples
+    (needed for graphic-elements lookups during result scattering).
+    """
+    jobs: List[_CropJob] = []
+    rows: List[Any] = []
+
+    for row_idx, row in enumerate(batch_df.itertuples(index=False)):
+        rows.append(row)
+
+        pe = getattr(row, "page_elements_v3", None)
+        dets: List[Dict[str, Any]] = []
+        if isinstance(pe, dict):
+            dets = pe.get("detections") or []
+        if not isinstance(dets, list):
+            dets = []
+
+        page_image = getattr(row, "page_image", None)
+        crops = _crop_all_from_page(page_image, dets, wanted_labels)
+
+        for label_name, bbox, crop_array in crops:
+            jobs.append(
+                _CropJob(
+                    row_idx=row_idx,
+                    label=label_name,
+                    bbox=bbox,
+                    crop=crop_array,
+                    crop_hw=(crop_array.shape[0], crop_array.shape[1]),
+                )
+            )
+
+    return jobs, rows
+
+
+# ---------------------------------------------------------------------------
+# Local batch inference
+# ---------------------------------------------------------------------------
+
+
+def _invoke_local_batched(
+    jobs: List[_CropJob],
+    *,
+    model: Any,
+    merge_level: str,
+    batch_size: int,
+) -> List[Any]:
+    """Invoke the local model on *jobs* in batches, returning aligned predictions.
+
+    Tries the batch path first; falls back to per-item on shape mismatch.
+    """
+    all_preds: List[Any] = [None] * len(jobs)
+
+    for start in range(0, len(jobs), batch_size):
+        chunk = jobs[start : start + batch_size]
+        crops = [j.crop for j in chunk]
+
+        try:
+            batch_preds = model.invoke(crops, merge_level=merge_level)
+        except Exception:
+            batch_preds = None
+
+        if isinstance(batch_preds, list) and len(batch_preds) == len(chunk):
+            for i, pred in enumerate(batch_preds):
+                all_preds[start + i] = pred
+        else:
+            for i, j in enumerate(chunk):
+                try:
+                    all_preds[start + i] = model.invoke(j.crop, merge_level=merge_level)
+                except Exception:
+                    all_preds[start + i] = None
+
+    return all_preds
 
 
 # ---------------------------------------------------------------------------
@@ -444,35 +567,23 @@ def ocr_page_elements(
     remote_retry: RemoteRetryParams | None = None,
     **kwargs: Any,
 ) -> Any:
+    """Run Nemotron OCR v1 on cropped regions detected by PageElements v3.
+
+    **Local inference path** (the GPU hot-path):
+
+    1. Collect all crops from all rows in a single pass.
+    2. Group by merge-level (``"word"`` for tables, ``"paragraph"`` otherwise).
+    3. Feed maximally-packed batches to the model across all rows.
+    4. Scatter results back to per-row accumulators.
+
+    This cross-row batching keeps the GPU saturated even when individual
+    pages have few detections.
+    """
     retry = remote_retry or RemoteRetryParams(
         remote_max_pool_workers=int(kwargs.get("remote_max_pool_workers", 16)),
         remote_max_retries=int(kwargs.get("remote_max_retries", 10)),
         remote_max_429_retries=int(kwargs.get("remote_max_429_retries", 5)),
     )
-    """
-    Run Nemotron OCR v1 on cropped regions detected by PageElements v3.
-
-    For each row (page) in ``batch_df``:
-    1. Read ``page_elements_v3`` detections and ``page_image["image_array"]``.
-    2. For each detection whose ``label_name`` is a requested type, crop the
-       page image, invoke OCR, parse the result, and collect text.
-    3. Write per-type content lists and timing metadata to output columns.
-
-    Parameters
-    ----------
-    batch_df : pandas.DataFrame
-        Ray Data batch with ``page_elements_v3`` and ``page_image`` columns.
-    model : NemotronOCRV1
-        Initialised OCR model.
-    extract_tables, extract_charts, extract_infographics : bool
-        Which element types to OCR.
-
-    Returns
-    -------
-    pandas.DataFrame
-        Original columns plus ``table``, ``chart``,
-        ``infographic``, and ``ocr_v1``.
-    """
     if not isinstance(batch_df, pd.DataFrame):
         raise NotImplementedError("ocr_page_elements currently only supports pandas.DataFrame input.")
 
@@ -481,7 +592,6 @@ def ocr_page_elements(
     if not use_remote and model is None:
         raise ValueError("A local `model` is required when `invoke_url` is not provided.")
 
-    # Determine which labels we need to process.
     wanted_labels: set[str] = set()
     if extract_tables:
         wanted_labels.add("table")
@@ -490,22 +600,163 @@ def ocr_page_elements(
     if extract_infographics:
         wanted_labels.add("infographic")
 
-    # Per-row accumulators.
-    all_table: List[List[Dict[str, Any]]] = []
-    all_chart: List[List[Dict[str, Any]]] = []
-    all_infographic: List[List[Dict[str, Any]]] = []
-    all_ocr_meta: List[Dict[str, Any]] = []
+    n_rows = len(batch_df)
+    row_table: List[List[Dict[str, Any]]] = [[] for _ in range(n_rows)]
+    row_chart: List[List[Dict[str, Any]]] = [[] for _ in range(n_rows)]
+    row_infographic: List[List[Dict[str, Any]]] = [[] for _ in range(n_rows)]
+    row_error: List[Any] = [None] * n_rows
 
-    t0_total = time.perf_counter()
+    t0 = time.perf_counter()
 
-    for row in batch_df.itertuples(index=False):
-        table_items: List[Dict[str, Any]] = []
-        chart_items: List[Dict[str, Any]] = []
-        infographic_items: List[Dict[str, Any]] = []
-        row_error: Any = None
+    try:
+        if use_remote:
+            _run_remote(
+                batch_df,
+                wanted_labels=wanted_labels,
+                invoke_url=invoke_url,
+                api_key=api_key,
+                request_timeout_s=request_timeout_s,
+                use_graphic_elements=use_graphic_elements,
+                inference_batch_size=inference_batch_size,
+                retry=retry,
+                row_table=row_table,
+                row_chart=row_chart,
+                row_infographic=row_infographic,
+                row_error=row_error,
+                **kwargs,
+            )
+        else:
+            _run_local(
+                batch_df,
+                model=model,
+                wanted_labels=wanted_labels,
+                use_graphic_elements=use_graphic_elements,
+                inference_batch_size=inference_batch_size,
+                row_table=row_table,
+                row_chart=row_chart,
+                row_infographic=row_infographic,
+                row_error=row_error,
+            )
+    except BaseException as e:
+        print(f"Warning: OCR failed: {type(e).__name__}: {e}")
+        err = {
+            "stage": "ocr_page_elements",
+            "type": e.__class__.__name__,
+            "message": str(e),
+            "traceback": "".join(traceback.format_exception(type(e), e, e.__traceback__)),
+        }
+        for i in range(n_rows):
+            if row_error[i] is None:
+                row_error[i] = err
 
+    elapsed = time.perf_counter() - t0
+    timing = {"seconds": float(elapsed)}
+
+    all_ocr_meta = [{"timing": timing, "error": row_error[i]} for i in range(n_rows)]
+
+    out = batch_df.copy()
+    if extract_tables or "table" not in out.columns:
+        out["table"] = row_table
+    if extract_charts or "chart" not in out.columns:
+        out["chart"] = row_chart
+    if extract_infographics or "infographic" not in out.columns:
+        out["infographic"] = row_infographic
+    out["ocr_v1"] = all_ocr_meta
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Local inference path (GPU hot-path)
+# ---------------------------------------------------------------------------
+
+
+def _run_local(
+    batch_df: pd.DataFrame,
+    *,
+    model: Any,
+    wanted_labels: set,
+    use_graphic_elements: bool,
+    inference_batch_size: int,
+    row_table: List[List[Dict[str, Any]]],
+    row_chart: List[List[Dict[str, Any]]],
+    row_infographic: List[List[Dict[str, Any]]],
+    row_error: List[Any],
+) -> None:
+    """Cross-row batched local inference."""
+    if inference_batch_size is None or inference_batch_size < 1:
+        raise ValueError(f"inference_batch_size must be >= 1, got {inference_batch_size}")
+
+    batch_size = max(1, int(inference_batch_size))
+
+    # Phase 1: collect all crops from all rows.
+    jobs, rows = _collect_crop_jobs(batch_df, wanted_labels)
+    if not jobs:
+        return
+
+    # Phase 2: partition by merge-level.
+    word_jobs: List[Tuple[int, _CropJob]] = []
+    para_jobs: List[Tuple[int, _CropJob]] = []
+    for idx, job in enumerate(jobs):
+        if job.label == "table":
+            word_jobs.append((idx, job))
+        else:
+            para_jobs.append((idx, job))
+
+    # Phase 3: batch-invoke per merge-level.
+    all_preds: List[Any] = [None] * len(jobs)
+
+    for merge_level, indexed_jobs in (("word", word_jobs), ("paragraph", para_jobs)):
+        if not indexed_jobs:
+            continue
+        plain_jobs = [j for _, j in indexed_jobs]
+        preds = _invoke_local_batched(plain_jobs, model=model, merge_level=merge_level, batch_size=batch_size)
+        for (global_idx, _), pred in zip(indexed_jobs, preds):
+            all_preds[global_idx] = pred
+
+    # Phase 4: scatter results back to per-row accumulators.
+    for job, preds in zip(jobs, all_preds):
+        entry = _format_ocr_result(
+            job.label,
+            preds,
+            job.crop_hw,
+            job.bbox,
+            use_graphic_elements=use_graphic_elements,
+            row=rows[job.row_idx],
+        )
+        if entry is None:
+            continue
+        if job.label == "table":
+            row_table[job.row_idx].append(entry)
+        elif job.label == "chart":
+            row_chart[job.row_idx].append(entry)
+        elif job.label == "infographic":
+            row_infographic[job.row_idx].append(entry)
+
+
+# ---------------------------------------------------------------------------
+# Remote inference path
+# ---------------------------------------------------------------------------
+
+
+def _run_remote(
+    batch_df: pd.DataFrame,
+    *,
+    wanted_labels: set,
+    invoke_url: str,
+    api_key: Optional[str],
+    request_timeout_s: float,
+    use_graphic_elements: bool,
+    inference_batch_size: int,
+    retry: RemoteRetryParams,
+    row_table: List[List[Dict[str, Any]]],
+    row_chart: List[List[Dict[str, Any]]],
+    row_infographic: List[List[Dict[str, Any]]],
+    row_error: List[Any],
+    **kwargs: Any,
+) -> None:
+    """Per-row remote OCR inference (unchanged logic, extracted for clarity)."""
+    for row_idx, row in enumerate(batch_df.itertuples(index=False)):
         try:
-            # --- get page elements detections ---
             pe = getattr(row, "page_elements_v3", None)
             dets: List[Dict[str, Any]] = []
             if isinstance(pe, dict):
@@ -513,163 +764,61 @@ def ocr_page_elements(
             if not isinstance(dets, list):
                 dets = []
 
-            # --- get page image ---
             page_image = getattr(row, "page_image", None)
             page_arr = _get_page_image_array(page_image)
-
             if page_arr is None:
-                all_table.append(table_items)
-                all_chart.append(chart_items)
-                all_infographic.append(infographic_items)
-                all_ocr_meta.append({"timing": None, "error": None})
                 continue
 
-            # --- crop all matching detections using numpy slicing ---
             crops = _crop_all_from_page(page_arr, dets, wanted_labels)
+            if not crops:
+                continue
 
-            if use_remote:
-                crop_b64s: List[str] = []
-                crop_meta: List[Tuple[str, List[float], Tuple[int, int]]] = []
-                for label_name, bbox, crop_array in crops:
-                    crop_b64s.append(_np_rgb_to_b64_png(crop_array))
-                    crop_meta.append((label_name, bbox, (crop_array.shape[0], crop_array.shape[1])))
+            crop_b64s: List[str] = []
+            crop_meta: List[Tuple[str, List[float], Tuple[int, int]]] = []
+            for label_name, bbox, crop_array in crops:
+                crop_b64s.append(_np_rgb_to_b64_png(crop_array))
+                crop_meta.append((label_name, bbox, (crop_array.shape[0], crop_array.shape[1])))
 
-                if crop_b64s:
-                    response_items = invoke_image_inference_batches(
-                        invoke_url=invoke_url,
-                        image_b64_list=crop_b64s,
-                        api_key=api_key,
-                        timeout_s=float(request_timeout_s),
-                        max_batch_size=int(kwargs.get("inference_batch_size", 8)),
-                        max_pool_workers=int(retry.remote_max_pool_workers),
-                        max_retries=int(retry.remote_max_retries),
-                        max_429_retries=int(retry.remote_max_429_retries),
-                    )
-                    if len(response_items) != len(crop_meta):
-                        raise RuntimeError(f"Expected {len(crop_meta)} OCR responses, got {len(response_items)}")
+            response_items = invoke_image_inference_batches(
+                invoke_url=invoke_url,
+                image_b64_list=crop_b64s,
+                api_key=api_key,
+                timeout_s=float(request_timeout_s),
+                max_batch_size=int(kwargs.get("inference_batch_size", inference_batch_size)),
+                max_pool_workers=int(retry.remote_max_pool_workers),
+                max_retries=int(retry.remote_max_retries),
+                max_429_retries=int(retry.remote_max_429_retries),
+            )
+            if len(response_items) != len(crop_meta):
+                raise RuntimeError(f"Expected {len(crop_meta)} OCR responses, got {len(response_items)}")
 
-                    for i, (label_name, bbox, crop_hw) in enumerate(crop_meta):
-                        preds = _extract_remote_ocr_item(response_items[i])
-
-                        if label_name == "chart" and use_graphic_elements:
-                            ge_dets = _find_ge_detections_for_bbox(row, bbox)
-                            if ge_dets:
-                                text = join_graphic_elements_and_ocr_output(ge_dets, preds, crop_hw)
-                                if text:
-                                    chart_items.append({"bbox_xyxy_norm": bbox, "text": text})
-                                    continue
-
-                        blocks = _parse_ocr_result(preds)
-                        if label_name == "table":
-                            text = _blocks_to_pseudo_markdown(blocks) or _blocks_to_text(blocks)
-                        else:
-                            text = _blocks_to_text(blocks)
-                        entry = {"bbox_xyxy_norm": bbox, "text": text}
-                        if label_name == "table":
-                            table_items.append(entry)
-                        elif label_name == "chart":
-                            chart_items.append(entry)
-                        elif label_name == "infographic":
-                            infographic_items.append(entry)
-            else:
-                if inference_batch_size is None or inference_batch_size < 1:
-                    raise ValueError(
-                        f"inference_batch_size must be set and greater than 0. Value: {inference_batch_size}"
-                    )
-
-                local_batch_size = max(1, int(inference_batch_size))
-
-                # Tables require word-level merging; charts/infographics use paragraph-level.
-                # Group by merge level so each batched invoke uses one consistent setting.
-                local_jobs: Dict[str, List[Tuple[str, List[float], np.ndarray]]] = {"word": [], "paragraph": []}
-                for label_name, bbox, crop_array in crops:
-                    ml = "word" if label_name == "table" else "paragraph"
-                    local_jobs[ml].append((label_name, bbox, crop_array))
-
-                def _append_local_result(
-                    label_name: str, bbox: List[float], preds: Any, crop_hw: Tuple[int, int] = (0, 0)
-                ) -> None:
-                    if label_name == "chart" and use_graphic_elements:
-                        ge_dets = _find_ge_detections_for_bbox(row, bbox)
-                        if ge_dets:
-                            text = join_graphic_elements_and_ocr_output(ge_dets, preds, crop_hw)
-                            if text:
-                                chart_items.append({"bbox_xyxy_norm": bbox, "text": text})
-                                return
-                    blocks = _parse_ocr_result(preds)
-                    if label_name == "table":
-                        text = _blocks_to_pseudo_markdown(blocks)
-                        if not text:
-                            text = _blocks_to_text(blocks)
-                    else:
-                        text = _blocks_to_text(blocks)
-                    entry = {"bbox_xyxy_norm": bbox, "text": text}
-                    if label_name == "table":
-                        table_items.append(entry)
-                    elif label_name == "chart":
-                        chart_items.append(entry)
-                    elif label_name == "infographic":
-                        infographic_items.append(entry)
-
-                for ml, jobs in local_jobs.items():
-                    if not jobs:
-                        continue
-                    for start in range(0, len(jobs), local_batch_size):
-                        batch_jobs = jobs[start : start + local_batch_size]
-                        batch_crops = [crop_array for _, _, crop_array in batch_jobs]
-
-                        # Try batched invoke first; if backend does not return one response
-                        # per input, fall back to per-item to preserve correctness.
-                        try:
-                            batch_preds = model.invoke(batch_crops, merge_level=ml)
-                        except Exception:
-                            batch_preds = None
-
-                        if isinstance(batch_preds, list) and len(batch_preds) == len(batch_jobs):
-                            for (label_name, bbox, crop_array), preds in zip(batch_jobs, batch_preds):
-                                _append_local_result(
-                                    label_name, bbox, preds, crop_hw=(crop_array.shape[0], crop_array.shape[1])
-                                )
-                        else:
-                            for label_name, bbox, crop_array in batch_jobs:
-                                preds = model.invoke(crop_array, merge_level=ml)
-                                _append_local_result(
-                                    label_name, bbox, preds, crop_hw=(crop_array.shape[0], crop_array.shape[1])
-                                )
+            for i, (label_name, bbox, crop_hw) in enumerate(crop_meta):
+                preds = _extract_remote_ocr_item(response_items[i])
+                entry = _format_ocr_result(
+                    label_name,
+                    preds,
+                    crop_hw,
+                    bbox,
+                    use_graphic_elements=use_graphic_elements,
+                    row=row,
+                )
+                if entry is None:
+                    continue
+                if label_name == "table":
+                    row_table[row_idx].append(entry)
+                elif label_name == "chart":
+                    row_chart[row_idx].append(entry)
+                elif label_name == "infographic":
+                    row_infographic[row_idx].append(entry)
 
         except BaseException as e:
-            print(f"Warning: OCR failed: {type(e).__name__}: {e}")
-            row_error = {
+            print(f"Warning: OCR failed for row {row_idx}: {type(e).__name__}: {e}")
+            row_error[row_idx] = {
                 "stage": "ocr_page_elements",
                 "type": e.__class__.__name__,
                 "message": str(e),
                 "traceback": "".join(traceback.format_exception(type(e), e, e.__traceback__)),
             }
-
-        all_table.append(table_items)
-        all_chart.append(chart_items)
-        all_infographic.append(infographic_items)
-        all_ocr_meta.append({"timing": None, "error": row_error})
-
-    elapsed = time.perf_counter() - t0_total
-
-    # Fill timing into metadata.
-    for meta in all_ocr_meta:
-        meta["timing"] = {"seconds": float(elapsed)}
-
-    # TODO: Is this actually a necessary copy?
-    out = batch_df.copy()
-    # Only overwrite content columns that this call is responsible for.
-    # When extract_tables=False, preserve any existing `table` column
-    # (e.g. populated by an upstream table-structure+OCR stage).
-    if extract_tables or "table" not in out.columns:
-        out["table"] = all_table
-    if extract_charts or "chart" not in out.columns:
-        out["chart"] = all_chart
-    if extract_infographics or "infographic" not in out.columns:
-        out["infographic"] = all_infographic
-    out["ocr_v1"] = all_ocr_meta
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -687,8 +836,11 @@ def _drop_image_columns(df: pd.DataFrame) -> None:
 
 
 class OCRActor:
-    """
-    Ray-friendly callable that initializes Nemotron OCR v1 once per actor.
+    """Ray-friendly callable that initializes Nemotron OCR v1 once per actor.
+
+    The constructor casts model sub-components to fp16, warms up the CUDA
+    caching allocator, and enables ``expandable_segments`` so the hot path
+    triggers no new CUDA mallocs.
 
     Usage with Ray Data::
 
@@ -719,7 +871,6 @@ class OCRActor:
         if invoke_url and "invoke_url" not in self.ocr_kwargs:
             self.ocr_kwargs["invoke_url"] = invoke_url
 
-        # Normalize common constructor kwargs to expected runtime types/defaults.
         self.ocr_kwargs["extract_tables"] = bool(self.ocr_kwargs.get("extract_tables", False))
         self.ocr_kwargs["extract_charts"] = bool(self.ocr_kwargs.get("extract_charts", False))
         self.ocr_kwargs["extract_infographics"] = bool(self.ocr_kwargs.get("extract_infographics", False))
@@ -737,7 +888,8 @@ class OCRActor:
         else:
             from nemo_retriever.model.local import NemotronOCRV1
 
-            self._model = NemotronOCRV1()
+            max_bs = int(self.ocr_kwargs.get("inference_batch_size", 8))
+            self._model = NemotronOCRV1(max_batch_size=max_bs)
 
     def __call__(self, batch_df: Any, **override_kwargs: Any) -> Any:
         try:
@@ -752,7 +904,6 @@ class OCRActor:
                 _drop_image_columns(result)
             return result
         except BaseException as e:
-            # Never let the Ray UDF raise — return a DataFrame with error metadata.
             if isinstance(batch_df, pd.DataFrame):
                 out = batch_df.copy()
                 payload = _error_payload(stage="actor_call", exc=e)
@@ -813,12 +964,7 @@ def nemotron_parse_page_elements(
     remote_retry: RemoteRetryParams | None = None,
     **kwargs: Any,
 ) -> Any:
-    """
-    Run Nemotron Parse v1.2 on cropped page elements.
-
-    Emits OCR-compatible content columns (``table``, ``chart``, ``infographic``)
-    so this stage can replace the page-elements + OCR pair in pipeline wiring.
-    """
+    """Run Nemotron Parse v1.2 on cropped page elements."""
     retry = remote_retry or RemoteRetryParams(
         remote_max_pool_workers=int(kwargs.get("remote_max_pool_workers", 16)),
         remote_max_retries=int(kwargs.get("remote_max_retries", 10)),
@@ -851,7 +997,7 @@ def nemotron_parse_page_elements(
         table_items: List[Dict[str, Any]] = []
         chart_items: List[Dict[str, Any]] = []
         infographic_items: List[Dict[str, Any]] = []
-        row_error: Any = None
+        row_err: Any = None
 
         try:
             pe = getattr(row, "page_elements_v3", None)
@@ -931,7 +1077,7 @@ def nemotron_parse_page_elements(
 
         except BaseException as e:
             print(f"Warning: Nemotron Parse failed: {type(e).__name__}: {e}")
-            row_error = {
+            row_err = {
                 "stage": "nemotron_parse_page_elements",
                 "type": e.__class__.__name__,
                 "message": str(e),
@@ -941,7 +1087,7 @@ def nemotron_parse_page_elements(
         all_table.append(table_items)
         all_chart.append(chart_items)
         all_infographic.append(infographic_items)
-        all_meta.append({"timing": None, "error": row_error})
+        all_meta.append({"timing": None, "error": row_err})
 
     elapsed = time.perf_counter() - t0_total
     for meta in all_meta:
@@ -951,7 +1097,6 @@ def nemotron_parse_page_elements(
     out["table"] = all_table
     out["chart"] = all_chart
     out["infographic"] = all_infographic
-    # Aliases retained for experiments that read parse-specific columns.
     out["table_parse"] = all_table
     out["chart_parse"] = all_chart
     out["infographic_parse"] = all_infographic
@@ -960,12 +1105,7 @@ def nemotron_parse_page_elements(
 
 
 class NemotronParseActor:
-    """
-    Ray-friendly callable that initializes Nemotron Parse v1.2 once per actor.
-
-    This actor is a drop-in map-batches stage intended for future pipeline
-    wiring in batch/inprocess ingest modes.
-    """
+    """Ray-friendly callable that initializes Nemotron Parse v1.2 once per actor."""
 
     __slots__ = (
         "_model",
