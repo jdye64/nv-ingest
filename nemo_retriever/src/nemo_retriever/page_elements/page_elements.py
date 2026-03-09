@@ -463,21 +463,6 @@ def detect_page_elements_v3(
     if inference_batch_size <= 0:
         raise ValueError("inference_batch_size must be > 0")
 
-    # Working snippet for single image inference and debugging
-    # breakpoint()
-    # first_page = pages_df.iloc[0]
-    # b64 = first_page.get("page_image")["image_b64"]
-
-    # t, orig_shape = _decode_b64_image_to_np_array(b64)
-
-    # # Inference
-    # with torch.inference_mode():
-    #     x = model.preprocess(t)
-    #     preds = model(x, orig_shape)[0]
-
-    # print(preds)
-    # breakpoint()
-
     invoke_url = (invoke_url or kwargs.get("page_elements_invoke_url") or "").strip()
     use_remote = bool(invoke_url)
 
