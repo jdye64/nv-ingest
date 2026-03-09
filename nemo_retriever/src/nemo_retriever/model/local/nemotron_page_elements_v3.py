@@ -55,7 +55,7 @@ class NemotronPageElementsV3(HuggingFaceModel):
                 x = torch.from_numpy(np.ascontiguousarray(arr))
             # Keep 0-255 range: resize_pad pads with 114.0 (designed for 0-255),
             # and YoloXWrapper.forward() handles the 0-255 → model-input conversion.
-            x = x.to(dtype=torch.float32)
+            x = x.to(dtype=torch.float16)
         else:
             raise TypeError(f"Expected torch.Tensor or np.ndarray, got {type(tensor)!r}")
 
