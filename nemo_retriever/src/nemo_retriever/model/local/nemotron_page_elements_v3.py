@@ -103,22 +103,6 @@ class NemotronPageElementsV3(HuggingFaceModel):
             with torch.autocast(device_type="cuda"):
                 out = self._model(input_data, orig_shape)
                 return out
-        # preds0: Any
-        # if isinstance(out, (list, tuple)) and len(out) > 0:
-        #     preds0 = out[0]
-        # else:
-        #     preds0 = out
-
-        # # If we got per-image preds, return them as-is so pipeline code can
-        # # avoid slow per-image fallback.
-        # if isinstance(preds0, list):
-        #     # If caller passed a batch, keep list; if single-item batch, unwrap to dict for back-compat.
-        #     if isinstance(orig_shape, (list, tuple)) and len(orig_shape) == 1:
-        #         one = preds0[0] if preds0 else {}
-        #         return cast(Dict[str, torch.Tensor], one)
-        #     return cast(List[Dict[str, torch.Tensor]], preds0)
-
-        # return cast(Dict[str, torch.Tensor], preds0)
 
     def postprocess(self, preds: Union[Dict[str, torch.Tensor], Sequence[Dict[str, torch.Tensor]]]) -> Tuple[
         Union[torch.Tensor, List[torch.Tensor]],
