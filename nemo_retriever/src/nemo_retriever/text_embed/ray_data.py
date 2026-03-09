@@ -19,7 +19,7 @@ def embed_text_ray_data(
     *,
     model: Any,
     task_config: Optional[Dict[str, Any]] = None,
-    batch_size: int = 256,
+    batch_size: int = 64,
 ) -> "ray.data.Dataset":  # noqa: F821
     """
     Ray Data adapter for lightweight local text embedding.

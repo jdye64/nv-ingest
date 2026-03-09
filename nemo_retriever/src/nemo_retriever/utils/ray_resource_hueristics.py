@@ -19,9 +19,9 @@ EMBED_INITIAL_ACTORS = 1  # Hueristic initial num actors per GPU (initial_size o
 EMBED_MIN_ACTORS = 1  # Hueristic minimum num actors per GPU (min_size of ActorPoolStrategy). Ray tries to never let running actors fall below this number.  # noqa: E501
 EMBED_MAX_ACTORS = 2  # Hueristic baseline num actors per GPU (max_size of ActorPoolStrategy). Ray will grow to this size when resources are available.  # noqa: E501
 EMBED_GPUS_PER_ACTOR = (
-    0.5  # Hueristic baseline num GPUs per actor. Used to determine which GPU to schedule the actor on.
+    0.25  # Hueristic baseline num GPUs per actor. Used to determine which GPU to schedule the actor on.
 )
-EMBED_BATCH_SIZE = 256  # Ray batch size AND EMBEDDING inference batch size
+EMBED_BATCH_SIZE = 64  # Ray batch size AND EMBEDDING inference batch size
 
 # Nemotron Parse Actor constants (PER-GPU)
 NEMOTRON_PARSE_INITIAL_ACTORS = 1  # Hueristic initial num actors per GPU (initial_size of ActorPoolStrategy). Ray starts up this many actors on start-up.  # noqa: E501

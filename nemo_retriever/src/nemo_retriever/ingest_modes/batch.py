@@ -689,7 +689,7 @@ class BatchIngestor(Ingestor):
         batches.  Resource-tuning kwargs:
 
         - ``embed_workers``: ActorPool size (default 1).
-        - ``embed_batch_size``: Ray Data batch size (default 256).
+        - ``embed_batch_size``: Ray Data batch size (default 64).
         - ``embed_cpus_per_actor``: CPUs reserved per embedding actor (default 1).
         - ``device``, ``hf_cache_dir``, ``normalize``, ``max_length``:
           forwarded to ``LlamaNemotronEmbed1BV2Embedder``.

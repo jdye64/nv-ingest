@@ -127,7 +127,7 @@ class BatchTuningParams(_ParamsModel):
     page_elements_cpus_per_actor: float = 1
     ocr_cpus_per_actor: float = 1
     embed_workers: Optional[int] = None
-    embed_batch_size: int = 256
+    embed_batch_size: int = 64
     embed_cpus_per_actor: float = 1
     gpu_page_elements: Optional[float] = None
     gpu_ocr: Optional[float] = None

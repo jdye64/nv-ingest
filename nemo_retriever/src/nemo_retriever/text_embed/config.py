@@ -16,5 +16,5 @@ def load_text_embedding_schema_from_dict(cfg: Dict[str, Any]) -> TextEmbeddingSc
 
 @dataclass(frozen=True)
 class TextEmbeddingStageConfig:
-    batch_size: int = 256
+    batch_size: int = 64
     stage_name: str = "text_embedding"
