@@ -39,6 +39,31 @@ except Exception:  # pragma: no cover
     Image = None  # type: ignore[assignment]
 
 
+def _decode_page_image_to_array(page_image: Any) -> Optional["np.ndarray"]:
+    """Decode page_image dict to HWC uint8 RGB numpy array."""
+    if not isinstance(page_image, dict):
+        return None
+    arr = page_image.get("image_array")
+    if isinstance(arr, np.ndarray):
+        return arr
+    png = page_image.get("image_png")
+    if isinstance(png, (bytes, bytearray)) and png and Image is not None:
+        try:
+            with Image.open(io.BytesIO(png)) as im0:
+                return np.asarray(im0.convert("RGB"), dtype=np.uint8).copy()
+        except Exception:
+            pass
+    b64 = page_image.get("image_b64")
+    if isinstance(b64, str) and b64 and Image is not None:
+        try:
+            raw = base64.b64decode(b64)
+            with Image.open(io.BytesIO(raw)) as im0:
+                return np.asarray(im0.convert("RGB"), dtype=np.uint8).copy()
+        except Exception:
+            pass
+    return None
+
+
 def _np_rgb_to_b64_png(arr: "np.ndarray") -> str:
     """Encode an HWC uint8 RGB numpy array to a base64-encoded PNG string."""
     if Image is None:  # pragma: no cover
@@ -312,28 +337,41 @@ def detect_infographic_elements_v1(
     for _, row in batch_df.iterrows():
         try:
             page_image = row.get("page_image")
-            arr = None
-            if isinstance(page_image, dict):
-                arr = page_image.get("image_array")
-                if not isinstance(arr, np.ndarray):
-                    arr = None
+            if not isinstance(page_image, dict):
+                raise ValueError("No usable image data found in row.")
+            png = page_image.get("image_png")
+            if use_remote:
+                if isinstance(png, (bytes, bytearray)) and png:
+                    image_b64_list.append(base64.b64encode(png).decode("ascii"))
+                else:
+                    b64_val = page_image.get("image_b64")
+                    if isinstance(b64_val, str) and b64_val:
+                        image_b64_list.append(b64_val)
+                    else:
+                        raise ValueError("No usable image data found in row.")
+                tensors.append(None)
+                shapes.append(None)
+            else:
+                arr = None
+                if isinstance(png, (bytes, bytearray)) and png and Image is not None:
+                    with Image.open(io.BytesIO(png)) as im0:
+                        arr = np.array(im0.convert("RGB"), dtype=np.uint8)
+                if arr is None:
+                    arr_val = page_image.get("image_array")
+                    if isinstance(arr_val, np.ndarray):
+                        arr = arr_val
                 if arr is None:
                     b64_val = page_image.get("image_b64")
                     if isinstance(b64_val, str) and b64_val:
                         t_val, shape_val = _decode_b64_image_to_chw_tensor(b64_val)
                         tensors.append(t_val)
                         shapes.append(shape_val)
-                        image_b64_list.append(b64_val if use_remote else None)
+                        image_b64_list.append(None)
                         payloads.append({"detections": []})
                         continue
-            if arr is None:
-                raise ValueError("No usable image data found in row.")
-            h, w = int(arr.shape[0]), int(arr.shape[1])
-            if use_remote:
-                image_b64_list.append(_np_rgb_to_b64_png(arr))
-                tensors.append(None)
-                shapes.append(None)
-            else:
+                if arr is None:
+                    raise ValueError("No usable image data found in row.")
+                h, w = int(arr.shape[0]), int(arr.shape[1])
                 image_b64_list.append(None)
                 t = torch.from_numpy(arr).permute(2, 0, 1).contiguous().to(dtype=torch.float32) / 255.0
                 tensors.append(t)
@@ -547,16 +585,12 @@ def detect_infographic_elements_v1_from_page_elements_v3(
             continue
 
         page_image = row.get(page_image_column)
-        page_arr = None
-        if isinstance(page_image, dict):
-            page_arr = page_image.get("image_array")
-            if not isinstance(page_arr, np.ndarray):
-                page_arr = None
+        page_arr = _decode_page_image_to_array(page_image)
         if page_arr is None:
             page_payload["error"] = {
                 "stage": "crop",
                 "type": "ValueError",
-                "message": "page_image.image_array missing; cannot crop infographics for infographic_elements_v1.",
+                "message": "page_image missing or undecodable; cannot crop infographics for infographic_elements_v1.",
                 "traceback": "",
             }
             out_payloads.append(page_payload)

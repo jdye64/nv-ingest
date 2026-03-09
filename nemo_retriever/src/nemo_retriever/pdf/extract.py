@@ -26,20 +26,28 @@ try:
 except Exception:  # pragma: no cover
     np = None  # type: ignore[assignment]
 
+try:
+    from PIL import Image as _PILImage
+except Exception:  # pragma: no cover
+    _PILImage = None  # type: ignore[assignment]
 
-def _render_page_to_numpy(page: Any, *, dpi: int = 200) -> Dict[str, Any]:
-    """Render a PDF page directly to an HWC uint8 RGB NumPy array.
 
-    Uses pypdfium2's ``rev_byteorder`` and ``force_bitmap_format`` to obtain
-    an RGB array without any intermediate image-format encoding (no PNG, no
-    base64, no PIL).
+def _render_page_to_png_bytes(page: Any, *, dpi: int = 200) -> Dict[str, Any]:
+    """Render a PDF page to PNG-compressed bytes via pypdfium2.
+
+    Uses ``rev_byteorder`` + ``force_bitmap_format`` to get an RGB numpy
+    array directly from pdfium, then PIL-encodes it to PNG bytes.  The PNG
+    bytes are compact for Arrow/Ray serialization while avoiding base64
+    overhead in the DataFrame.
 
     Returns dict with:
-    - image_array: np.ndarray  (H, W, 3) uint8 RGB
+    - image_png: bytes   (raw PNG file bytes)
     - orig_shape_hw: tuple[int, int]
     """
     if np is None:  # pragma: no cover
         raise ImportError("numpy is required for page rendering.")
+    if _PILImage is None:  # pragma: no cover
+        raise ImportError("Pillow is required for PNG encoding.")
 
     scale = max(float(dpi) / 72.0, 0.01)
     bitmap = page.render(
@@ -49,15 +57,18 @@ def _render_page_to_numpy(page: Any, *, dpi: int = 200) -> Dict[str, Any]:
     )
     arr = bitmap.to_numpy().copy()
 
-    # Ensure HWC uint8 RGB.
     if arr.ndim == 2:
         arr = np.stack([arr, arr, arr], axis=-1)
     elif arr.ndim == 3 and arr.shape[2] == 4:
         arr = arr[:, :, :3]
 
     h, w = int(arr.shape[0]), int(arr.shape[1])
+
+    buf = BytesIO()
+    _PILImage.fromarray(arr.astype(np.uint8, copy=False), mode="RGB").save(buf, format="PNG")
+
     return {
-        "image_array": arr.astype(np.uint8, copy=False),
+        "image_png": buf.getvalue(),
         "orig_shape_hw": (h, w),
     }
 
@@ -222,7 +233,7 @@ def pdf_extraction(
                     )
                     render_info: Optional[Dict[str, Any]] = None
                     if want_any_raster:
-                        render_info = _render_page_to_numpy(page, dpi=dpi)
+                        render_info = _render_page_to_png_bytes(page, dpi=dpi)
 
                     page_record: Dict[str, Any] = {
                         "path": pdf_path,

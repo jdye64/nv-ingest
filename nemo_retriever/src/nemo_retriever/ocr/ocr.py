@@ -61,10 +61,11 @@ def _np_rgb_to_b64_png(arr: np.ndarray) -> str:
 def _get_page_image_array(page_image: Any) -> Optional[np.ndarray]:
     """Extract or lazily decode a HWC uint8 RGB array from *page_image*.
 
-    Accepts either:
-    * A ``dict`` with an ``image_array`` key (preferred, zero-copy).
-    * A ``dict`` with only ``image_b64`` (decodes via PIL as fallback).
+    Accepts (in priority order):
     * A raw ``np.ndarray`` directly.
+    * A ``dict`` with ``image_array`` (zero-copy).
+    * A ``dict`` with ``image_png`` (PIL-decode PNG bytes).
+    * A ``dict`` with ``image_b64`` (base64-decode + PIL, legacy fallback).
     """
     if isinstance(page_image, np.ndarray):
         return page_image
@@ -73,6 +74,13 @@ def _get_page_image_array(page_image: Any) -> Optional[np.ndarray]:
     arr = page_image.get("image_array")
     if isinstance(arr, np.ndarray):
         return arr
+    png = page_image.get("image_png")
+    if isinstance(png, (bytes, bytearray)) and png and Image is not None:
+        try:
+            with Image.open(io.BytesIO(png)) as im0:
+                return np.asarray(im0.convert("RGB"), dtype=np.uint8).copy()
+        except Exception:
+            pass
     b64 = page_image.get("image_b64")
     if isinstance(b64, str) and b64 and Image is not None:
         try:
@@ -87,15 +95,19 @@ def _get_page_image_array(page_image: Any) -> Optional[np.ndarray]:
 def _get_page_image_b64(page_image: Any) -> Optional[str]:
     """Extract or lazily encode the page image as a base64-encoded PNG string.
 
-    Accepts either:
-    * A ``dict`` with an ``image_b64`` key (zero-copy).
-    * A ``dict`` with only ``image_array`` (encodes via PIL).
+    Accepts (in priority order):
+    * A ``dict`` with ``image_b64`` (zero-copy).
+    * A ``dict`` with ``image_png`` (base64-encode raw PNG bytes -- fast).
+    * A ``dict`` with ``image_array`` (PIL-encode to PNG then base64).
     """
     if not isinstance(page_image, dict):
         return None
     b64 = page_image.get("image_b64")
     if isinstance(b64, str) and b64:
         return b64
+    png = page_image.get("image_png")
+    if isinstance(png, (bytes, bytearray)) and png:
+        return base64.b64encode(png).decode("ascii")
     arr = page_image.get("image_array")
     if isinstance(arr, np.ndarray):
         return _np_rgb_to_b64_png(arr)
@@ -117,7 +129,7 @@ def _crop_b64_image_by_norm_bbox(
     """Crop a page image by a normalized xyxy bbox, returning base64 PNG.
 
     *page_image* may be a numpy array, a base64 string, or a ``page_image``
-    dict containing either ``image_array`` or ``image_b64``.
+    dict containing ``image_png``, ``image_array``, or ``image_b64``.
 
     Returns
     -------
@@ -127,13 +139,6 @@ def _crop_b64_image_by_norm_bbox(
         (H, W) of the crop, or *None* on failure.
     """
     arr = _get_page_image_array(page_image)
-    if arr is None and isinstance(page_image, str) and page_image:
-        try:
-            raw_bytes = base64.b64decode(page_image)
-            with Image.open(io.BytesIO(raw_bytes)) as im0:
-                arr = np.asarray(im0.convert("RGB"), dtype=np.uint8).copy()
-        except Exception:
-            return None, None
     if arr is None:
         return None, None
 
@@ -168,20 +173,13 @@ def _crop_all_from_page(
 ) -> List[Tuple[str, List[float], np.ndarray]]:
     """Crop all matching detections from *page_image* using pure numpy slicing.
 
-    *page_image* may be an HWC uint8 numpy array, a base64 string, or a
-    ``page_image`` dict containing ``image_array`` or ``image_b64``.
+    *page_image* may be an HWC uint8 numpy array, or a ``page_image`` dict
+    containing ``image_png``, ``image_array``, or ``image_b64``.
 
     Returns a list of ``(label_name, bbox_xyxy_norm, crop_array)`` tuples.
     Crops are HWC uint8 numpy arrays.
     """
     arr = _get_page_image_array(page_image)
-    if arr is None and isinstance(page_image, str) and page_image:
-        try:
-            raw_bytes = base64.b64decode(page_image)
-            with Image.open(io.BytesIO(raw_bytes)) as im0:
-                arr = np.asarray(im0.convert("RGB"), dtype=np.uint8).copy()
-        except Exception:
-            return []
     if arr is None:
         return []
 
@@ -678,6 +676,15 @@ def ocr_page_elements(
 # Ray Actor
 # ---------------------------------------------------------------------------
 
+_IMAGE_COLUMNS = ("page_image", "images")
+
+
+def _drop_image_columns(df: pd.DataFrame) -> None:
+    """Drop heavy image payload columns in-place to shrink downstream Arrow blocks."""
+    for col in _IMAGE_COLUMNS:
+        if col in df.columns:
+            df.drop(columns=col, inplace=True)
+
 
 class OCRActor:
     """
@@ -697,13 +704,15 @@ class OCRActor:
         )
     """
 
-    __slots__ = ("ocr_kwargs", "_model", "_remote_retry")
+    __slots__ = ("ocr_kwargs", "_model", "_remote_retry", "_drop_page_image")
 
     def __init__(self, **ocr_kwargs: Any) -> None:
         import warnings
 
         if Image is not None:
             warnings.filterwarnings("ignore", category=Image.DecompressionBombWarning)
+
+        self._drop_page_image = bool(ocr_kwargs.pop("drop_page_image", True))
 
         self.ocr_kwargs = dict(ocr_kwargs)
         invoke_url = str(self.ocr_kwargs.get("ocr_invoke_url") or self.ocr_kwargs.get("invoke_url") or "").strip()
@@ -732,13 +741,16 @@ class OCRActor:
 
     def __call__(self, batch_df: Any, **override_kwargs: Any) -> Any:
         try:
-            return ocr_page_elements(
+            result = ocr_page_elements(
                 batch_df,
                 model=self._model,
                 remote_retry=self._remote_retry,
                 **self.ocr_kwargs,
                 **override_kwargs,
             )
+            if self._drop_page_image and isinstance(result, pd.DataFrame):
+                _drop_image_columns(result)
+            return result
         except BaseException as e:
             # Never let the Ray UDF raise — return a DataFrame with error metadata.
             if isinstance(batch_df, pd.DataFrame):
@@ -965,6 +977,7 @@ class NemotronParseActor:
         "_request_timeout_s",
         "_task_prompt",
         "_remote_retry",
+        "_drop_page_image",
     )
 
     def __init__(
@@ -981,7 +994,9 @@ class NemotronParseActor:
         remote_max_pool_workers: int = 16,
         remote_max_retries: int = 10,
         remote_max_429_retries: int = 5,
+        drop_page_image: bool = True,
     ) -> None:
+        self._drop_page_image = bool(drop_page_image)
         self._invoke_url = (nemotron_parse_invoke_url or invoke_url or "").strip()
         self._api_key = api_key
         self._request_timeout_s = float(request_timeout_s)
@@ -1003,7 +1018,7 @@ class NemotronParseActor:
 
     def __call__(self, batch_df: Any, **override_kwargs: Any) -> Any:
         try:
-            return nemotron_parse_page_elements(
+            result = nemotron_parse_page_elements(
                 batch_df,
                 model=self._model,
                 invoke_url=self._invoke_url,
@@ -1016,6 +1031,9 @@ class NemotronParseActor:
                 remote_retry=self._remote_retry,
                 **override_kwargs,
             )
+            if self._drop_page_image and isinstance(result, pd.DataFrame):
+                _drop_image_columns(result)
+            return result
         except BaseException as e:
             if isinstance(batch_df, pd.DataFrame):
                 out = batch_df.copy()

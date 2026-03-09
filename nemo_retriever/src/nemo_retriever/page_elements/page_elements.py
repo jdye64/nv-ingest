@@ -45,16 +45,6 @@ from nemo_retriever.nim.nim import invoke_page_elements_batches
 TensorOrArray = Union["torch.Tensor", "np.ndarray"]
 
 
-def _numpy_to_b64_png(arr: "np.ndarray") -> str:
-    """Encode an HWC uint8 RGB numpy array to a base64-encoded PNG string."""
-    if Image is None:  # pragma: no cover
-        raise ImportError("Pillow is required for image encoding.")
-    img = Image.fromarray(arr.astype(np.uint8, copy=False), mode="RGB")
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return base64.b64encode(buf.getvalue()).decode("ascii")
-
-
 def _ensure_chw_float_tensor(x: TensorOrArray) -> "torch.Tensor":
     """
     Normalize a single image into a CHW float32 torch.Tensor suitable for batching.
@@ -495,22 +485,35 @@ def detect_page_elements_v3(
     for _, row in pages_df.iterrows():
         try:
             page_image = row.get("page_image")
-            arr = None
-            if isinstance(page_image, dict):
-                arr = page_image.get("image_array")
-                if not isinstance(arr, np.ndarray):
-                    arr = None
+            if not isinstance(page_image, dict):
+                raise ValueError("No usable image data found in row.")
+            png = page_image.get("image_png")
+            if use_remote:
+                if isinstance(png, (bytes, bytearray)) and png:
+                    row_b64.append(base64.b64encode(png).decode("ascii"))
+                else:
+                    b64_val = page_image.get("image_b64")
+                    if isinstance(b64_val, str) and b64_val:
+                        row_b64.append(b64_val)
+                    else:
+                        raise ValueError("No usable image data found in row.")
+                row_tensors.append(None)
+                row_shapes.append(None)
+            else:
+                arr = None
+                if isinstance(png, (bytes, bytearray)) and png and Image is not None:
+                    with Image.open(io.BytesIO(png)) as im0:
+                        arr = np.array(im0.convert("RGB"))
+                if arr is None:
+                    arr_val = page_image.get("image_array")
+                    if isinstance(arr_val, np.ndarray):
+                        arr = arr_val
                 if arr is None:
                     b64_val = page_image.get("image_b64")
                     if isinstance(b64_val, str) and b64_val:
                         arr, _ = _decode_b64_image_to_np_array(b64_val)
-            if arr is None:
-                raise ValueError("No usable image data found in row.")
-            if use_remote:
-                row_b64.append(_numpy_to_b64_png(arr))
-                row_tensors.append(None)
-                row_shapes.append(None)
-            else:
+                if arr is None:
+                    raise ValueError("No usable image data found in row.")
                 row_b64.append(None)
                 h, w = int(arr.shape[0]), int(arr.shape[1])
                 row_tensors.append(arr)

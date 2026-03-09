@@ -357,6 +357,7 @@ def graphic_elements_ocr_page_elements(
         _blocks_to_text,
         _crop_all_from_page,
         _extract_remote_ocr_item,
+        _get_page_image_array,
         _np_rgb_to_b64_png,
         _parse_ocr_result,
     )
@@ -405,11 +406,7 @@ def graphic_elements_ocr_page_elements(
 
             # --- get page image ---
             page_image = getattr(row, "page_image", None)
-            page_arr = None
-            if isinstance(page_image, dict):
-                page_arr = page_image.get("image_array")
-                if not isinstance(page_arr, np.ndarray):
-                    page_arr = None
+            page_arr = _get_page_image_array(page_image)
             if page_arr is None:
                 all_chart.append(chart_items)
                 all_meta.append({"timing": None, "error": None})
