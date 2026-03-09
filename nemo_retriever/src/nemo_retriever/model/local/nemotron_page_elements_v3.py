@@ -103,7 +103,7 @@ class NemotronPageElementsV3(HuggingFaceModel):
         batch = torch.full(
             (len(images), 3, target_h, target_w),
             114.0,
-            dtype=torch.float32,
+            dtype=torch.float16,
             device=device,
         )
 
@@ -118,7 +118,7 @@ class NemotronPageElementsV3(HuggingFaceModel):
             else:
                 t = torch.from_numpy(np.ascontiguousarray(arr))
 
-            t = t.to(dtype=torch.float32, device=device)
+            t = t.to(dtype=torch.float16, device=device)
             _, h, w = t.shape
             scale = min(target_h / h, target_w / w)
             nh = int(h * scale)
