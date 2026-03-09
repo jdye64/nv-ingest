@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Sequence, Tuple, Union, cast  # noqa: F401
 
 from torch import nn
 import torch
+import torch.nn.functional as F
 import numpy as np
 from nemo_retriever.utils.hf_cache import configure_global_hf_cache_base
 from ..model import HuggingFaceModel, RunMode
@@ -86,6 +87,57 @@ class NemotronPageElementsV3(HuggingFaceModel):
             return y.unsqueeze(0)
 
         raise ValueError(f"Expected CHW or BCHW tensor, got shape {tuple(x.shape)}")
+
+    def preprocess_batch(self, images: List[np.ndarray]) -> torch.Tensor:
+        """Preprocess a list of HWC numpy images into a single BCHW GPU tensor.
+
+        All work (resize, pad, stack) happens on the model's device so the
+        returned tensor is ready for ``invoke()`` with no additional copies.
+        """
+        if self._model is None:
+            raise RuntimeError("Local page_elements_v3 model was not initialized.")
+
+        device = self._model.device
+        target_h, target_w = self.input_shape
+
+        batch = torch.full(
+            (len(images), 3, target_h, target_w),
+            114.0,
+            dtype=torch.float32,
+            device=device,
+        )
+
+        for i, arr in enumerate(images):
+            if arr.ndim == 4 and int(arr.shape[0]) == 1:
+                arr = arr[0]
+            if arr.ndim != 3:
+                raise ValueError(f"Expected 3D image array, got shape {arr.shape}")
+
+            if int(arr.shape[-1]) == 3 and int(arr.shape[0]) != 3:
+                t = torch.from_numpy(np.ascontiguousarray(arr)).permute(2, 0, 1)
+            else:
+                t = torch.from_numpy(np.ascontiguousarray(arr))
+
+            t = t.to(dtype=torch.float32, device=device)
+            _, h, w = t.shape
+            scale = min(target_h / h, target_w / w)
+            nh = int(h * scale)
+            nw = int(w * scale)
+
+            resized = (
+                F.interpolate(
+                    t.unsqueeze(0),
+                    size=(nh, nw),
+                    mode="bilinear",
+                    align_corners=False,
+                )
+                .squeeze(0)
+                .clamp_(0, 255)
+            )
+
+            batch[i, :, :nh, :nw] = resized
+
+        return batch
 
     def __call__(
         self, input_data: torch.Tensor, orig_shape: Union[Tuple[int, int], Sequence[Tuple[int, int]]]

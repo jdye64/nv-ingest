@@ -76,17 +76,6 @@ def _load_images(
     return images
 
 
-def _preprocess_single(
-    model: "NemotronPageElementsV3",  # noqa: F821 – imported at runtime
-    arr: np.ndarray,
-) -> torch.Tensor:
-    """Preprocess a single HWC ndarray into a CHW float tensor via the model."""
-    pre = model.preprocess(arr)
-    if pre.ndim == 4 and pre.shape[0] == 1:
-        return pre[0]
-    return pre
-
-
 def _run_batch_size(
     model: "NemotronPageElementsV3",  # noqa: F821
     images: List[Tuple[np.ndarray, Tuple[int, int]]],
@@ -114,13 +103,13 @@ def _run_batch_size(
         end = min(start + batch_size, n_images)
         chunk = images[start:end]
 
+        arrays = [arr for arr, _ in chunk]
+        orig_shapes = [shape for _, shape in chunk]
+
         t0 = time.perf_counter()
-        tensors: List[torch.Tensor] = []
-        orig_shapes: List[Tuple[int, int]] = []
-        for arr, shape in chunk:
-            tensors.append(_preprocess_single(model, arr))
-            orig_shapes.append(shape)
-        batch_tensor = torch.stack(tensors, dim=0)
+        batch_tensor = model.preprocess_batch(arrays)
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
         pre_times.append(time.perf_counter() - t0)
 
         t0 = time.perf_counter()
