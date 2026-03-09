@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import base64
 import io
@@ -42,49 +42,9 @@ except ImportError:
 from nemo_retriever.nim.nim import invoke_page_elements_batches
 
 
-TensorOrArray = Union["torch.Tensor", "np.ndarray"]
-
-
-def _ensure_chw_float_tensor(x: TensorOrArray) -> "torch.Tensor":
-    """
-    Normalize a single image into a CHW float32 torch.Tensor suitable for batching.
-
-    Accepts either:
-    - torch.Tensor in CHW or 1xCHW (or CHW-like) formats
-    - np.ndarray in CHW or HWC (RGB) formats (optionally with leading batch dim=1)
-    """
-    if torch is None or np is None:  # pragma: no cover
-        raise ImportError("page element detection requires torch and numpy.")
-
-    if isinstance(x, torch.Tensor):
-        t = x
-    elif isinstance(x, np.ndarray):
-        arr = x
-        # Squeeze trivial batch dimension if present.
-        if arr.ndim == 4 and int(arr.shape[0]) == 1:
-            arr = arr[0]
-        if arr.ndim != 3:
-            raise ValueError(f"Expected 3D image array, got shape {getattr(arr, 'shape', None)}")
-
-        # Heuristic: HWC (RGB) -> CHW; otherwise assume already CHW-like.
-        if int(arr.shape[-1]) == 3 and int(arr.shape[0]) != 3:
-            t = torch.from_numpy(np.ascontiguousarray(arr)).permute(2, 0, 1)
-        else:
-            t = torch.from_numpy(np.ascontiguousarray(arr))
-    else:
-        raise TypeError(f"Expected torch.Tensor or np.ndarray, got {type(x)!r}")
-
-    # Squeeze trivial batch dimension if present.
-    if t.ndim == 4 and int(t.shape[0]) == 1:
-        t = t[0]
-    if t.ndim != 3:
-        raise ValueError(f"Expected CHW tensor, got shape {tuple(t.shape)}")
-
-    # Keep 0-255 range: resize_pad pads with 114.0 (designed for 0-255),
-    # and YoloXWrapper.forward() handles the 0-255 → model-input conversion.
-    t = t.to(dtype=torch.float32)
-
-    return t.contiguous()
+# ---------------------------------------------------------------------------
+# Lightweight helpers
+# ---------------------------------------------------------------------------
 
 
 def _error_payload(*, stage: str, exc: BaseException) -> Dict[str, Any]:
@@ -99,24 +59,9 @@ def _error_payload(*, stage: str, exc: BaseException) -> Dict[str, Any]:
     }
 
 
-def _decode_b64_image_to_chw_tensor(image_b64: str) -> Tuple["torch.Tensor", Tuple[int, int]]:
-    if torch is None or Image is None or np is None:  # pragma: no cover
-        raise ImportError("page element detection requires torch, pillow, and numpy.")
-
-    raw = base64.b64decode(image_b64)
-    with Image.open(io.BytesIO(raw)) as im0:
-        im = im0.convert("RGB")
-        w, h = im.size
-        arr = np.array(im)  # (H,W,3)
-
-    t = torch.from_numpy(arr).permute(2, 0, 1).contiguous()  # (3,H,W) uint8
-    t = t.to(dtype=torch.float32) / 255.0
-    return t, (int(h), int(w))
-
-
-def _decode_b64_image_to_np_array(image_b64: str) -> Tuple["np.array", Tuple[int, int]]:
-    if torch is None or Image is None or np is None:  # pragma: no cover
-        raise ImportError("page element detection requires torch, pillow, and numpy.")
+def _decode_b64_image_to_np_array(image_b64: str) -> Tuple["np.ndarray", Tuple[int, int]]:
+    if Image is None or np is None:  # pragma: no cover
+        raise ImportError("page element detection requires pillow and numpy.")
 
     raw = base64.b64decode(image_b64)
     with Image.open(io.BytesIO(raw)) as im0:
@@ -128,14 +73,7 @@ def _decode_b64_image_to_np_array(image_b64: str) -> Tuple["np.array", Tuple[int
 
 
 def _labels_from_model(_model: Any) -> List[str]:
-    return [
-        "table",
-        "chart",
-        "title",
-        "infographic",
-        "text",
-        "header_footer",
-    ]
+    return ["table", "chart", "title", "infographic", "text", "header_footer"]
 
 
 def _counts_by_label(detections: Sequence[Dict[str, Any]]) -> Dict[str, int]:
@@ -151,6 +89,11 @@ def _counts_by_label(detections: Sequence[Dict[str, Any]]) -> Dict[str, int]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# Postprocessing: model tensors -> list-of-dicts
+# ---------------------------------------------------------------------------
+
+
 def _postprocess_to_per_image_detections(
     *,
     boxes: Any,
@@ -159,38 +102,35 @@ def _postprocess_to_per_image_detections(
     batch_size: int,
     label_names: List[str],
 ) -> List[List[Dict[str, Any]]]:
-    """
-    Convert model postprocess outputs into a list of per-image detection dicts.
+    """Convert model postprocess outputs into per-image detection dicts.
 
-    Expected detection format matches the "stage2 page_elements_v3 json" used by `nemo_retriever.utils.image.render`.
+    Uses bulk ``.tolist()`` on each tensor to avoid per-element Python overhead.
     """
     if torch is None:  # pragma: no cover
         raise ImportError("torch is required for page element detection postprocess.")
 
-    # Normalize to per-image tensors.
     def _as_list(x: Any) -> List[Any]:
-        if isinstance(x, list):
-            return x
-        return [x]
+        return x if isinstance(x, list) else [x]
 
-    # If tensors include a batch dimension, split them.
     if isinstance(boxes, torch.Tensor) and boxes.ndim == 3:
-        boxes_list = [boxes[i] for i in range(int(boxes.shape[0]))]
+        boxes_list = [boxes[i] for i in range(boxes.shape[0])]
     else:
         boxes_list = _as_list(boxes)
 
     if isinstance(labels, torch.Tensor) and labels.ndim == 2:
-        labels_list = [labels[i] for i in range(int(labels.shape[0]))]
+        labels_list = [labels[i] for i in range(labels.shape[0])]
     else:
         labels_list = _as_list(labels)
 
     if isinstance(scores, torch.Tensor) and scores.ndim == 2:
-        scores_list = [scores[i] for i in range(int(scores.shape[0]))]
+        scores_list = [scores[i] for i in range(scores.shape[0])]
     else:
         scores_list = _as_list(scores)
 
     n = min(len(boxes_list), len(labels_list), len(scores_list), int(batch_size))
+    num_labels = len(label_names)
     out: List[List[Dict[str, Any]]] = []
+
     for i in range(n):
         bi = boxes_list[i]
         li = labels_list[i]
@@ -200,62 +140,42 @@ def _postprocess_to_per_image_detections(
             out.append([])
             continue
 
-        # Move to CPU for safe conversion.
         bi = bi.detach().cpu()
         li = li.detach().cpu()
         si = si.detach().cpu()
 
-        # Common shapes:
-        # - boxes: (N,4)
-        # - labels: (N,)
-        # - scores: (N,)
         if bi.ndim != 2 or bi.shape[-1] != 4:
             out.append([])
             continue
 
-        n_det = int(bi.shape[0])
+        # Bulk convert to Python lists -- single C++ boundary crossing each.
+        boxes_py = bi.tolist()
+        labels_py = li.tolist()
+        scores_py = si.tolist()
+
         dets: List[Dict[str, Any]] = []
-        for j in range(n_det):
-            try:
-                x1, y1, x2, y2 = [float(x) for x in bi[j].tolist()]
-            except Exception:
-                continue
-
-            label_i: Optional[int]
-            try:
-                label_i = int(li[j].item())
-            except Exception:
-                label_i = None
-
-            score_f: Optional[float]
-            try:
-                score_f = float(si[j].item())
-            except Exception:
-                score_f = None
-
-            label_name = None
-            if label_i is not None and 0 <= label_i < len(label_names):
-                label_name = label_names[label_i]
-            if not label_name:
-                label_name = f"label_{label_i}" if label_i is not None else "unknown"
-
+        for bbox, label_val, score_val in zip(boxes_py, labels_py, scores_py):
+            label_i = int(label_val)
+            label_name = label_names[label_i] if 0 <= label_i < num_labels else f"label_{label_i}"
             dets.append(
                 {
-                    "bbox_xyxy_norm": [x1, y1, x2, y2],
+                    "bbox_xyxy_norm": bbox,
                     "label": label_i,
-                    "label_name": str(label_name),
-                    "score": score_f,
+                    "label_name": label_name,
+                    "score": float(score_val),
                 }
             )
         out.append(dets)
 
-    # If model returned fewer splits than requested, pad.
     while len(out) < int(batch_size):
         out.append([])
     return out[: int(batch_size)]
 
 
-# -- Label mapping between retriever ("text") and API ("paragraph") --
+# ---------------------------------------------------------------------------
+# Label mapping between retriever ("text") and API ("paragraph")
+# ---------------------------------------------------------------------------
+
 _RETRIEVER_LABEL_NAMES = ["table", "chart", "title", "infographic", "text", "header_footer"]
 _RETRIEVER_TO_API = {"text": "paragraph"}
 _API_TO_RETRIEVER = {"paragraph": "text"}
@@ -264,17 +184,13 @@ _API_TO_RETRIEVER = {"paragraph": "text"}
 def _detections_to_annotation_dict(
     dets: List[Dict[str, Any]],
 ) -> Dict[str, List[List[float]]]:
-    """Convert a list of detection dicts into the annotation_dict format expected by
+    """Convert detection dicts to the annotation_dict format expected by
     ``postprocess_page_elements_v3``.
-
-    Each detection dict has keys ``bbox_xyxy_norm``, ``label_name``, ``score``.
-    The annotation_dict maps label names (using API naming, i.e. "paragraph") to
-    ``[[x0, y0, x1, y1, confidence], ...]``.
     """
     ann: Dict[str, List[List[float]]] = {}
     for d in dets:
         name = _RETRIEVER_TO_API.get(d["label_name"], d["label_name"])
-        bbox = list(d["bbox_xyxy_norm"])  # [x0, y0, x1, y1]
+        bbox = list(d["bbox_xyxy_norm"])
         bbox.append(float(d["score"]) if d["score"] is not None else 0.0)
         ann.setdefault(name, []).append(bbox)
     return ann
@@ -283,11 +199,7 @@ def _detections_to_annotation_dict(
 def _annotation_dict_to_detections(
     ann_dict: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
-    """Convert an annotation_dict back into a list of detection dicts.
-
-    Maps API label names back to retriever names (e.g. "paragraph" -> "text")
-    and assigns integer label IDs from the retriever label order.
-    """
+    """Convert an annotation_dict back into detection dicts."""
     dets: List[Dict[str, Any]] = []
     for api_name, entries in ann_dict.items():
         retriever_name = _API_TO_RETRIEVER.get(api_name, api_name)
@@ -296,7 +208,6 @@ def _annotation_dict_to_detections(
         except ValueError:
             label_id = None
         for entry in entries:
-            # entry is [x0, y0, x1, y1, confidence]
             dets.append(
                 {
                     "bbox_xyxy_norm": list(entry[:4]),
@@ -311,10 +222,7 @@ def _annotation_dict_to_detections(
 def _bounding_boxes_to_detections(
     bb_dict: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
-    """Convert a bounding_boxes dict (NIM API format) to detection dicts.
-
-    Input format: {"label": [{"x_min": ..., "y_min": ..., "x_max": ..., "y_max": ..., "confidence": ...}, ...]}
-    """
+    """Convert a bounding_boxes dict (NIM API format) to detection dicts."""
     dets: List[Dict[str, Any]] = []
     for api_name, entries in bb_dict.items():
         retriever_name = _API_TO_RETRIEVER.get(api_name, api_name)
@@ -344,8 +252,6 @@ def _apply_page_elements_v3_postprocess(
 ) -> List[Dict[str, Any]]:
     """Apply ``postprocess_page_elements_v3`` (box fusion, title matching,
     expansion, overlap removal) to a single image's detection list.
-
-    Returns the original detections unchanged if the API function is unavailable.
     """
     if postprocess_page_elements_v3 is None or not dets:
         return dets
@@ -358,13 +264,17 @@ def _apply_page_elements_v3_postprocess(
         return dets
 
 
+# ---------------------------------------------------------------------------
+# Remote response parsing (unchanged)
+# ---------------------------------------------------------------------------
+
+
 def _remote_response_to_detections(
     *,
     response_json: Dict[str, Any],
     label_names: List[str],
     thresholds_per_class: Sequence[float],
 ) -> List[Dict[str, Any]]:
-    # Try direct model-pred style payload first (or common wrappers around it).
     candidates: List[Any] = [response_json]
     data_list = response_json.get("data")
     if isinstance(data_list, list) and data_list:
@@ -392,8 +302,6 @@ def _remote_response_to_detections(
         except Exception:
             pass
 
-    # NIM bounding_boxes format:
-    # {"index": 0, "bounding_boxes": {"title": [{"x_min": ..., "y_min": ..., ...}]}}
     for cand in candidates:
         if not isinstance(cand, dict):
             continue
@@ -405,8 +313,6 @@ def _remote_response_to_detections(
             except Exception:
                 pass
 
-    # Fall back to API-style annotation dict:
-    # {"table": [[x0,y0,x1,y1,conf], ...], "paragraph": [...]}
     for cand in candidates:
         if not isinstance(cand, dict) or not cand:
             continue
@@ -418,6 +324,96 @@ def _remote_response_to_detections(
                 pass
 
     raise RuntimeError(f"Unsupported remote response format (keys={list(response_json.keys())!r})")
+
+
+# ---------------------------------------------------------------------------
+# Row-level image decoding (CPU, unavoidable)
+# ---------------------------------------------------------------------------
+
+
+def _decode_row_image(row: Any) -> Tuple["np.ndarray", Tuple[int, int]]:
+    """Extract an HWC numpy array and (h, w) shape from a DataFrame row.
+
+    Tries, in order: raw PNG bytes, pre-decoded numpy array, base64 string.
+    """
+    page_image = row.get("page_image")
+    if not isinstance(page_image, dict):
+        raise ValueError("No usable image data found in row.")
+
+    png = page_image.get("image_png")
+    if isinstance(png, (bytes, bytearray)) and png and Image is not None:
+        with Image.open(io.BytesIO(png)) as im0:
+            arr = np.array(im0.convert("RGB"))
+        return arr, (int(arr.shape[0]), int(arr.shape[1]))
+
+    arr_val = page_image.get("image_array")
+    if isinstance(arr_val, np.ndarray):
+        return arr_val, (int(arr_val.shape[0]), int(arr_val.shape[1]))
+
+    b64_val = page_image.get("image_b64")
+    if isinstance(b64_val, str) and b64_val:
+        return _decode_b64_image_to_np_array(b64_val)
+
+    raise ValueError("No usable image data found in row.")
+
+
+def _decode_row_b64(row: Any) -> str:
+    """Extract a base64-encoded image string from a DataFrame row."""
+    page_image = row.get("page_image")
+    if not isinstance(page_image, dict):
+        raise ValueError("No usable image data found in row.")
+
+    png = page_image.get("image_png")
+    if isinstance(png, (bytes, bytearray)) and png:
+        return base64.b64encode(png).decode("ascii")
+
+    b64_val = page_image.get("image_b64")
+    if isinstance(b64_val, str) and b64_val:
+        return b64_val
+
+    raise ValueError("No usable image data found in row.")
+
+
+# ---------------------------------------------------------------------------
+# Local inference for one chunk (GPU hot path)
+# ---------------------------------------------------------------------------
+
+
+def _run_local_chunk(
+    *,
+    model: Any,
+    images: List["np.ndarray"],
+    orig_shapes: List[Tuple[int, int]],
+    label_names: List[str],
+) -> List[List[Dict[str, Any]]]:
+    """Preprocess, infer, and postprocess a single batch on the GPU.
+
+    ``model`` must expose ``preprocess_batch(images) -> Tensor`` and
+    ``postprocess(preds) -> (boxes, labels, scores)``.
+    """
+    batch = model.preprocess_batch(images)
+
+    with torch.inference_mode():
+        preds = model(batch, orig_shapes)
+
+    if isinstance(preds, dict):
+        preds = [preds]
+
+    boxes, labels, scores = model.postprocess(preds)
+
+    per_image = _postprocess_to_per_image_detections(
+        boxes=boxes,
+        labels=labels,
+        scores=scores,
+        batch_size=len(images),
+        label_names=label_names,
+    )
+    return [_apply_page_elements_v3_postprocess(d) for d in per_image]
+
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
 
 
 def detect_page_elements_v3(
@@ -434,32 +430,22 @@ def detect_page_elements_v3(
     remote_retry: RemoteRetryParams | None = None,
     **kwargs: Any,
 ) -> Any:
+    """Run Nemotron Page Elements v3 on a pandas batch.
+
+    For **local** inference the hot path is:
+      numpy arrays -> ``model.preprocess_batch`` (pinned H2D, resize on GPU)
+      -> 4D BCHW float16 tensor -> ``model.forward`` -> postprocess
+
+    No CPU-side tensor ops occur between decode and final dict conversion.
+    """
     retry = remote_retry or RemoteRetryParams(
         remote_max_pool_workers=int(kwargs.get("remote_max_pool_workers", 16)),
         remote_max_retries=int(kwargs.get("remote_max_retries", 10)),
         remote_max_429_retries=int(kwargs.get("remote_max_429_retries", 5)),
     )
-    """
-    Run Nemotron Page Elements v3 on a pandas batch.
 
-    Input:
-      - `pages_df`: pandas.DataFrame (typical Ray Data `batch_format="pandas"`)
-        Must contain an image base64 source either in `image_b64` or one of
-        `images`/`tables`/`charts`/`infographics` (each as list[{"image_b64": ...}]).
-
-    Output:
-      - returns a pandas.DataFrame with original columns preserved, plus:
-        - `output_column`: dict payload {"detections": [...], "timing": {...}, "error": {...?}}
-        - `num_detections_column`: int
-        - `counts_by_label_column`: dict[str,int]
-
-    Notes:
-      - This function internally batches model invocations in chunks of `inference_batch_size`
-        to enforce batch=8 even if Ray provides larger `map_batches` frames.
-    """
     if not isinstance(pages_df, pd.DataFrame):
         raise NotImplementedError("detect_page_elements_v3 currently only supports pandas.DataFrame input.")
-
     if inference_batch_size <= 0:
         raise ValueError("inference_batch_size must be > 0")
 
@@ -469,9 +455,10 @@ def detect_page_elements_v3(
     if not use_remote and model is None:
         raise ValueError("A local `model` is required when `invoke_url` is not provided.")
 
-    # Prepare per-row decode artifacts (local mode), raw base64 (remote mode),
-    # and placeholders for missing/errored rows.
-    row_tensors: List[Optional[TensorOrArray]] = []
+    # ------------------------------------------------------------------
+    # 1. Decode images from every row (CPU, unavoidable)
+    # ------------------------------------------------------------------
+    row_images: List[Optional["np.ndarray"]] = []
     row_shapes: List[Optional[Tuple[int, int]]] = []
     row_b64: List[Optional[str]] = []
     row_payloads: List[Dict[str, Any]] = []
@@ -484,62 +471,38 @@ def detect_page_elements_v3(
 
     for _, row in pages_df.iterrows():
         try:
-            page_image = row.get("page_image")
-            if not isinstance(page_image, dict):
-                raise ValueError("No usable image data found in row.")
-            png = page_image.get("image_png")
             if use_remote:
-                if isinstance(png, (bytes, bytearray)) and png:
-                    row_b64.append(base64.b64encode(png).decode("ascii"))
-                else:
-                    b64_val = page_image.get("image_b64")
-                    if isinstance(b64_val, str) and b64_val:
-                        row_b64.append(b64_val)
-                    else:
-                        raise ValueError("No usable image data found in row.")
-                row_tensors.append(None)
+                row_b64.append(_decode_row_b64(row))
+                row_images.append(None)
                 row_shapes.append(None)
             else:
-                arr = None
-                if isinstance(png, (bytes, bytearray)) and png and Image is not None:
-                    with Image.open(io.BytesIO(png)) as im0:
-                        arr = np.array(im0.convert("RGB"))
-                if arr is None:
-                    arr_val = page_image.get("image_array")
-                    if isinstance(arr_val, np.ndarray):
-                        arr = arr_val
-                if arr is None:
-                    b64_val = page_image.get("image_b64")
-                    if isinstance(b64_val, str) and b64_val:
-                        arr, _ = _decode_b64_image_to_np_array(b64_val)
-                if arr is None:
-                    raise ValueError("No usable image data found in row.")
+                arr, shape = _decode_row_image(row)
+                row_images.append(arr)
+                row_shapes.append(shape)
                 row_b64.append(None)
-                h, w = int(arr.shape[0]), int(arr.shape[1])
-                row_tensors.append(arr)
-                row_shapes.append((h, w))
             row_payloads.append({"detections": []})
         except BaseException as e:
-            row_tensors.append(None)
+            row_images.append(None)
             row_shapes.append(None)
             row_b64.append(None)
             row_payloads.append(_error_payload(stage="decode_image", exc=e))
 
-    # Run inference over only valid rows, but write results back in original order.
+    # ------------------------------------------------------------------
+    # 2. Identify valid rows
+    # ------------------------------------------------------------------
     if use_remote:
         valid_indices = [i for i, b64 in enumerate(row_b64) if b64]
     else:
-        valid_indices = [i for i, t in enumerate(row_tensors) if t is not None and row_shapes[i] is not None]
+        valid_indices = [i for i, img in enumerate(row_images) if img is not None and row_shapes[i] is not None]
 
     if (not use_remote) and valid_indices and torch is None:  # pragma: no cover
         raise ImportError("torch is required for page element detection.")
 
+    # ------------------------------------------------------------------
+    # 3a. Remote inference path (unchanged)
+    # ------------------------------------------------------------------
     if use_remote and valid_indices:
-        valid_b64: List[str] = []
-        for row_i in valid_indices:
-            b64 = row_b64[row_i]
-            if b64:
-                valid_b64.append(b64)
+        valid_b64 = [row_b64[i] for i in valid_indices if row_b64[i]]
 
         t0 = time.perf_counter()
         try:
@@ -557,7 +520,7 @@ def detect_page_elements_v3(
 
             if len(response_items) != len(valid_indices):
                 raise RuntimeError(
-                    "Remote response count mismatch: " f"expected {len(valid_indices)}, got {len(response_items)}"
+                    f"Remote response count mismatch: expected {len(valid_indices)}, got {len(response_items)}"
                 )
 
             for local_i, row_i in enumerate(valid_indices):
@@ -579,129 +542,48 @@ def detect_page_elements_v3(
                     "timing": {"seconds": float(elapsed)}
                 }
 
-    for chunk_start in range(0, len(valid_indices), int(inference_batch_size)):
-        chunk_idx = valid_indices[chunk_start : chunk_start + int(inference_batch_size)]
-        if not chunk_idx:
-            continue
-
-        if use_remote:
-            continue
-
-        # Preprocess each image to a fixed shape so we can stack.
-        pre_list: List[TensorOrArray] = []
-        orig_shapes: List[Tuple[int, int]] = []
-        for i in chunk_idx:
-            t = row_tensors[i]
-            sh = row_shapes[i]
-            if t is None or sh is None:
+    # ------------------------------------------------------------------
+    # 3b. Local inference path (GPU-optimized)
+    # ------------------------------------------------------------------
+    if not use_remote:
+        for chunk_start in range(0, len(valid_indices), int(inference_batch_size)):
+            chunk_idx = valid_indices[chunk_start : chunk_start + int(inference_batch_size)]
+            if not chunk_idx:
                 continue
-            orig_shapes.append(sh)
+
+            chunk_images: List["np.ndarray"] = []
+            chunk_shapes: List[Tuple[int, int]] = []
+            for i in chunk_idx:
+                chunk_images.append(row_images[i])  # type: ignore[arg-type]
+                chunk_shapes.append(row_shapes[i])  # type: ignore[arg-type]
+
+            t0 = time.perf_counter()
             try:
-                # `preprocess` may accept/return torch.Tensor or np.ndarray.
-                pre = model.preprocess(t)  # type: ignore[arg-type]
+                per_image_dets = _run_local_chunk(
+                    model=model,
+                    images=chunk_images,
+                    orig_shapes=chunk_shapes,
+                    label_names=label_names,
+                )
+                elapsed = time.perf_counter() - t0
 
-                # Normalize to a single-image CHW-like item (torch or numpy); we'll convert to torch at stack time.
-                if isinstance(pre, torch.Tensor):
-                    if pre.ndim == 4 and int(pre.shape[0]) == 1:
-                        pre_list.append(pre[0])
-                    elif pre.ndim == 3:
-                        pre_list.append(pre)
-                    else:
-                        pre_list.append(pre)
-                elif isinstance(pre, np.ndarray):
-                    if pre.ndim == 4 and int(pre.shape[0]) == 1:
-                        pre_list.append(pre[0])
-                    else:
-                        pre_list.append(pre)
-                else:
-                    pre_list.append(t)
-            except Exception:
-                pre_list.append(t)
+                for local_i, row_i in enumerate(chunk_idx):
+                    dets = per_image_dets[local_i] if local_i < len(per_image_dets) else []
+                    row_payloads[row_i] = {
+                        "detections": dets,
+                        "timing": {"seconds": float(elapsed)},
+                        "error": None,
+                    }
+            except BaseException as e:
+                elapsed = time.perf_counter() - t0
+                for row_i in chunk_idx:
+                    row_payloads[row_i] = _error_payload(stage="local_inference", exc=e) | {
+                        "timing": {"seconds": float(elapsed)}
+                    }
 
-        if not pre_list:
-            continue
-
-        batch = torch.stack([_ensure_chw_float_tensor(x) for x in pre_list], dim=0)
-
-        t0 = time.perf_counter()
-        try:
-            # Best-effort: pass list of shapes for batching; fall back to per-image if unsupported.
-            with torch.inference_mode():
-                with torch.autocast(device_type="cuda"):
-                    preds = model(batch, orig_shapes) if len(pre_list) > 1 else model(batch, orig_shapes[0])
-            # Some local wrappers return only the first prediction dict even for batched inputs.
-            # Detect that and force per-image invocation so every row gets its own detections.
-            if len(pre_list) > 1:
-                if isinstance(preds, dict):
-                    raise RuntimeError("Model returned a single pred dict for batched input.")
-                if isinstance(preds, list) and len(preds) != len(pre_list):
-                    raise RuntimeError(
-                        f"Model returned {len(preds)} preds for batch size {len(pre_list)}; falling back to per-image."
-                    )
-        except Exception as ex:
-            print(f"Error invoking model: {ex}")
-            preds_list: List[Any] = []
-            for j in range(int(batch.shape[0])):
-                preds_list.append(model(batch[j : j + 1], orig_shapes[j]))
-            preds = preds_list
-        elapsed = time.perf_counter() - t0
-
-        # Normalize preds into a list of per-image prediction dicts.
-        if isinstance(preds, dict):
-            preds_list2 = [preds]
-        elif isinstance(preds, list):
-            preds_list2 = preds
-        else:
-            preds_list2 = [preds]  # type: ignore[list-item]
-
-        try:
-            # Preferred: allow model wrapper to handle batched postprocess.
-            if hasattr(model, "postprocess"):
-                boxes, labels, scores = model.postprocess(preds_list2)  # type: ignore[attr-defined]
-            else:
-                # Fallback: run upstream util per-image.
-                # `postprocess_preds_page_element` expects a single pred dict and returns numpy arrays.
-                boxes_list: List["torch.Tensor"] = []
-                labels_list: List["torch.Tensor"] = []
-                scores_list: List["torch.Tensor"] = []
-                for p in preds_list2:
-                    if not isinstance(p, dict):
-                        boxes_list.append(torch.empty((0, 4), dtype=torch.float32))
-                        labels_list.append(torch.empty((0,), dtype=torch.int64))
-                        scores_list.append(torch.empty((0,), dtype=torch.float32))
-                        continue
-                    b_np, l_np, s_np = postprocess_preds_page_element(
-                        p,
-                        thresholds_per_class,
-                        label_names,
-                    )
-                    boxes_list.append(torch.as_tensor(b_np, dtype=torch.float32))
-                    labels_list.append(torch.as_tensor(l_np, dtype=torch.int64))
-                    scores_list.append(torch.as_tensor(s_np, dtype=torch.float32))
-                boxes, labels, scores = boxes_list, labels_list, scores_list
-            per_image_dets = _postprocess_to_per_image_detections(
-                boxes=boxes,
-                labels=labels,
-                scores=scores,
-                batch_size=len(pre_list),
-                label_names=label_names,
-            )
-            # Apply v3 postprocessing (box fusion, title matching, expansion, overlap removal)
-            per_image_dets = [_apply_page_elements_v3_postprocess(dets) for dets in per_image_dets]
-            for local_i, row_i in enumerate(chunk_idx):
-                dets = per_image_dets[local_i] if local_i < len(per_image_dets) else []
-                row_payloads[row_i] = {
-                    "detections": dets,
-                    "timing": {"seconds": float(elapsed)},
-                    "error": None,
-                }
-        except BaseException as e:
-            # If postprocess fails, attach an error but keep job alive.
-            for row_i in chunk_idx:
-                row_payloads[row_i] = _error_payload(stage="postprocess", exc=e) | {
-                    "timing": {"seconds": float(elapsed)}
-                }
-
+    # ------------------------------------------------------------------
+    # 4. Attach results to the DataFrame
+    # ------------------------------------------------------------------
     out = pages_df.copy()
     out[output_column] = row_payloads
     out[num_detections_column] = [
@@ -713,12 +595,21 @@ def detect_page_elements_v3(
     return out
 
 
-class PageElementDetectionActor:
-    """
-    Ray-friendly callable that initializes Nemotron Page Elements v3 once.
+# ---------------------------------------------------------------------------
+# Ray actor
+# ---------------------------------------------------------------------------
 
-    Use with Ray Data:
-      ds = ds.map_batches(PageElementDetectionActor, fn_constructor_kwargs={...}, batch_format="pandas")
+
+class PageElementDetectionActor:
+    """Ray-friendly callable that initializes Nemotron Page Elements v3 once.
+
+    Use with Ray Data::
+
+        ds = ds.map_batches(
+            PageElementDetectionActor,
+            fn_constructor_kwargs={...},
+            batch_format="pandas",
+        )
     """
 
     __slots__ = ("detect_kwargs", "_model")
@@ -735,7 +626,8 @@ class PageElementDetectionActor:
         else:
             from nemo_retriever.model.local import NemotronPageElementsV3
 
-            self._model = NemotronPageElementsV3()
+            max_bs = int(self.detect_kwargs.get("inference_batch_size", 16))
+            self._model = NemotronPageElementsV3(max_batch_size=max_bs)
 
     def __call__(self, pages_df: Any, **override_kwargs: Any) -> Any:
         try:
@@ -746,7 +638,6 @@ class PageElementDetectionActor:
                 **override_kwargs,
             )
         except Exception as e:
-            # As a last line of defense, never let the Ray UDF raise.
             if isinstance(pages_df, pd.DataFrame):
                 out = pages_df.copy()
                 payload = _error_payload(stage="actor_call", exc=e)
