@@ -440,7 +440,7 @@ class BatchIngestor(Ingestor):
                 num_gpus=self._requested_plan.get_nemotron_parse_gpus_per_actor(),
                 compute=rd.ActorPoolStrategy(
                     initial_size=self._requested_plan.get_nemotron_parse_initial_actors(),
-                    min_size=self._requested_plan.get_nemotron_parse_min_actors(),
+                    min_size=1.0,
                     max_size=self._requested_plan.get_nemotron_parse_max_actors(),
                 ),
                 fn_constructor_kwargs=parse_flags,
