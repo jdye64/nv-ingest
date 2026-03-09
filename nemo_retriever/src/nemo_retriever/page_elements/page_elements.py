@@ -45,6 +45,16 @@ from nemo_retriever.nim.nim import invoke_page_elements_batches
 TensorOrArray = Union["torch.Tensor", "np.ndarray"]
 
 
+def _numpy_to_b64_png(arr: "np.ndarray") -> str:
+    """Encode an HWC uint8 RGB numpy array to a base64-encoded PNG string."""
+    if Image is None:  # pragma: no cover
+        raise ImportError("Pillow is required for image encoding.")
+    img = Image.fromarray(arr.astype(np.uint8, copy=False), mode="RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
 def _ensure_chw_float_tensor(x: TensorOrArray) -> "torch.Tensor":
     """
     Normalize a single image into a CHW float32 torch.Tensor suitable for batching.
@@ -484,17 +494,27 @@ def detect_page_elements_v3(
 
     for _, row in pages_df.iterrows():
         try:
-            b64 = row.get("page_image")["image_b64"]
-            if not b64:
-                raise ValueError("No usable image_b64 found in row.")
-            row_b64.append(b64)
+            page_image = row.get("page_image")
+            arr = None
+            if isinstance(page_image, dict):
+                arr = page_image.get("image_array")
+                if not isinstance(arr, np.ndarray):
+                    arr = None
+                if arr is None:
+                    b64_val = page_image.get("image_b64")
+                    if isinstance(b64_val, str) and b64_val:
+                        arr, _ = _decode_b64_image_to_np_array(b64_val)
+            if arr is None:
+                raise ValueError("No usable image data found in row.")
             if use_remote:
+                row_b64.append(_numpy_to_b64_png(arr))
                 row_tensors.append(None)
                 row_shapes.append(None)
             else:
-                t, orig_shape = _decode_b64_image_to_np_array(b64)
-                row_tensors.append(t)
-                row_shapes.append(orig_shape)
+                row_b64.append(None)
+                h, w = int(arr.shape[0]), int(arr.shape[1])
+                row_tensors.append(arr)
+                row_shapes.append((h, w))
             row_payloads.append({"detections": []})
         except BaseException as e:
             row_tensors.append(None)

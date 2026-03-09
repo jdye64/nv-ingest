@@ -39,6 +39,16 @@ except Exception:  # pragma: no cover
     Image = None  # type: ignore[assignment]
 
 
+def _np_rgb_to_b64_png(arr: "np.ndarray") -> str:
+    """Encode an HWC uint8 RGB numpy array to a base64-encoded PNG string."""
+    if Image is None:  # pragma: no cover
+        raise ImportError("Pillow is required for image encoding.")
+    img = Image.fromarray(arr.astype(np.uint8, copy=False), mode="RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
 def _error_payload(*, stage: str, exc: BaseException) -> Dict[str, Any]:
     return {
         "detections": [],
@@ -280,9 +290,8 @@ def detect_infographic_elements_v1(
     Input:
       - pandas.DataFrame in/out
       - expects a usable base64 image in one of:
-        - `image_b64` (direct column)
-        - `page_image.image_b64` (pdf extraction output)
-        - `infographics[0].image_b64` (preferred when available)
+        - `page_image.image_array` (pdf extraction output, preferred)
+        - `page_image.image_b64` (legacy fallback)
     """
     if not isinstance(batch_df, pd.DataFrame):
         raise NotImplementedError("detect_infographic_elements_v1 currently only supports pandas.DataFrame input.")
@@ -302,17 +311,33 @@ def detect_infographic_elements_v1(
     payloads: List[Dict[str, Any]] = []
     for _, row in batch_df.iterrows():
         try:
-            b64 = row.get("page_image", {}).get("image_b64", None)
-            if not b64:
-                raise ValueError("No usable image_b64 found in row.")
-            image_b64_list.append(b64)
+            page_image = row.get("page_image")
+            arr = None
+            if isinstance(page_image, dict):
+                arr = page_image.get("image_array")
+                if not isinstance(arr, np.ndarray):
+                    arr = None
+                if arr is None:
+                    b64_val = page_image.get("image_b64")
+                    if isinstance(b64_val, str) and b64_val:
+                        t_val, shape_val = _decode_b64_image_to_chw_tensor(b64_val)
+                        tensors.append(t_val)
+                        shapes.append(shape_val)
+                        image_b64_list.append(b64_val if use_remote else None)
+                        payloads.append({"detections": []})
+                        continue
+            if arr is None:
+                raise ValueError("No usable image data found in row.")
+            h, w = int(arr.shape[0]), int(arr.shape[1])
             if use_remote:
+                image_b64_list.append(_np_rgb_to_b64_png(arr))
                 tensors.append(None)
                 shapes.append(None)
             else:
-                t, orig_shape = _decode_b64_image_to_chw_tensor(b64)
+                image_b64_list.append(None)
+                t = torch.from_numpy(arr).permute(2, 0, 1).contiguous().to(dtype=torch.float32) / 255.0
                 tensors.append(t)
-                shapes.append(orig_shape)
+                shapes.append((h, w))
             payloads.append({"detections": []})
         except BaseException as e:
             tensors.append(None)
@@ -458,7 +483,7 @@ def detect_infographic_elements_v1_from_page_elements_v3(
     Run Nemotron Graphic Elements v1 only on cropped infographic/title regions.
 
     Gate per page if any of `allowed_page_element_labels` has count > 0 in
-    `page_elements_v3_counts_by_label`, then crop `page_image.image_b64` to each
+    `page_elements_v3_counts_by_label`, then crop `page_image.image_array` to each
     matching detection and run the model on those crops.
 
     Output payload shape:
@@ -483,10 +508,15 @@ def detect_infographic_elements_v1_from_page_elements_v3(
     out_total_dets: List[int] = []
     out_counts: List[Dict[str, int]] = []
 
-    crop_b64s: List[str] = []
+    crop_arrays: List["np.ndarray"] = []
     crop_region_refs: List[Dict[str, Any]] = []
 
     t0_total = time.perf_counter()
+
+    def _clamp_int(v: float, lo: int, hi: int) -> int:
+        if v != v:  # NaN
+            return lo
+        return int(min(max(v, float(lo)), float(hi)))
 
     for _, row in pages_df.iterrows():
         page_payload: Dict[str, Any] = {"regions": [], "timing": {"seconds": 0.0}, "error": None}
@@ -516,13 +546,17 @@ def detect_infographic_elements_v1_from_page_elements_v3(
             out_counts.append({})
             continue
 
-        page_image = row.get(page_image_column) or {}
-        page_image_b64 = page_image.get("image_b64") if isinstance(page_image, dict) else None
-        if not isinstance(page_image_b64, str) or not page_image_b64:
+        page_image = row.get(page_image_column)
+        page_arr = None
+        if isinstance(page_image, dict):
+            page_arr = page_image.get("image_array")
+            if not isinstance(page_arr, np.ndarray):
+                page_arr = None
+        if page_arr is None:
             page_payload["error"] = {
                 "stage": "crop",
                 "type": "ValueError",
-                "message": "page_image.image_b64 missing; cannot crop infographics for infographic_elements_v1.",
+                "message": "page_image.image_array missing; cannot crop infographics for infographic_elements_v1.",
                 "traceback": "",
             }
             out_payloads.append(page_payload)
@@ -530,6 +564,7 @@ def detect_infographic_elements_v1_from_page_elements_v3(
             out_counts.append({})
             continue
 
+        img_h, img_w = page_arr.shape[:2]
         regions: List[Dict[str, Any]] = []
         for det in dets:
             if not isinstance(det, dict):
@@ -540,24 +575,32 @@ def detect_infographic_elements_v1_from_page_elements_v3(
             bbox = det.get("bbox_xyxy_norm")
             if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
                 continue
-
-            crop_b64, crop_shape_hw = _crop_b64_image_by_norm_bbox(
-                page_image_b64, bbox_xyxy_norm=cast(Sequence[float], bbox)
-            )
-            if not crop_b64 or crop_shape_hw is None:
+            try:
+                x1n, y1n, x2n, y2n = [float(x) for x in bbox]
+            except Exception:
+                continue
+            x1 = _clamp_int(x1n * img_w, 0, img_w)
+            x2 = _clamp_int(x2n * img_w, 0, img_w)
+            y1 = _clamp_int(y1n * img_h, 0, img_h)
+            y2 = _clamp_int(y2n * img_h, 0, img_h)
+            if x2 <= x1 or y2 <= y1:
+                continue
+            crop = page_arr[y1:y2, x1:x2].copy()
+            ch, cw = crop.shape[:2]
+            if cw <= 1 or ch <= 1:
                 continue
 
             region_payload: Dict[str, Any] = {
                 "label_name": det_label,
                 "bbox_xyxy_norm": [float(x) for x in bbox],
                 "score": det.get("score"),
-                "orig_shape_hw": crop_shape_hw,
+                "orig_shape_hw": (ch, cw),
                 "detections": [],
                 "timing": None,
                 "error": None,
             }
             regions.append(region_payload)
-            crop_b64s.append(crop_b64)
+            crop_arrays.append(crop)
             crop_region_refs.append(region_payload)
 
         page_payload["regions"] = regions
@@ -565,11 +608,12 @@ def detect_infographic_elements_v1_from_page_elements_v3(
         out_total_dets.append(0)
         out_counts.append({})
 
-    if crop_b64s:
+    if crop_arrays:
         label_names = _labels_from_model(model) if model is not None else []
 
         crop_payloads: List[Dict[str, Any]] = []
         if use_remote:
+            crop_b64s = [_np_rgb_to_b64_png(c) for c in crop_arrays]
             t0 = time.perf_counter()
             try:
                 response_items = invoke_image_inference_batches(
@@ -583,26 +627,27 @@ def detect_infographic_elements_v1_from_page_elements_v3(
                     max_429_retries=int(retry.remote_max_429_retries),
                 )
                 elapsed = time.perf_counter() - t0
-                if len(response_items) != len(crop_b64s):
-                    raise RuntimeError(f"Expected {len(crop_b64s)} remote predictions, got {len(response_items)}")
+                if len(response_items) != len(crop_arrays):
+                    raise RuntimeError(f"Expected {len(crop_arrays)} remote predictions, got {len(response_items)}")
                 for resp in response_items:
                     pred_item = _extract_remote_pred_item(resp)
                     dets = _prediction_to_detections(pred_item, label_names=label_names)
                     crop_payloads.append({"detections": dets, "timing": {"seconds": float(elapsed)}, "error": None})
             except BaseException as e:
                 elapsed = time.perf_counter() - t0
-                for _ in crop_b64s:
+                for _ in crop_arrays:
                     crop_payloads.append(
                         _error_payload(stage="remote_invoke", exc=e) | {"timing": {"seconds": float(elapsed)}}
                     )
         else:
             tensors: List[Optional["torch.Tensor"]] = []
             shapes: List[Optional[Tuple[int, int]]] = []
-            for b64 in crop_b64s:
+            for crop_arr in crop_arrays:
                 try:
-                    t, orig_shape = _decode_b64_image_to_chw_tensor(b64)
+                    h, w = int(crop_arr.shape[0]), int(crop_arr.shape[1])
+                    t = torch.from_numpy(crop_arr).permute(2, 0, 1).contiguous().to(dtype=torch.float32) / 255.0
                     tensors.append(t)
-                    shapes.append(orig_shape)
+                    shapes.append((h, w))
                     crop_payloads.append({"detections": []})
                 except BaseException as e:
                     tensors.append(None)

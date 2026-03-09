@@ -13,6 +13,14 @@ import pandas as pd
 from nemo_retriever.params import RemoteRetryParams
 
 try:
+    import numpy as np
+
+    _np_ndarray_type = np.ndarray
+except Exception:  # pragma: no cover
+    np = None  # type: ignore[assignment]
+    _np_ndarray_type = type(None)  # type: ignore[assignment,misc]
+
+try:
     import torch
 except Exception:  # pragma: no cover
     torch = None  # type: ignore[assignment]
@@ -227,7 +235,7 @@ def table_structure_ocr_page_elements(
     Run table-structure + OCR on table crops and produce structure-aware markdown.
 
     For each row (page) in ``batch_df``:
-    1. Read ``page_elements_v3`` detections and ``page_image["image_b64"]``.
+    1. Read ``page_elements_v3`` detections and ``page_image["image_array"]``.
     2. Crop all table detections from the page image.
     3. Run table-structure model on each crop to get cell/row/column bboxes.
     4. Run OCR on each crop to get text with bboxes.
@@ -307,16 +315,19 @@ def table_structure_ocr_page_elements(
                 dets = []
 
             # --- get page image ---
-            page_image = getattr(row, "page_image", None) or {}
-            page_image_b64 = page_image.get("image_b64") if isinstance(page_image, dict) else None
-
-            if not isinstance(page_image_b64, str) or not page_image_b64:
+            page_image = getattr(row, "page_image", None)
+            page_arr = None
+            if isinstance(page_image, dict):
+                page_arr = page_image.get("image_array")
+                if not isinstance(page_arr, _np_ndarray_type):
+                    page_arr = None
+            if page_arr is None:
                 all_table.append(table_items)
                 all_meta.append({"timing": None, "error": None})
                 continue
 
             # --- Pass 1: Collect table crops ---
-            crops = _crop_all_from_page(page_image_b64, dets, {"table"})
+            crops = _crop_all_from_page(page_arr, dets, {"table"})
 
             if not crops:
                 all_table.append(table_items)

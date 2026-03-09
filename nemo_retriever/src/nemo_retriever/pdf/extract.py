@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from io import BytesIO
 from typing import Any, Dict, List, Optional
 
-import base64
 import traceback
 import pypdfium2.raw as pdfium_c
 
@@ -27,81 +26,40 @@ try:
 except Exception:  # pragma: no cover
     np = None  # type: ignore[assignment]
 
-try:
-    from PIL import Image
-except Exception:  # pragma: no cover
-    Image = None  # type: ignore[assignment]
 
+def _render_page_to_numpy(page: Any, *, dpi: int = 200) -> Dict[str, Any]:
+    """Render a PDF page directly to an HWC uint8 RGB NumPy array.
 
-def _render_page_to_base64(page: Any, *, dpi: int = 200, image_format: str = "png") -> Dict[str, Any]:
-    """
-    Render a page to an image and return base64 plus minimal metadata.
+    Uses pypdfium2's ``rev_byteorder`` and ``force_bitmap_format`` to obtain
+    an RGB array without any intermediate image-format encoding (no PNG, no
+    base64, no PIL).
 
     Returns dict with:
-    - image_b64: str
-    - encoding: str ("png" or "raw")
-    - orig_shape_hw: tuple[int,int] (H,W) of the rendered raster
-    - shape/dtype: optional (for raw)
+    - image_array: np.ndarray  (H, W, 3) uint8 RGB
+    - orig_shape_hw: tuple[int, int]
     """
+    if np is None:  # pragma: no cover
+        raise ImportError("numpy is required for page rendering.")
+
     scale = max(float(dpi) / 72.0, 0.01)
-    bitmap = page.render(scale=scale)
+    bitmap = page.render(
+        scale=scale,
+        rev_byteorder=True,
+        force_bitmap_format=pdfium_c.FPDFBitmap_BGR,
+    )
+    arr = bitmap.to_numpy().copy()
 
-    # Prefer numpy output when available.
-    arr = None
-    if hasattr(bitmap, "to_numpy"):
-        try:
-            arr = bitmap.to_numpy()
-        except Exception:
-            arr = None
+    # Ensure HWC uint8 RGB.
+    if arr.ndim == 2:
+        arr = np.stack([arr, arr, arr], axis=-1)
+    elif arr.ndim == 3 and arr.shape[2] == 4:
+        arr = arr[:, :, :3]
 
-    if arr is None and hasattr(bitmap, "to_pil"):
-        try:
-            pil_img = bitmap.to_pil()
-        except Exception:
-            pil_img = None
-        if pil_img is not None:
-            w, h = pil_img.size
-            buf = BytesIO()
-            pil_img.save(buf, format=image_format.upper())
-            return {
-                "image_b64": base64.b64encode(buf.getvalue()).decode("ascii"),
-                "encoding": image_format.lower(),
-                "orig_shape_hw": (int(h), int(w)),
-            }
-
-    # Fallback: if we got a numpy-like array, try encoding with Pillow; else raw bytes.
-    if arr is not None and Image is not None:
-        try:
-            # Expect typical image layouts like (H,W,C) or (H,W).
-            h = int(arr.shape[0]) if hasattr(arr, "shape") and len(arr.shape) >= 2 else 0
-            w = int(arr.shape[1]) if hasattr(arr, "shape") and len(arr.shape) >= 2 else 0
-            pil = Image.fromarray(arr)
-            buf = BytesIO()
-            pil.save(buf, format=image_format.upper())
-            return {
-                "image_b64": base64.b64encode(buf.getvalue()).decode("ascii"),
-                "encoding": image_format.lower(),
-                "orig_shape_hw": (int(h), int(w)),
-            }
-        except Exception:
-            pass
-
-    if arr is not None:
-        # Last resort: raw bytes base64 (still a base64 string, but not a standard image container).
-        raw = arr.tobytes()
-        meta: Dict[str, Any] = {"image_b64": base64.b64encode(raw).decode("ascii"), "encoding": "raw"}
-        if hasattr(arr, "shape"):
-            meta["shape"] = tuple(arr.shape)
-            try:
-                if len(arr.shape) >= 2:
-                    meta["orig_shape_hw"] = (int(arr.shape[0]), int(arr.shape[1]))
-            except Exception:
-                pass
-        if hasattr(arr, "dtype"):
-            meta["dtype"] = str(arr.dtype)
-        return meta
-
-    raise RuntimeError("Failed to render page to an image representation.")
+    h, w = int(arr.shape[0]), int(arr.shape[1])
+    return {
+        "image_array": arr.astype(np.uint8, copy=False),
+        "orig_shape_hw": (h, w),
+    }
 
 
 def _error_record(
@@ -169,7 +127,6 @@ def pdf_extraction(
     extract_charts: bool = False,
     extract_infographics: bool = False,
     dpi: int = 200,
-    image_format: str = "png",
     text_extraction_method: str = "pdfium_hybrid",
     text_depth: str = "page",
     **kwargs: Any,
@@ -226,10 +183,6 @@ def pdf_extraction(
                 except Exception:
                     doc = pdfium.PdfDocument(BytesIO(bytes(pdf_bytes)))
 
-                # TODO: Extend to support more image formats
-                if image_format not in {"png"}:
-                    raise ValueError(f"Unsupported image_format: {image_format!r}")
-
                 # Step 2: process only the first page (single-page doc).
                 page = None
                 try:
@@ -269,7 +222,7 @@ def pdf_extraction(
                     )
                     render_info: Optional[Dict[str, Any]] = None
                     if want_any_raster:
-                        render_info = _render_page_to_base64(page, dpi=dpi, image_format=image_format)
+                        render_info = _render_page_to_numpy(page, dpi=dpi)
 
                     page_record: Dict[str, Any] = {
                         "path": pdf_path,

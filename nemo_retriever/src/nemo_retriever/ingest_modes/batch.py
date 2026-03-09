@@ -318,9 +318,20 @@ class BatchIngestor(Ingestor):
                 return 0
             return len([p for p in s.split(",") if p.strip()])
 
-        # Downstream batch stages assume `page_image.image_b64` exists for every page.
         # Ensure PDF extraction emits a page image unless the caller explicitly disables it.
         kwargs.setdefault("extract_page_as_image", True)
+
+        # Only include base64 image strings in the DataFrame when a downstream
+        # remote endpoint needs them; local-only pipelines operate on numpy arrays.
+        any_remote_endpoint = bool(
+            kwargs.get("page_elements_invoke_url")
+            or kwargs.get("ocr_invoke_url")
+            or kwargs.get("invoke_url")
+            or kwargs.get("graphic_elements_invoke_url")
+            or kwargs.get("table_structure_invoke_url")
+            or kwargs.get("nemotron_parse_invoke_url")
+        )
+        kwargs.setdefault("include_image_b64", any_remote_endpoint)
 
         # 200 DPI is sufficient for both detection and OCR.  YOLOX resizes to
         # 1024x1024 internally, and NemotronOCR also resizes crops to 1024x1024,

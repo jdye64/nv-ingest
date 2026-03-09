@@ -48,14 +48,76 @@ def _error_payload(*, stage: str, exc: BaseException) -> Dict[str, Any]:
     }
 
 
+def _np_rgb_to_b64_png(arr: np.ndarray) -> str:
+    """Encode an HWC uint8 RGB numpy array to a base64-encoded PNG string."""
+    if Image is None:  # pragma: no cover
+        raise ImportError("Pillow is required for image encoding.")
+    img = Image.fromarray(arr.astype(np.uint8, copy=False), mode="RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def _get_page_image_array(page_image: Any) -> Optional[np.ndarray]:
+    """Extract or lazily decode a HWC uint8 RGB array from *page_image*.
+
+    Accepts either:
+    * A ``dict`` with an ``image_array`` key (preferred, zero-copy).
+    * A ``dict`` with only ``image_b64`` (decodes via PIL as fallback).
+    * A raw ``np.ndarray`` directly.
+    """
+    if isinstance(page_image, np.ndarray):
+        return page_image
+    if not isinstance(page_image, dict):
+        return None
+    arr = page_image.get("image_array")
+    if isinstance(arr, np.ndarray):
+        return arr
+    b64 = page_image.get("image_b64")
+    if isinstance(b64, str) and b64 and Image is not None:
+        try:
+            raw = base64.b64decode(b64)
+            with Image.open(io.BytesIO(raw)) as im0:
+                return np.asarray(im0.convert("RGB"), dtype=np.uint8).copy()
+        except Exception:
+            pass
+    return None
+
+
+def _get_page_image_b64(page_image: Any) -> Optional[str]:
+    """Extract or lazily encode the page image as a base64-encoded PNG string.
+
+    Accepts either:
+    * A ``dict`` with an ``image_b64`` key (zero-copy).
+    * A ``dict`` with only ``image_array`` (encodes via PIL).
+    """
+    if not isinstance(page_image, dict):
+        return None
+    b64 = page_image.get("image_b64")
+    if isinstance(b64, str) and b64:
+        return b64
+    arr = page_image.get("image_array")
+    if isinstance(arr, np.ndarray):
+        return _np_rgb_to_b64_png(arr)
+    return None
+
+
+def _clamp_int(v: float, lo: int, hi: int) -> int:
+    if v != v:  # NaN
+        return lo
+    return int(min(max(v, float(lo)), float(hi)))
+
+
 def _crop_b64_image_by_norm_bbox(
-    page_image_b64: str,
+    page_image: Any,
     *,
     bbox_xyxy_norm: Sequence[float],
     image_format: str = "png",
 ) -> Tuple[Optional[str], Optional[Tuple[int, int]]]:
-    """
-    Crop a base64-encoded RGB image by a normalized xyxy bbox.
+    """Crop a page image by a normalized xyxy bbox, returning base64 PNG.
+
+    *page_image* may be a numpy array, a base64 string, or a ``page_image``
+    dict containing either ``image_array`` or ``image_b64``.
 
     Returns
     -------
@@ -64,90 +126,68 @@ def _crop_b64_image_by_norm_bbox(
     cropped_shape_hw : tuple[int, int] | None
         (H, W) of the crop, or *None* on failure.
     """
-    if Image is None:  # pragma: no cover
-        raise ImportError("Cropping requires pillow.")
-
-    if not isinstance(page_image_b64, str) or not page_image_b64:
+    arr = _get_page_image_array(page_image)
+    if arr is None and isinstance(page_image, str) and page_image:
+        try:
+            raw_bytes = base64.b64decode(page_image)
+            with Image.open(io.BytesIO(raw_bytes)) as im0:
+                arr = np.asarray(im0.convert("RGB"), dtype=np.uint8).copy()
+        except Exception:
+            return None, None
+    if arr is None:
         return None, None
+
     try:
         x1n, y1n, x2n, y2n = [float(x) for x in bbox_xyxy_norm]
     except Exception:
         return None, None
 
-    try:
-        raw = base64.b64decode(page_image_b64)
-        with Image.open(io.BytesIO(raw)) as im0:
-            im = im0.convert("RGB")
-            w, h = im.size
-            if w <= 1 or h <= 1:
-                return None, None
-
-            def _clamp_int(v: float, lo: int, hi: int) -> int:
-                if v != v:  # NaN
-                    return lo
-                return int(min(max(v, float(lo)), float(hi)))
-
-            x1 = _clamp_int(x1n * w, 0, w)
-            x2 = _clamp_int(x2n * w, 0, w)
-            y1 = _clamp_int(y1n * h, 0, h)
-            y2 = _clamp_int(y2n * h, 0, h)
-
-            if x2 <= x1 or y2 <= y1:
-                return None, None
-
-            crop = im.crop((x1, y1, x2, y2))
-            cw, ch = crop.size
-            if cw <= 1 or ch <= 1:
-                return None, None
-
-            buf = io.BytesIO()
-            fmt = str(image_format or "png").lower()
-            if fmt not in {"png"}:
-                fmt = "png"
-            crop.save(buf, format=fmt.upper())
-            return base64.b64encode(buf.getvalue()).decode("ascii"), (int(ch), int(cw))
-    except Exception:
+    h, w = arr.shape[:2]
+    if w <= 1 or h <= 1:
         return None, None
+
+    x1 = _clamp_int(x1n * w, 0, w)
+    x2 = _clamp_int(x2n * w, 0, w)
+    y1 = _clamp_int(y1n * h, 0, h)
+    y2 = _clamp_int(y2n * h, 0, h)
+    if x2 <= x1 or y2 <= y1:
+        return None, None
+
+    crop = arr[y1:y2, x1:x2]
+    ch, cw = crop.shape[:2]
+    if cw <= 1 or ch <= 1:
+        return None, None
+
+    return _np_rgb_to_b64_png(crop), (ch, cw)
 
 
 def _crop_all_from_page(
-    page_image_b64: str,
+    page_image: Any,
     detections: List[Dict[str, Any]],
     wanted_labels: set,
 ) -> List[Tuple[str, List[float], np.ndarray]]:
+    """Crop all matching detections from *page_image* using pure numpy slicing.
+
+    *page_image* may be an HWC uint8 numpy array, a base64 string, or a
+    ``page_image`` dict containing ``image_array`` or ``image_b64``.
+
+    Returns a list of ``(label_name, bbox_xyxy_norm, crop_array)`` tuples.
+    Crops are HWC uint8 numpy arrays.
     """
-    Decode the page image **once** and crop all matching detections.
-
-    Returns a list of ``(label_name, bbox_xyxy_norm, crop_array)`` tuples for
-    detections whose ``label_name`` is in *wanted_labels* and whose crop is
-    valid.  Skips detections that fail to crop (bad bbox, tiny region, etc.).
-
-    Crops are returned as HWC uint8 numpy arrays so they can be passed
-    directly to ``NemotronOCRV1.invoke()`` without a PNG/base64 round-trip.
-    """
-    if Image is None:  # pragma: no cover
-        raise ImportError("Cropping requires pillow.")
-
-    if not isinstance(page_image_b64, str) or not page_image_b64:
+    arr = _get_page_image_array(page_image)
+    if arr is None and isinstance(page_image, str) and page_image:
+        try:
+            raw_bytes = base64.b64decode(page_image)
+            with Image.open(io.BytesIO(raw_bytes)) as im0:
+                arr = np.asarray(im0.convert("RGB"), dtype=np.uint8).copy()
+        except Exception:
+            return []
+    if arr is None:
         return []
 
-    try:
-        raw = base64.b64decode(page_image_b64)
-        im0 = Image.open(io.BytesIO(raw))
-        im = im0.convert("RGB")
-        im0.close()
-    except Exception:
-        return []
-
-    w, h = im.size
+    h, w = arr.shape[:2]
     if w <= 1 or h <= 1:
-        im.close()
         return []
-
-    def _clamp_int(v: float, lo: int, hi: int) -> int:
-        if v != v:  # NaN
-            return lo
-        return int(min(max(v, float(lo)), float(hi)))
 
     results: List[Tuple[str, List[float], np.ndarray]] = []
     for det in detections:
@@ -174,27 +214,14 @@ def _crop_all_from_page(
         if x2 <= x1 or y2 <= y1:
             continue
 
-        crop = im.crop((x1, y1, x2, y2))
-        cw, ch = crop.size
+        crop_array = arr[y1:y2, x1:x2].copy()
+        ch, cw = crop_array.shape[:2]
         if cw <= 1 or ch <= 1:
-            crop.close()
             continue
 
-        crop_array = np.asarray(crop, dtype=np.uint8).copy()
-        crop.close()
         results.append((label_name, [float(x) for x in bbox], crop_array))
 
-    im.close()
     return results
-
-
-def _np_rgb_to_b64_png(crop_array: np.ndarray) -> str:
-    if Image is None:  # pragma: no cover
-        raise ImportError("Pillow is required for image encoding.")
-    img = Image.fromarray(crop_array.astype(np.uint8), mode="RGB")
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
 def _extract_remote_ocr_item(response_item: Any) -> Any:
@@ -428,7 +455,7 @@ def ocr_page_elements(
     Run Nemotron OCR v1 on cropped regions detected by PageElements v3.
 
     For each row (page) in ``batch_df``:
-    1. Read ``page_elements_v3`` detections and ``page_image["image_b64"]``.
+    1. Read ``page_elements_v3`` detections and ``page_image["image_array"]``.
     2. For each detection whose ``label_name`` is a requested type, crop the
        page image, invoke OCR, parse the result, and collect text.
     3. Write per-type content lists and timing metadata to output columns.
@@ -489,19 +516,18 @@ def ocr_page_elements(
                 dets = []
 
             # --- get page image ---
-            page_image = getattr(row, "page_image", None) or {}
-            page_image_b64 = page_image.get("image_b64") if isinstance(page_image, dict) else None
+            page_image = getattr(row, "page_image", None)
+            page_arr = _get_page_image_array(page_image)
 
-            if not isinstance(page_image_b64, str) or not page_image_b64:
-                # No image available — nothing to crop/OCR.
+            if page_arr is None:
                 all_table.append(table_items)
                 all_chart.append(chart_items)
                 all_infographic.append(infographic_items)
                 all_ocr_meta.append({"timing": None, "error": None})
                 continue
 
-            # --- decode page image once, crop all matching detections ---
-            crops = _crop_all_from_page(page_image_b64, dets, wanted_labels)
+            # --- crop all matching detections using numpy slicing ---
+            crops = _crop_all_from_page(page_arr, dets, wanted_labels)
 
             if use_remote:
                 crop_b64s: List[str] = []
@@ -823,27 +849,18 @@ def nemotron_parse_page_elements(
             if not isinstance(dets, list):
                 dets = []
 
-            page_image = getattr(row, "page_image", None) or {}
-            page_image_b64 = page_image.get("image_b64") if isinstance(page_image, dict) else None
-            if not isinstance(page_image_b64, str) or not page_image_b64:
+            page_image = getattr(row, "page_image", None)
+            page_arr = _get_page_image_array(page_image)
+            if page_arr is None:
                 all_table.append(table_items)
                 all_chart.append(chart_items)
                 all_infographic.append(infographic_items)
                 all_meta.append({"timing": None, "error": None})
                 continue
 
-            crops = _crop_all_from_page(page_image_b64, dets, wanted_labels)
-            # Parse-only mode may skip page-elements detection entirely. In that
-            # case, parse the full page once and fan out the text to enabled
-            # content channels.
+            crops = _crop_all_from_page(page_arr, dets, wanted_labels)
             if not crops and wanted_labels:
-                try:
-                    raw = base64.b64decode(page_image_b64)
-                    with Image.open(io.BytesIO(raw)) as im0:
-                        full_crop = np.asarray(im0.convert("RGB"), dtype=np.uint8).copy()
-                    crops = [("full_page", [0.0, 0.0, 1.0, 1.0], full_crop)]
-                except Exception:
-                    crops = []
+                crops = [("full_page", [0.0, 0.0, 1.0, 1.0], page_arr.copy())]
 
             if use_remote:
                 crop_b64s: List[str] = []
