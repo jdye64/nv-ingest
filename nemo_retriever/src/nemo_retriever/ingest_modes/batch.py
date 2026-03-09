@@ -456,7 +456,7 @@ class BatchIngestor(Ingestor):
                 PageElementDetectionActor,
                 batch_size=self._requested_plan.get_page_elements_batch_size(),
                 batch_format="pandas",
-                num_cpus=self._requested_plan.get_page_elements_cpus_per_actor(),
+                num_cpus=1.0,
                 num_gpus=self._requested_plan.get_page_elements_gpus_per_actor(),
                 compute=rd.ActorPoolStrategy(
                     initial_size=self._requested_plan.get_page_elements_initial_actors(),
