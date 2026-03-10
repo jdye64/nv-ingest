@@ -238,7 +238,10 @@ class BatchIngestor(Ingestor):
         self._available_gpu_count = self._cluster_resources.available_gpu_count()
         logger.info(self._cluster_resources)
 
-        # 2. Resolve requested plan for the Ray DAG that will be built
+        # 2. Resolve initial requested plan for the Ray DAG that will be built.
+        #    The plan is re-resolved when stage methods (.extract(), .embed()) discover
+        #    remote endpoint URLs, so the plan's GPU values reflect remote services.
+        self._known_endpoint_urls: Dict[str, str] = {}
         self._requested_plan = resolve_requested_plan(cluster_resources=self._cluster_resources)
         logger.info(self._requested_plan)
 
@@ -253,6 +256,29 @@ class BatchIngestor(Ingestor):
         self._extract_txt_kwargs: Dict[str, Any] = {}  # noqa: F821
         self._extract_html_kwargs: Dict[str, Any] = {}  # noqa: F821
         self._use_nemotron_parse_only: bool = False
+
+    def _re_resolve_plan(self, **endpoint_urls: Optional[str]) -> None:
+        """Re-resolve the requested plan after discovering remote endpoint URLs.
+
+        Each stage method (.extract(), .embed()) calls this when it knows which
+        models will hit remote services.  The accumulated endpoint URLs are
+        forwarded to ``resolve_requested_plan`` which sets ``gpus_per_actor=0.0``
+        for any model with a remote endpoint.
+        """
+        changed = False
+        for key, url in endpoint_urls.items():
+            if url and str(url).strip():
+                prev = self._known_endpoint_urls.get(key)
+                if prev != url:
+                    self._known_endpoint_urls[key] = url
+                    changed = True
+        if not changed:
+            return
+        self._requested_plan = resolve_requested_plan(
+            cluster_resources=self._cluster_resources,
+            **self._known_endpoint_urls,
+        )
+        logger.info("Re-resolved plan with remote endpoints: %s", self._requested_plan)
 
     def files(self, documents: Union[str, List[str]]) -> "BatchIngestor":
         """
@@ -392,6 +418,21 @@ class BatchIngestor(Ingestor):
 
         Shared by ``extract()`` (PDF) and ``extract_image_files()`` (standalone images).
         """
+        # Resolve endpoint URLs used by detection stages and re-resolve the
+        # requested plan so that gpus_per_actor values already reflect remote
+        # services.  After this call every ``self._requested_plan.get_*_gpus_per_actor()``
+        # returns 0.0 for stages backed by a remote NIM.
+        page_elements_invoke_url = kwargs.get("page_elements_invoke_url", kwargs.get("invoke_url"))
+        ocr_invoke_url = kwargs.get("ocr_invoke_url", kwargs.get("invoke_url"))
+        nemotron_parse_invoke_url = kwargs.get(
+            "nemotron_parse_invoke_url", kwargs.get("ocr_invoke_url", kwargs.get("invoke_url"))
+        )
+        self._re_resolve_plan(
+            page_elements_endpoint_url=page_elements_invoke_url,
+            ocr_endpoint_url=ocr_invoke_url,
+            nemotron_parse_endpoint_url=nemotron_parse_invoke_url,
+        )
+
         # Stage-specific kwargs: upstream PDF stages accept many options (dpi, extract_*),
         # but downstream detect_* Ray actors accept only a small set. Passing the whole
         # dict can cause TypeErrors (e.g. unexpected `method=`).
@@ -407,7 +448,6 @@ class BatchIngestor(Ingestor):
             "remote_max_429_retries",
         }
         detect_kwargs = {k: kwargs[k] for k in detect_passthrough_keys if k in kwargs}
-        page_elements_invoke_url = kwargs.get("page_elements_invoke_url", kwargs.get("invoke_url"))
         if page_elements_invoke_url:
             detect_kwargs["invoke_url"] = page_elements_invoke_url
         if "page_elements_request_timeout_s" in kwargs:
@@ -443,19 +483,13 @@ class BatchIngestor(Ingestor):
             ):
                 if k in kwargs:
                     parse_flags[k] = kwargs[k]
-            parse_invoke_url = kwargs.get(
-                "nemotron_parse_invoke_url", kwargs.get("ocr_invoke_url", kwargs.get("invoke_url"))
-            )
-            if parse_invoke_url:
-                parse_flags["invoke_url"] = parse_invoke_url
-            nemotron_parse_num_gpus = (
-                0.0 if parse_invoke_url else self._requested_plan.get_nemotron_parse_gpus_per_actor()
-            )
+            if nemotron_parse_invoke_url:
+                parse_flags["invoke_url"] = nemotron_parse_invoke_url
             self._rd_dataset = self._rd_dataset.map_batches(
                 NemotronParseActor,
                 batch_size=self._requested_plan.get_nemotron_parse_batch_size(),
                 batch_format="pandas",
-                num_gpus=nemotron_parse_num_gpus,
+                num_gpus=self._requested_plan.get_nemotron_parse_gpus_per_actor(),
                 compute=rd.ActorPoolStrategy(
                     initial_size=self._requested_plan.get_nemotron_parse_initial_actors(),
                     min_size=self._requested_plan.get_nemotron_parse_min_actors(),
@@ -470,14 +504,11 @@ class BatchIngestor(Ingestor):
             )
 
             # Page-element detection with a GPU actor pool.
-            page_elements_num_gpus = (
-                0.0 if page_elements_invoke_url else self._requested_plan.get_page_elements_gpus_per_actor()
-            )
             self._rd_dataset = self._rd_dataset.map_batches(
                 PageElementDetectionActor,
                 batch_size=self._requested_plan.get_page_elements_batch_size(),
                 batch_format="pandas",
-                num_gpus=page_elements_num_gpus,
+                num_gpus=self._requested_plan.get_page_elements_gpus_per_actor(),
                 compute=rd.ActorPoolStrategy(
                     initial_size=self._requested_plan.get_page_elements_initial_actors(),
                     min_size=self._requested_plan.get_page_elements_min_actors(),
@@ -552,7 +583,6 @@ class BatchIngestor(Ingestor):
                 ts_invoke_url = kwargs.get("table_structure_invoke_url")
                 if ts_invoke_url:
                     ts_ocr_flags["table_structure_invoke_url"] = ts_invoke_url
-                ocr_invoke_url = kwargs.get("ocr_invoke_url", kwargs.get("invoke_url"))
                 if ocr_invoke_url:
                     ts_ocr_flags["ocr_invoke_url"] = ocr_invoke_url
                 if "ocr_request_timeout_s" in kwargs:
@@ -595,7 +625,6 @@ class BatchIngestor(Ingestor):
             ):
                 if k in kwargs:
                     ocr_flags[k] = kwargs[k]
-            ocr_invoke_url = kwargs.get("ocr_invoke_url", kwargs.get("invoke_url"))
             if ocr_invoke_url:
                 ocr_flags["invoke_url"] = ocr_invoke_url
             if "ocr_request_timeout_s" in kwargs:
@@ -606,12 +635,11 @@ class BatchIngestor(Ingestor):
             ocr_flags["inference_batch_size"] = self._requested_plan.get_ocr_batch_size()
 
             if ocr_flags:
-                ocr_num_gpus = 0.0 if ocr_invoke_url else self._requested_plan.get_ocr_gpus_per_actor()
                 self._rd_dataset = self._rd_dataset.map_batches(
                     OCRActor,
                     batch_size=self._requested_plan.get_ocr_batch_size(),
                     batch_format="pandas",
-                    num_gpus=ocr_num_gpus,
+                    num_gpus=self._requested_plan.get_ocr_gpus_per_actor(),
                     compute=rd.ActorPoolStrategy(
                         initial_size=self._requested_plan.get_ocr_initial_actors(),
                         min_size=self._requested_plan.get_ocr_min_actors(),
@@ -824,18 +852,16 @@ class BatchIngestor(Ingestor):
             num_cpus=1,
         )
 
-        # When using a remote NIM endpoint, no GPU is needed for embedding.
-        endpoint = (kwargs.get("embedding_endpoint") or kwargs.get("embed_invoke_url") or "").strip()
-        if endpoint:
-            embed_actor_num_gpus = 0  # We do not need GPU resources if invoking a remote NIM endpoint
-        else:
-            embed_actor_num_gpus = self._requested_plan.get_embed_gpus_per_actor()
+        # Re-resolve the plan so that embed_gpus_per_actor reflects a remote NIM.
+        embed_endpoint = (kwargs.get("embedding_endpoint") or kwargs.get("embed_invoke_url") or "").strip()
+        if embed_endpoint:
+            self._re_resolve_plan(embed_endpoint_url=embed_endpoint)
 
         self._rd_dataset = self._rd_dataset.map_batches(
             _BatchEmbedActor,
             batch_size=self._requested_plan.get_embed_batch_size(),
             batch_format="pandas",
-            num_gpus=embed_actor_num_gpus,  # pulled from if statement above
+            num_gpus=self._requested_plan.get_embed_gpus_per_actor(),
             compute=rd.ActorPoolStrategy(
                 initial_size=self._requested_plan.get_embed_initial_actors(),
                 min_size=self._requested_plan.get_embed_min_actors(),

@@ -382,7 +382,7 @@ def graphic_elements_ocr_page_elements(
         raise ValueError("A local `ocr_model` is required when `ocr_invoke_url` is not set.")
 
     label_names = _labels_from_model(graphic_elements_model) if graphic_elements_model is not None else []
-    inference_batch_size = int(kwargs.get("inference_batch_size", 8))
+    inference_batch_size = max(1, int(kwargs.get("inference_batch_size", 8)))
 
     # Per-row accumulators.
     all_chart: List[List[Dict[str, Any]]] = []

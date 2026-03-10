@@ -138,7 +138,8 @@ def invoke_image_inference_batches(
     if n == 0:
         return []
 
-    ranges = _chunk_ranges(n, int(max_batch_size))
+    effective_batch_size = max(1, int(max_batch_size))
+    ranges = _chunk_ranges(n, effective_batch_size)
     flattened: List[Optional[Any]] = [None] * n
 
     def _invoke_one_batch(start: int, end: int, endpoint_url: str) -> Tuple[int, int, List[Any]]:

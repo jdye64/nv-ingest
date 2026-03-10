@@ -285,7 +285,7 @@ def table_structure_ocr_page_elements(
     label_names = _labels_from_model(table_structure_model) if table_structure_model is not None else []
     if not label_names:
         label_names = _DEFAULT_TABLE_STRUCTURE_LABELS
-    inference_batch_size = int(kwargs.get("inference_batch_size", 8))
+    inference_batch_size = max(1, int(kwargs.get("inference_batch_size", 8)))
 
     # Per-row accumulators.
     all_table: List[List[Dict[str, Any]]] = []
