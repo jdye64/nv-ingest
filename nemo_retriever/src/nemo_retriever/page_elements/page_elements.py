@@ -394,7 +394,8 @@ def _run_local_chunk(
     batch = model.preprocess_batch(images)
 
     with torch.inference_mode():
-        preds = model(batch, orig_shapes)
+        with torch.autocast(device_type="cuda"):
+            preds = model(batch, orig_shapes)
 
     if isinstance(preds, dict):
         preds = [preds]
