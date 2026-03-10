@@ -293,12 +293,15 @@ def table_structure_ocr_page_elements(
 
     t0_total = time.perf_counter()
 
-    for row in batch_df.itertuples(index=False):
-        table_items: List[Dict[str, Any]] = []
-        row_error: Any = None
+    # ── Phase 1: Collect all crops across rows for batched remote calls ──
+    _row_crops: List[List[tuple]] = []
+    _all_remote_b64s: List[str] = []
+    _row_remote_slices: List[tuple] = []
+    _row_skip: List[bool] = []
+    _row_collect_errors: List[Optional[BaseException]] = []
 
+    for row in batch_df.itertuples(index=False):
         try:
-            # --- get page elements detections ---
             pe = getattr(row, "page_elements_v3", None)
             dets: List[Dict[str, Any]] = []
             if isinstance(pe, dict):
@@ -306,36 +309,52 @@ def table_structure_ocr_page_elements(
             if not isinstance(dets, list):
                 dets = []
 
-            # --- get page image ---
             page_image = getattr(row, "page_image", None) or {}
             page_image_b64 = page_image.get("image_b64") if isinstance(page_image, dict) else None
 
             if not isinstance(page_image_b64, str) or not page_image_b64:
-                all_table.append(table_items)
-                all_meta.append({"timing": None, "error": None})
+                _row_crops.append([])
+                _row_remote_slices.append((0, 0))
+                _row_skip.append(True)
+                _row_collect_errors.append(None)
                 continue
 
-            # --- Pass 1: Collect table crops ---
             crops = _crop_all_from_page(page_image_b64, dets, {"table"})
-
             if not crops:
-                all_table.append(table_items)
-                all_meta.append({"timing": None, "error": None})
+                _row_crops.append([])
+                _row_remote_slices.append((0, 0))
+                _row_skip.append(True)
+                _row_collect_errors.append(None)
                 continue
 
-            # Pre-compute base64 encodings once for remote paths.
-            crop_b64s = (
-                [_np_rgb_to_b64_png(crop_array) for _, _, crop_array in crops]
-                if (use_remote_ts or use_remote_ocr)
-                else []
-            )
+            _row_crops.append(crops)
+            _row_skip.append(False)
+            _row_collect_errors.append(None)
 
-            # --- Pass 2: Run table-structure on all crops ---
-            structure_results: List[List[Dict[str, Any]]] = []
+            if use_remote_ts or use_remote_ocr:
+                start = len(_all_remote_b64s)
+                for _, _, crop_array in crops:
+                    _all_remote_b64s.append(_np_rgb_to_b64_png(crop_array))
+                _row_remote_slices.append((start, len(_all_remote_b64s)))
+            else:
+                _row_remote_slices.append((0, 0))
+        except BaseException as e:
+            _row_crops.append([])
+            _row_remote_slices.append((0, 0))
+            _row_skip.append(False)
+            _row_collect_errors.append(e)
+
+    # ── Phase 2: Batched remote calls (one request covers all rows) ──
+    _all_ts_responses: List[Any] = []
+    _all_ocr_responses: List[Any] = []
+    _batch_remote_error: Optional[BaseException] = None
+
+    if _all_remote_b64s:
+        try:
             if use_remote_ts:
-                response_items = invoke_image_inference_batches(
+                _all_ts_responses = invoke_image_inference_batches(
                     invoke_url=ts_url,
-                    image_b64_list=crop_b64s,
+                    image_b64_list=_all_remote_b64s,
                     api_key=api_key or None,
                     timeout_s=float(request_timeout_s),
                     max_batch_size=inference_batch_size,
@@ -343,17 +362,63 @@ def table_structure_ocr_page_elements(
                     max_retries=int(retry.remote_max_retries),
                     max_429_retries=int(retry.remote_max_429_retries),
                 )
-                if len(response_items) != len(crops):
-                    raise RuntimeError(f"Expected {len(crops)} table-structure responses, got {len(response_items)}")
-                for resp in response_items:
-                    # Try NIM bounding_boxes format first, fall back to generic parser.
+                if len(_all_ts_responses) != len(_all_remote_b64s):
+                    raise RuntimeError(
+                        f"Expected {len(_all_remote_b64s)} table-structure responses, got {len(_all_ts_responses)}"
+                    )
+            if use_remote_ocr:
+                _all_ocr_responses = invoke_image_inference_batches(
+                    invoke_url=ocr_url,
+                    image_b64_list=_all_remote_b64s,
+                    api_key=api_key or None,
+                    timeout_s=float(request_timeout_s),
+                    max_batch_size=inference_batch_size,
+                    max_pool_workers=int(retry.remote_max_pool_workers),
+                    max_retries=int(retry.remote_max_retries),
+                    max_429_retries=int(retry.remote_max_429_retries),
+                )
+                if len(_all_ocr_responses) != len(_all_remote_b64s):
+                    raise RuntimeError(f"Expected {len(_all_remote_b64s)} OCR responses, got {len(_all_ocr_responses)}")
+        except BaseException as e:
+            _batch_remote_error = e
+
+    # ── Phase 3: Process results per row ──
+    for row_idx in range(len(batch_df)):
+        table_items: List[Dict[str, Any]] = []
+        row_error: Any = None
+
+        if _row_skip[row_idx]:
+            all_table.append(table_items)
+            all_meta.append({"timing": None, "error": None})
+            continue
+
+        collect_err = _row_collect_errors[row_idx]
+        if collect_err is not None or _batch_remote_error is not None:
+            e = collect_err or _batch_remote_error
+            print(f"Warning: table-structure+OCR failed: {type(e).__name__}: {e}")
+            row_error = {
+                "stage": "table_structure_ocr_page_elements",
+                "type": e.__class__.__name__,
+                "message": str(e),
+                "traceback": "".join(traceback.format_exception(type(e), e, e.__traceback__)),
+            }
+            all_table.append(table_items)
+            all_meta.append({"timing": None, "error": row_error})
+            continue
+
+        crops = _row_crops[row_idx]
+        r_start, r_end = _row_remote_slices[row_idx]
+
+        try:
+            structure_results: List[List[Dict[str, Any]]] = []
+            if use_remote_ts:
+                for resp in _all_ts_responses[r_start:r_end]:
                     parsed = _parse_nim_bounding_boxes(resp)
                     if not parsed:
                         pred_item = _extract_remote_pred_item(resp)
                         parsed = _prediction_to_detections(pred_item, label_names=label_names)
                     structure_results.append(parsed)
             else:
-                # Local batched inference.
                 for _, _, crop_array in crops:
                     chw = torch.from_numpy(crop_array).permute(2, 0, 1).contiguous().to(dtype=torch.float32)
                     h, w = crop_array.shape[:2]
@@ -368,42 +433,25 @@ def table_structure_ocr_page_elements(
                     dets = _prediction_to_detections(pred, label_names=label_names)
                     structure_results.append(dets)
 
-            # --- Pass 3: Run OCR on all crops ---
             ocr_results: List[Any] = []
             if use_remote_ocr:
-                ocr_response_items = invoke_image_inference_batches(
-                    invoke_url=ocr_url,
-                    image_b64_list=crop_b64s,
-                    api_key=api_key or None,
-                    timeout_s=float(request_timeout_s),
-                    max_batch_size=inference_batch_size,
-                    max_pool_workers=int(retry.remote_max_pool_workers),
-                    max_retries=int(retry.remote_max_retries),
-                    max_429_retries=int(retry.remote_max_429_retries),
-                )
-                if len(ocr_response_items) != len(crops):
-                    raise RuntimeError(f"Expected {len(crops)} OCR responses, got {len(ocr_response_items)}")
-                for resp in ocr_response_items:
+                for resp in _all_ocr_responses[r_start:r_end]:
                     ocr_results.append(_extract_remote_ocr_item(resp))
             else:
                 for _, _, crop_array in crops:
                     ocr_results.append(ocr_model.invoke(crop_array, merge_level="word"))
 
-            # --- Pass 4: Match and build markdown per crop ---
             for crop_i, (label_name, bbox, crop_array) in enumerate(crops):
                 crop_hw = (int(crop_array.shape[0]), int(crop_array.shape[1]))
                 structure_dets = structure_results[crop_i]
                 ocr_preds = ocr_results[crop_i]
 
-                # Try structure-aware markdown first.
                 markdown = join_table_structure_and_ocr_output(structure_dets, ocr_preds, crop_hw)
 
-                # Fallback: if no cells were detected, use OCR-only pseudo-markdown.
                 if not markdown:
                     blocks = _parse_ocr_result(ocr_preds)
                     markdown = _blocks_to_pseudo_markdown(blocks)
                     if not markdown:
-                        # Last resort: plain text.
                         from nemo_retriever.ocr.ocr import _blocks_to_text
 
                         markdown = _blocks_to_text(blocks)

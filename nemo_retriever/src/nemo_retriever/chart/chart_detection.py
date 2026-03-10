@@ -390,12 +390,15 @@ def graphic_elements_ocr_page_elements(
 
     t0_total = time.perf_counter()
 
-    for row in batch_df.itertuples(index=False):
-        chart_items: List[Dict[str, Any]] = []
-        row_error: Any = None
+    # ── Phase 1: Collect all crops across rows for batched remote calls ──
+    _row_crops: List[List[Tuple[str, List[float], Any]]] = []
+    _all_remote_b64s: List[str] = []
+    _row_remote_slices: List[Tuple[int, int]] = []
+    _row_skip: List[bool] = []
+    _row_collect_errors: List[Optional[BaseException]] = []
 
+    for row in batch_df.itertuples(index=False):
         try:
-            # --- get page elements detections ---
             pe = getattr(row, "page_elements_v3", None)
             dets: List[Dict[str, Any]] = []
             if isinstance(pe, dict):
@@ -403,36 +406,52 @@ def graphic_elements_ocr_page_elements(
             if not isinstance(dets, list):
                 dets = []
 
-            # --- get page image ---
             page_image = getattr(row, "page_image", None) or {}
             page_image_b64 = page_image.get("image_b64") if isinstance(page_image, dict) else None
 
             if not isinstance(page_image_b64, str) or not page_image_b64:
-                all_chart.append(chart_items)
-                all_meta.append({"timing": None, "error": None})
+                _row_crops.append([])
+                _row_remote_slices.append((0, 0))
+                _row_skip.append(True)
+                _row_collect_errors.append(None)
                 continue
 
-            # --- Crop all chart detections ---
             crops = _crop_all_from_page(page_image_b64, dets, {"chart"})
-
             if not crops:
-                all_chart.append(chart_items)
-                all_meta.append({"timing": None, "error": None})
+                _row_crops.append([])
+                _row_remote_slices.append((0, 0))
+                _row_skip.append(True)
+                _row_collect_errors.append(None)
                 continue
 
-            # Pre-compute base64 encodings once for remote paths.
-            crop_b64s = (
-                [_np_rgb_to_b64_png(crop_array) for _, _, crop_array in crops]
-                if (use_remote_ge or use_remote_ocr)
-                else []
-            )
+            _row_crops.append(crops)
+            _row_skip.append(False)
+            _row_collect_errors.append(None)
 
-            # --- Run graphic-elements on all crops ---
-            ge_results: List[List[Dict[str, Any]]] = []
+            if use_remote_ge or use_remote_ocr:
+                start = len(_all_remote_b64s)
+                for _, _, crop_array in crops:
+                    _all_remote_b64s.append(_np_rgb_to_b64_png(crop_array))
+                _row_remote_slices.append((start, len(_all_remote_b64s)))
+            else:
+                _row_remote_slices.append((0, 0))
+        except BaseException as e:
+            _row_crops.append([])
+            _row_remote_slices.append((0, 0))
+            _row_skip.append(False)
+            _row_collect_errors.append(e)
+
+    # ── Phase 2: Batched remote calls (one request covers all rows) ──
+    _all_ge_responses: List[Any] = []
+    _all_ocr_responses: List[Any] = []
+    _batch_remote_error: Optional[BaseException] = None
+
+    if _all_remote_b64s:
+        try:
             if use_remote_ge:
-                response_items = invoke_image_inference_batches(
+                _all_ge_responses = invoke_image_inference_batches(
                     invoke_url=ge_url,
-                    image_b64_list=crop_b64s,
+                    image_b64_list=_all_remote_b64s,
                     api_key=api_key or None,
                     timeout_s=float(request_timeout_s),
                     max_batch_size=inference_batch_size,
@@ -440,12 +459,57 @@ def graphic_elements_ocr_page_elements(
                     max_retries=int(retry.remote_max_retries),
                     max_429_retries=int(retry.remote_max_429_retries),
                 )
-                if len(response_items) != len(crops):
-                    raise RuntimeError(f"Expected {len(crops)} GE responses, got {len(response_items)}")
-                for resp in response_items:
+                if len(_all_ge_responses) != len(_all_remote_b64s):
+                    raise RuntimeError(f"Expected {len(_all_remote_b64s)} GE responses, got {len(_all_ge_responses)}")
+            if use_remote_ocr:
+                _all_ocr_responses = invoke_image_inference_batches(
+                    invoke_url=ocr_url,
+                    image_b64_list=_all_remote_b64s,
+                    api_key=api_key or None,
+                    timeout_s=float(request_timeout_s),
+                    max_batch_size=inference_batch_size,
+                    max_pool_workers=int(retry.remote_max_pool_workers),
+                    max_retries=int(retry.remote_max_retries),
+                    max_429_retries=int(retry.remote_max_429_retries),
+                )
+                if len(_all_ocr_responses) != len(_all_remote_b64s):
+                    raise RuntimeError(f"Expected {len(_all_remote_b64s)} OCR responses, got {len(_all_ocr_responses)}")
+        except BaseException as e:
+            _batch_remote_error = e
+
+    # ── Phase 3: Process results per row ──
+    for row_idx in range(len(batch_df)):
+        chart_items: List[Dict[str, Any]] = []
+        row_error: Any = None
+
+        if _row_skip[row_idx]:
+            all_chart.append(chart_items)
+            all_meta.append({"timing": None, "error": None})
+            continue
+
+        collect_err = _row_collect_errors[row_idx]
+        if collect_err is not None or _batch_remote_error is not None:
+            e = collect_err or _batch_remote_error
+            print(f"Warning: graphic-elements+OCR failed: {type(e).__name__}: {e}")
+            row_error = {
+                "stage": "graphic_elements_ocr_page_elements",
+                "type": e.__class__.__name__,
+                "message": str(e),
+                "traceback": "".join(traceback.format_exception(type(e), e, e.__traceback__)),
+            }
+            all_chart.append(chart_items)
+            all_meta.append({"timing": None, "error": row_error})
+            continue
+
+        crops = _row_crops[row_idx]
+        r_start, r_end = _row_remote_slices[row_idx]
+
+        try:
+            ge_results: List[List[Dict[str, Any]]] = []
+            if use_remote_ge:
+                for resp in _all_ge_responses[r_start:r_end]:
                     ge_results.append(_remote_response_to_ge_detections(resp))
             else:
-                # Local batched inference.
                 for _, _, crop_array in crops:
                     chw = torch.from_numpy(crop_array).permute(2, 0, 1).contiguous().to(dtype=torch.float32)
                     h, w = crop_array.shape[:2]
@@ -460,37 +524,21 @@ def graphic_elements_ocr_page_elements(
                     ge_dets = _prediction_to_detections(pred, label_names=label_names)
                     ge_results.append(ge_dets)
 
-            # --- Run OCR on all crops ---
             ocr_results: List[Any] = []
             if use_remote_ocr:
-                ocr_response_items = invoke_image_inference_batches(
-                    invoke_url=ocr_url,
-                    image_b64_list=crop_b64s,
-                    api_key=api_key or None,
-                    timeout_s=float(request_timeout_s),
-                    max_batch_size=inference_batch_size,
-                    max_pool_workers=int(retry.remote_max_pool_workers),
-                    max_retries=int(retry.remote_max_retries),
-                    max_429_retries=int(retry.remote_max_429_retries),
-                )
-                if len(ocr_response_items) != len(crops):
-                    raise RuntimeError(f"Expected {len(crops)} OCR responses, got {len(ocr_response_items)}")
-                for resp in ocr_response_items:
+                for resp in _all_ocr_responses[r_start:r_end]:
                     ocr_results.append(_extract_remote_ocr_item(resp))
             else:
                 for _, _, crop_array in crops:
                     ocr_results.append(ocr_model.invoke(crop_array, merge_level="word"))
 
-            # --- Join and build text per crop ---
             for crop_i, (label_name, bbox, crop_array) in enumerate(crops):
                 crop_hw = (int(crop_array.shape[0]), int(crop_array.shape[1]))
                 ge_dets = ge_results[crop_i]
                 ocr_preds = ocr_results[crop_i]
 
-                # Try structure-aware join first.
                 text = join_graphic_elements_and_ocr_output(ge_dets, ocr_preds, crop_hw)
 
-                # Fallback: if no GE detections matched, use OCR-only text.
                 if not text:
                     blocks = _parse_ocr_result(ocr_preds)
                     text = _blocks_to_text(blocks)
