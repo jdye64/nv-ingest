@@ -238,12 +238,18 @@ class BatchIngestor(Ingestor):
         self._available_gpu_count = self._cluster_resources.available_gpu_count()
         logger.info(self._cluster_resources)
 
-        # 2. Resolve initial requested plan for the Ray DAG that will be built.
-        #    The plan is re-resolved when stage methods (.extract(), .embed()) discover
-        #    remote endpoint URLs, so the plan's GPU values reflect remote services.
-        self._known_endpoint_urls: Dict[str, str] = {}
+        # 2. Resolve the requested plan for the Ray DAG.  The plan is resolved
+        #    with all endpoint URLs once they are known (in _append_detection_stages
+        #    and embed()) so that GPU values correctly reflect remote services.
         self._requested_plan = resolve_requested_plan(cluster_resources=self._cluster_resources)
         logger.info(self._requested_plan)
+
+        # Endpoint URLs discovered by stage methods, stored so that later
+        # calls to resolve_requested_plan include every known endpoint.
+        self._page_elements_endpoint_url: Optional[str] = None
+        self._ocr_endpoint_url: Optional[str] = None
+        self._nemotron_parse_endpoint_url: Optional[str] = None
+        self._embed_endpoint_url: Optional[str] = None
 
         # Builder-style task configuration recorded for later execution.
         # Keep backwards-compatibility with code that inspects `Ingestor._documents`
@@ -256,29 +262,6 @@ class BatchIngestor(Ingestor):
         self._extract_txt_kwargs: Dict[str, Any] = {}  # noqa: F821
         self._extract_html_kwargs: Dict[str, Any] = {}  # noqa: F821
         self._use_nemotron_parse_only: bool = False
-
-    def _re_resolve_plan(self, **endpoint_urls: Optional[str]) -> None:
-        """Re-resolve the requested plan after discovering remote endpoint URLs.
-
-        Each stage method (.extract(), .embed()) calls this when it knows which
-        models will hit remote services.  The accumulated endpoint URLs are
-        forwarded to ``resolve_requested_plan`` which sets ``gpus_per_actor=0.0``
-        for any model with a remote endpoint.
-        """
-        changed = False
-        for key, url in endpoint_urls.items():
-            if url and str(url).strip():
-                prev = self._known_endpoint_urls.get(key)
-                if prev != url:
-                    self._known_endpoint_urls[key] = url
-                    changed = True
-        if not changed:
-            return
-        self._requested_plan = resolve_requested_plan(
-            cluster_resources=self._cluster_resources,
-            **self._known_endpoint_urls,
-        )
-        logger.info("Re-resolved plan with remote endpoints: %s", self._requested_plan)
 
     def files(self, documents: Union[str, List[str]]) -> "BatchIngestor":
         """
@@ -418,20 +401,26 @@ class BatchIngestor(Ingestor):
 
         Shared by ``extract()`` (PDF) and ``extract_image_files()`` (standalone images).
         """
-        # Resolve endpoint URLs used by detection stages and re-resolve the
-        # requested plan so that gpus_per_actor values already reflect remote
-        # services.  After this call every ``self._requested_plan.get_*_gpus_per_actor()``
+        # Resolve endpoint URLs used by detection stages and resolve the
+        # requested plan so that gpus_per_actor values reflect remote services.
+        # After this call every ``self._requested_plan.get_*_gpus_per_actor()``
         # returns 0.0 for stages backed by a remote NIM.
         page_elements_invoke_url = kwargs.get("page_elements_invoke_url", kwargs.get("invoke_url"))
         ocr_invoke_url = kwargs.get("ocr_invoke_url", kwargs.get("invoke_url"))
         nemotron_parse_invoke_url = kwargs.get(
             "nemotron_parse_invoke_url", kwargs.get("ocr_invoke_url", kwargs.get("invoke_url"))
         )
-        self._re_resolve_plan(
-            page_elements_endpoint_url=page_elements_invoke_url,
-            ocr_endpoint_url=ocr_invoke_url,
-            nemotron_parse_endpoint_url=nemotron_parse_invoke_url,
+        self._page_elements_endpoint_url = page_elements_invoke_url
+        self._ocr_endpoint_url = ocr_invoke_url
+        self._nemotron_parse_endpoint_url = nemotron_parse_invoke_url
+        self._requested_plan = resolve_requested_plan(
+            cluster_resources=self._cluster_resources,
+            page_elements_endpoint_url=self._page_elements_endpoint_url,
+            ocr_endpoint_url=self._ocr_endpoint_url,
+            nemotron_parse_endpoint_url=self._nemotron_parse_endpoint_url,
+            embed_endpoint_url=self._embed_endpoint_url,
         )
+        logger.info(self._requested_plan)
 
         # Stage-specific kwargs: upstream PDF stages accept many options (dpi, extract_*),
         # but downstream detect_* Ray actors accept only a small set. Passing the whole
@@ -852,10 +841,18 @@ class BatchIngestor(Ingestor):
             num_cpus=1,
         )
 
-        # Re-resolve the plan so that embed_gpus_per_actor reflects a remote NIM.
+        # Resolve the plan with all known endpoints so embed_gpus_per_actor
+        # reflects a remote NIM (0.0 GPUs when hitting a remote service).
         embed_endpoint = (kwargs.get("embedding_endpoint") or kwargs.get("embed_invoke_url") or "").strip()
-        if embed_endpoint:
-            self._re_resolve_plan(embed_endpoint_url=embed_endpoint)
+        self._embed_endpoint_url = embed_endpoint or None
+        self._requested_plan = resolve_requested_plan(
+            cluster_resources=self._cluster_resources,
+            page_elements_endpoint_url=self._page_elements_endpoint_url,
+            ocr_endpoint_url=self._ocr_endpoint_url,
+            nemotron_parse_endpoint_url=self._nemotron_parse_endpoint_url,
+            embed_endpoint_url=self._embed_endpoint_url,
+        )
+        logger.info(self._requested_plan)
 
         self._rd_dataset = self._rd_dataset.map_batches(
             _BatchEmbedActor,
