@@ -175,6 +175,109 @@ def test_resolve_requested_plan_raises_with_no_gpus() -> None:
         rh.resolve_requested_plan(cluster_resources=_make_cluster(total_gpu=0))
 
 
+def test_resolve_requested_plan_no_gpus_all_remote_ok() -> None:
+    """When every GPU stage has a remote endpoint, 0 GPUs should not raise."""
+    plan = rh.resolve_requested_plan(
+        cluster_resources=_make_cluster(total_gpu=0),
+        embed_endpoint_url="http://embed:8000/v1",
+        nemotron_parse_endpoint_url="http://parse:8000/v1",
+        ocr_endpoint_url="http://ocr:8000/v1",
+        page_elements_endpoint_url="http://yolox:8000/v1",
+    )
+    assert plan.embed_gpus_per_actor == 0.0
+    assert plan.nemotron_parse_gpus_per_actor == 0.0
+    assert plan.ocr_gpus_per_actor == 0.0
+    assert plan.page_elements_gpus_per_actor == 0.0
+
+
+def test_resolve_requested_plan_no_gpus_partial_remote_raises() -> None:
+    """When only some stages have endpoints and no GPUs are available, should raise."""
+    with pytest.raises(ValueError, match="No GPUs available"):
+        rh.resolve_requested_plan(
+            cluster_resources=_make_cluster(total_gpu=0),
+            embed_endpoint_url="http://embed:8000/v1",
+        )
+
+
+# ---------------------------------------------------------------------------
+# resolve_requested_plan — endpoint-based GPU override
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_embed_endpoint_sets_gpu_to_zero() -> None:
+    plan = rh.resolve_requested_plan(
+        cluster_resources=_make_cluster(total_gpu=2),
+        embed_endpoint_url="http://embedding-nim:8000/v1",
+    )
+    assert plan.embed_gpus_per_actor == 0.0
+    # Other stages should keep their defaults
+    assert plan.ocr_gpus_per_actor == rh.OCR_GPUS_PER_ACTOR
+    assert plan.page_elements_gpus_per_actor == rh.PAGE_ELEMENTS_GPUS_PER_ACTOR
+    assert plan.nemotron_parse_gpus_per_actor == rh.NEMOTRON_PARSE_GPUS_PER_ACTOR
+
+
+def test_resolve_ocr_endpoint_sets_gpu_to_zero() -> None:
+    plan = rh.resolve_requested_plan(
+        cluster_resources=_make_cluster(total_gpu=2),
+        ocr_endpoint_url="http://ocr:8000/v1/infer",
+    )
+    assert plan.ocr_gpus_per_actor == 0.0
+    assert plan.embed_gpus_per_actor == rh.EMBED_GPUS_PER_ACTOR
+
+
+def test_resolve_page_elements_endpoint_sets_gpu_to_zero() -> None:
+    plan = rh.resolve_requested_plan(
+        cluster_resources=_make_cluster(total_gpu=2),
+        page_elements_endpoint_url="http://yolox:8000/v1/infer",
+    )
+    assert plan.page_elements_gpus_per_actor == 0.0
+    assert plan.embed_gpus_per_actor == rh.EMBED_GPUS_PER_ACTOR
+
+
+def test_resolve_nemotron_parse_endpoint_sets_gpu_to_zero() -> None:
+    plan = rh.resolve_requested_plan(
+        cluster_resources=_make_cluster(total_gpu=2),
+        nemotron_parse_endpoint_url="http://nemotron:8000/v1",
+    )
+    assert plan.nemotron_parse_gpus_per_actor == 0.0
+    assert plan.ocr_gpus_per_actor == rh.OCR_GPUS_PER_ACTOR
+
+
+def test_resolve_multiple_endpoints_set_gpus_to_zero() -> None:
+    plan = rh.resolve_requested_plan(
+        cluster_resources=_make_cluster(total_gpu=2),
+        embed_endpoint_url="http://embed:8000/v1",
+        ocr_endpoint_url="http://ocr:8000/v1",
+    )
+    assert plan.embed_gpus_per_actor == 0.0
+    assert plan.ocr_gpus_per_actor == 0.0
+    assert plan.page_elements_gpus_per_actor == rh.PAGE_ELEMENTS_GPUS_PER_ACTOR
+    assert plan.nemotron_parse_gpus_per_actor == rh.NEMOTRON_PARSE_GPUS_PER_ACTOR
+
+
+def test_resolve_endpoint_overrides_explicit_gpu_override() -> None:
+    """When an endpoint URL is set, it takes precedence over an explicit GPU override."""
+    plan = rh.resolve_requested_plan(
+        cluster_resources=_make_cluster(total_gpu=2),
+        embed_endpoint_url="http://embed:8000/v1",
+        override_embed_gpus_per_actor=1.0,
+    )
+    assert plan.embed_gpus_per_actor == 0.0
+
+
+def test_resolve_blank_endpoint_does_not_override() -> None:
+    """Empty/whitespace-only endpoint URLs should not trigger the override."""
+    plan = rh.resolve_requested_plan(
+        cluster_resources=_make_cluster(total_gpu=2),
+        embed_endpoint_url="   ",
+        ocr_endpoint_url="",
+        page_elements_endpoint_url=None,
+    )
+    assert plan.embed_gpus_per_actor == rh.EMBED_GPUS_PER_ACTOR
+    assert plan.ocr_gpus_per_actor == rh.OCR_GPUS_PER_ACTOR
+    assert plan.page_elements_gpus_per_actor == rh.PAGE_ELEMENTS_GPUS_PER_ACTOR
+
+
 # ---------------------------------------------------------------------------
 # RequestedPlan — getters and model behavior
 # ---------------------------------------------------------------------------

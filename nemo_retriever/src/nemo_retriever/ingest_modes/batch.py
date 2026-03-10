@@ -448,11 +448,14 @@ class BatchIngestor(Ingestor):
             )
             if parse_invoke_url:
                 parse_flags["invoke_url"] = parse_invoke_url
+            nemotron_parse_num_gpus = (
+                0.0 if parse_invoke_url else self._requested_plan.get_nemotron_parse_gpus_per_actor()
+            )
             self._rd_dataset = self._rd_dataset.map_batches(
                 NemotronParseActor,
                 batch_size=self._requested_plan.get_nemotron_parse_batch_size(),
                 batch_format="pandas",
-                num_gpus=self._requested_plan.get_nemotron_parse_gpus_per_actor(),
+                num_gpus=nemotron_parse_num_gpus,
                 compute=rd.ActorPoolStrategy(
                     initial_size=self._requested_plan.get_nemotron_parse_initial_actors(),
                     min_size=self._requested_plan.get_nemotron_parse_min_actors(),
@@ -467,11 +470,14 @@ class BatchIngestor(Ingestor):
             )
 
             # Page-element detection with a GPU actor pool.
+            page_elements_num_gpus = (
+                0.0 if page_elements_invoke_url else self._requested_plan.get_page_elements_gpus_per_actor()
+            )
             self._rd_dataset = self._rd_dataset.map_batches(
                 PageElementDetectionActor,
                 batch_size=self._requested_plan.get_page_elements_batch_size(),
                 batch_format="pandas",
-                num_gpus=self._requested_plan.get_page_elements_gpus_per_actor(),
+                num_gpus=page_elements_num_gpus,
                 compute=rd.ActorPoolStrategy(
                     initial_size=self._requested_plan.get_page_elements_initial_actors(),
                     min_size=self._requested_plan.get_page_elements_min_actors(),
@@ -600,11 +606,12 @@ class BatchIngestor(Ingestor):
             ocr_flags["inference_batch_size"] = self._requested_plan.get_ocr_batch_size()
 
             if ocr_flags:
+                ocr_num_gpus = 0.0 if ocr_invoke_url else self._requested_plan.get_ocr_gpus_per_actor()
                 self._rd_dataset = self._rd_dataset.map_batches(
                     OCRActor,
                     batch_size=self._requested_plan.get_ocr_batch_size(),
                     batch_format="pandas",
-                    num_gpus=self._requested_plan.get_ocr_gpus_per_actor(),
+                    num_gpus=ocr_num_gpus,
                     compute=rd.ActorPoolStrategy(
                         initial_size=self._requested_plan.get_ocr_initial_actors(),
                         min_size=self._requested_plan.get_ocr_min_actors(),

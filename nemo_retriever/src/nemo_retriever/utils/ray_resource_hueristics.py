@@ -385,9 +385,18 @@ class RequestedPlan(BaseModel):
         return not self.__eq__(other)
 
 
+def _has_endpoint(url: Optional[str]) -> bool:
+    """Return True when *url* is a non-empty, non-whitespace string."""
+    return bool(url and str(url).strip())
+
+
 def resolve_requested_plan(
     *,
     cluster_resources: ClusterResources,
+    embed_endpoint_url: Optional[str] = None,
+    nemotron_parse_endpoint_url: Optional[str] = None,
+    ocr_endpoint_url: Optional[str] = None,
+    page_elements_endpoint_url: Optional[str] = None,
     override_embed_initial_actors: Optional[int] = None,
     override_embed_min_actors: Optional[int] = None,
     override_embed_max_actors: Optional[int] = None,
@@ -414,27 +423,44 @@ def resolve_requested_plan(
 ) -> RequestedPlan:
     available_gpu_count = max(0, int(cluster_resources.available_gpu_count()))
 
-    if available_gpu_count == 0:
+    embed_is_remote = _has_endpoint(embed_endpoint_url)
+    nemotron_parse_is_remote = _has_endpoint(nemotron_parse_endpoint_url)
+    ocr_is_remote = _has_endpoint(ocr_endpoint_url)
+    page_elements_is_remote = _has_endpoint(page_elements_endpoint_url)
+    all_gpu_stages_remote = embed_is_remote and nemotron_parse_is_remote and ocr_is_remote and page_elements_is_remote
+
+    if available_gpu_count == 0 and not all_gpu_stages_remote:
         raise ValueError("No GPUs available")
+
+    for name, url in [
+        ("embed", embed_endpoint_url),
+        ("nemotron_parse", nemotron_parse_endpoint_url),
+        ("ocr", ocr_endpoint_url),
+        ("page_elements", page_elements_endpoint_url),
+    ]:
+        if _has_endpoint(url):
+            logger.info("Remote endpoint configured for %s (%s); requesting 0.0 GPUs for its actors.", name, url)
 
     def _resolve_int(override: Optional[int], default: int, multiply_by_available_num_gpu: bool) -> int:
         if override is not None and override > 0:
             return int(override)
         if multiply_by_available_num_gpu:
-            return int(default * available_gpu_count)
+            return int(default * max(available_gpu_count, 1))
         return int(default)
 
     def _resolve_float(override: Optional[float], default: float, multiply_by_available_num_gpu: bool) -> float:
         if override is not None and override > 0.0:
             return float(override)
         if multiply_by_available_num_gpu:
-            return float(default * available_gpu_count)
+            return float(default * max(available_gpu_count, 1))
         return float(default)
 
     embed_initial_actors = _resolve_int(override_embed_initial_actors, EMBED_INITIAL_ACTORS, True)
     embed_min_actors = _resolve_int(override_embed_min_actors, EMBED_MIN_ACTORS, True)
     embed_max_actors = _resolve_int(override_embed_max_actors, EMBED_MAX_ACTORS, True)
-    embed_gpus_per_actor = _resolve_float(override_embed_gpus_per_actor, EMBED_GPUS_PER_ACTOR, False)
+    embed_gpus_per_actor = (
+        0.0 if embed_is_remote else _resolve_float(override_embed_gpus_per_actor, EMBED_GPUS_PER_ACTOR, False)
+    )  # noqa: E501
     embed_batch_size = _resolve_int(override_embed_batch_size, EMBED_BATCH_SIZE, False)
 
     nemotron_parse_initial_actors = _resolve_int(
@@ -442,15 +468,19 @@ def resolve_requested_plan(
     )
     nemotron_parse_min_actors = _resolve_int(override_nemotron_parse_min_actors, NEMOTRON_PARSE_MIN_ACTORS, True)
     nemotron_parse_max_actors = _resolve_int(override_nemotron_parse_max_actors, NEMOTRON_PARSE_MAX_ACTORS, True)
-    nemotron_parse_gpus_per_actor = _resolve_float(
-        override_nemotron_parse_gpus_per_actor, NEMOTRON_PARSE_GPUS_PER_ACTOR, False
-    )
+    nemotron_parse_gpus_per_actor = (
+        0.0
+        if nemotron_parse_is_remote
+        else _resolve_float(override_nemotron_parse_gpus_per_actor, NEMOTRON_PARSE_GPUS_PER_ACTOR, False)
+    )  # noqa: E501
     nemotron_parse_batch_size = _resolve_int(override_nemotron_parse_batch_size, NEMOTRON_PARSE_BATCH_SIZE, False)
 
     ocr_initial_actors = _resolve_int(override_ocr_initial_actors, OCR_INITIAL_ACTORS, True)
     ocr_min_actors = _resolve_int(override_ocr_min_actors, OCR_MIN_ACTORS, True)
     ocr_max_actors = _resolve_int(override_ocr_max_actors, OCR_MAX_ACTORS, True)
-    ocr_gpus_per_actor = _resolve_float(override_ocr_gpus_per_actor, OCR_GPUS_PER_ACTOR, False)
+    ocr_gpus_per_actor = (
+        0.0 if ocr_is_remote else _resolve_float(override_ocr_gpus_per_actor, OCR_GPUS_PER_ACTOR, False)
+    )  # noqa: E501
     ocr_batch_size = _resolve_int(override_ocr_batch_size, OCR_BATCH_SIZE, False)
 
     page_elements_initial_actors = _resolve_int(
@@ -458,9 +488,11 @@ def resolve_requested_plan(
     )
     page_elements_min_actors = _resolve_int(override_page_elements_min_actors, PAGE_ELEMENTS_MIN_ACTORS, True)
     page_elements_max_actors = _resolve_int(override_page_elements_max_actors, PAGE_ELEMENTS_MAX_ACTORS, True)
-    page_elements_gpus_per_actor = _resolve_float(
-        override_page_elements_gpus_per_actor, PAGE_ELEMENTS_GPUS_PER_ACTOR, False
-    )
+    page_elements_gpus_per_actor = (
+        0.0
+        if page_elements_is_remote
+        else _resolve_float(override_page_elements_gpus_per_actor, PAGE_ELEMENTS_GPUS_PER_ACTOR, False)
+    )  # noqa: E501
     page_elements_batch_size = _resolve_int(override_page_elements_batch_size, PAGE_ELEMENTS_BATCH_SIZE, False)
 
     pdf_extract_batch_size = _resolve_int(override_pdf_extract_batch_size, PDF_EXTRACT_BATCH_SIZE, False)
