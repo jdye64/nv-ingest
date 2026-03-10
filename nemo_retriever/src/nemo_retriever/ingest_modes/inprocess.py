@@ -30,12 +30,8 @@ import pandas as pd
 from nemo_retriever.model.local import NemotronOCRV1, NemotronPageElementsV3, NemotronParseV12
 from nemo_retriever.chart.chart_detection import graphic_elements_ocr_page_elements
 from nemo_retriever.page_elements import detect_page_elements_v3
-from nemo_retriever.ocr.ocr import (
-    _crop_b64_image_by_norm_bbox,
-    _get_page_image_b64,
-    nemotron_parse_page_elements,
-    ocr_page_elements,
-)
+from nemo_retriever.ocr.ocr import nemotron_parse_page_elements, ocr_page_elements
+from nemo_retriever.util.image import crop_b64_image_by_norm_bbox, get_page_image_b64
 from nemo_retriever.table.table_detection import table_structure_ocr_page_elements
 from nemo_retriever.text_embed.main_text_embed import TextEmbeddingConfig, create_text_embeddings_for_df
 
@@ -167,7 +163,7 @@ def explode_content_to_rows(
         batch_df = batch_df.copy()
         if text_mod in IMAGE_MODALITIES and "page_image" in batch_df.columns:
             batch_df["_image_b64"] = batch_df["page_image"].apply(
-                lambda pi: _get_page_image_b64(pi) if isinstance(pi, dict) else None
+                lambda pi: get_page_image_b64(pi) if isinstance(pi, dict) else None
             )
         batch_df["_embed_modality"] = text_mod
         return batch_df
@@ -181,7 +177,7 @@ def explode_content_to_rows(
         page_image = row_dict.get("page_image")
         page_image_b64: Optional[str] = None
         if any_images and isinstance(page_image, dict):
-            page_image_b64 = _get_page_image_b64(page_image)
+            page_image_b64 = get_page_image_b64(page_image)
 
         # Row for page text.
         page_text = row_dict.get(text_column)
@@ -212,7 +208,7 @@ def explode_content_to_rows(
                 if struct_mod in IMAGE_MODALITIES and page_image:
                     bbox = item.get("bbox_xyxy_norm")
                     if bbox and len(bbox) == 4:
-                        cropped_b64, _ = _crop_b64_image_by_norm_bbox(page_image, bbox_xyxy_norm=bbox)
+                        cropped_b64, _ = crop_b64_image_by_norm_bbox(page_image, bbox_xyxy_norm=bbox)
                         content_row["_image_b64"] = cropped_b64
                     else:
                         content_row["_image_b64"] = page_image_b64
@@ -271,7 +267,7 @@ def collapse_content_to_page_rows(
     if modality in IMAGE_MODALITIES:
         if "page_image" in batch_df.columns:
             batch_df["_image_b64"] = batch_df["page_image"].apply(
-                lambda pi: _get_page_image_b64(pi) if isinstance(pi, dict) else None
+                lambda pi: get_page_image_b64(pi) if isinstance(pi, dict) else None
             )
         else:
             batch_df["_image_b64"] = None

@@ -262,13 +262,15 @@ def table_structure_ocr_page_elements(
         Original columns plus ``table`` and ``table_structure_ocr_v1``.
     """
     from nemo_retriever.nim.nim import invoke_image_inference_batches
-    from nemo_retriever.ocr.ocr import (
-        _blocks_to_pseudo_markdown,
-        _crop_all_from_page,
-        _extract_remote_ocr_item,
-        _get_page_image_array,
-        _np_rgb_to_b64_png,
-        _parse_ocr_result,
+    from nemo_retriever.util.image import (
+        crop_all_from_page,
+        get_page_image_array,
+        np_rgb_to_b64_png,
+    )
+    from nemo_retriever.util.ocr_parsing import (
+        blocks_to_pseudo_markdown,
+        extract_remote_ocr_item,
+        parse_ocr_result,
     )
     from nemo_retriever.util.table_and_chart import join_table_structure_and_ocr_output
 
@@ -317,14 +319,14 @@ def table_structure_ocr_page_elements(
 
             # --- get page image ---
             page_image = getattr(row, "page_image", None)
-            page_arr = _get_page_image_array(page_image)
+            page_arr = get_page_image_array(page_image)
             if page_arr is None:
                 all_table.append(table_items)
                 all_meta.append({"timing": None, "error": None})
                 continue
 
             # --- Pass 1: Collect table crops ---
-            crops = _crop_all_from_page(page_arr, dets, {"table"})
+            crops = crop_all_from_page(page_arr, dets, {"table"})
 
             if not crops:
                 all_table.append(table_items)
@@ -333,7 +335,7 @@ def table_structure_ocr_page_elements(
 
             # Pre-compute base64 encodings once for remote paths.
             crop_b64s = (
-                [_np_rgb_to_b64_png(crop_array) for _, _, crop_array in crops]
+                [np_rgb_to_b64_png(crop_array) for _, _, crop_array in crops]
                 if (use_remote_ts or use_remote_ocr)
                 else []
             )
@@ -392,7 +394,7 @@ def table_structure_ocr_page_elements(
                 if len(ocr_response_items) != len(crops):
                     raise RuntimeError(f"Expected {len(crops)} OCR responses, got {len(ocr_response_items)}")
                 for resp in ocr_response_items:
-                    ocr_results.append(_extract_remote_ocr_item(resp))
+                    ocr_results.append(extract_remote_ocr_item(resp))
             else:
                 for _, _, crop_array in crops:
                     ocr_results.append(ocr_model.invoke(crop_array, merge_level="word"))
@@ -408,13 +410,13 @@ def table_structure_ocr_page_elements(
 
                 # Fallback: if no cells were detected, use OCR-only pseudo-markdown.
                 if not markdown:
-                    blocks = _parse_ocr_result(ocr_preds)
-                    markdown = _blocks_to_pseudo_markdown(blocks)
+                    blocks = parse_ocr_result(ocr_preds)
+                    markdown = blocks_to_pseudo_markdown(blocks)
                     if not markdown:
                         # Last resort: plain text.
-                        from nemo_retriever.ocr.ocr import _blocks_to_text
+                        from nemo_retriever.util.ocr_parsing import blocks_to_text
 
-                        markdown = _blocks_to_text(blocks)
+                        markdown = blocks_to_text(blocks)
 
                 table_items.append({"bbox_xyxy_norm": bbox, "text": markdown})
 
