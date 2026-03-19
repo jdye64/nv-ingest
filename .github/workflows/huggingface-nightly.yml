@@ -126,10 +126,21 @@ jobs:
     # nemotron-ocr-v1 needs nvcc/CUDA headers to build its extension.
     # Build with Python 3.12 to match upstream package constraints and
     # avoid producing an extension for the wrong Python ABI.
-    runs-on: ubuntu-latest
+    # Matrix across x86_64 and aarch64 so the wheel works on ARM hosts
+    # (e.g. DGX Spark) as well as conventional x86 machines.
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - runner: ubuntu-latest
+            cuda_image: nvidia/cuda:13.0.0-devel-ubuntu24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            cuda_image: nvidia/cuda:13.0.0-devel-ubuntu24.04
+            arch: aarch64
     container:
-      # Build extension with CUDA 13 toolchain (nvcc/headers from devel image).
-      image: nvidia/cuda:13.0.0-devel-ubuntu24.04
+      image: ${{ matrix.platform.cuda_image }}
     steps:
       - name: Install system deps (git, lfs, build tools)
         shell: bash
@@ -253,5 +264,5 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: dist-nemotron-ocr-v1
+          name: dist-nemotron-ocr-v1-${{ matrix.platform.arch }}
           path: dist-out/nemotron-ocr-v1/*
