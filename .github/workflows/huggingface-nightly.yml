@@ -212,6 +212,12 @@ jobs:
             skip_existing_flag="--skip-existing"
           fi
 
+          # -mavx2 is an x86-only SIMD flag; strip it when building on aarch64.
+          strip_cflag_arg=""
+          if [[ "$(uname -m)" == "aarch64" ]]; then
+            strip_cflag_arg="--strip-cflag=-mavx2"
+          fi
+
           python --version
           python ci/scripts/nightly_build_publish.py \
             --repo-id "nemotron-ocr-v1" \
@@ -226,6 +232,7 @@ jobs:
             --venv-pip-install "torchvision==0.24.1" \
             --build-env "BUILD_CPP_EXTENSION=1" \
             --build-env "BUILD_CPP_FORCE=1" \
+            ${strip_cflag_arg} \
             ${upload_flag} \
             --repository-url "${repo_url}" \
             --token-env "${token_env}" \
