@@ -168,26 +168,6 @@ def _auto_project_subdir(repo_dir: Path, repo_id: str) -> str:
     return ""
 
 
-def _strip_cflags(project_dir: Path, flags: list[str]) -> None:
-    """Remove arch-specific compiler flags from upstream Python build scripts.
-
-    Scans all ``*.py`` files under *project_dir* and deletes quoted
-    occurrences of each flag (e.g. ``'-mavx2',``).  This lets the same
-    source tree compile on architectures that don't support the flag.
-    """
-    if not flags:
-        return
-    for py_file in project_dir.rglob("*.py"):
-        text = py_file.read_text(encoding="utf-8")
-        original = text
-        for flag in flags:
-            escaped = re.escape(flag)
-            text = re.sub(rf"""['"]{escaped}['"],?\s*""", "", text)
-        if text != original:
-            py_file.write_text(text, encoding="utf-8")
-            print(f"Stripped {flags} from {py_file.relative_to(project_dir)}")
-
-
 def _apply_build_env_overrides(env: dict[str, str], build_env: list[str]) -> dict[str, str]:
     """
     Apply KEY=VALUE overrides to the environment dict.
@@ -327,13 +307,6 @@ def main() -> int:
         default=[],
         help="Extra packages to pip install into the build venv before building (repeatable)",
     )
-    ap.add_argument(
-        "--strip-cflag",
-        action="append",
-        default=[],
-        help="Remove a C/C++ compiler flag from upstream build scripts after cloning (repeatable). "
-        "Useful for stripping arch-specific flags like -mavx2 on non-x86 builds.",
-    )
     ap.add_argument("--upload", action="store_true", help="Upload built dists via twine")
     ap.add_argument("--repository-url", default="https://test.pypi.org/legacy/", help="Twine repository URL")
     ap.add_argument("--token-env", default="TEST_PYPI_API_TOKEN", help="Env var containing API token")
@@ -363,10 +336,6 @@ def main() -> int:
     patched = _patch_pyproject_version(project_dir) or _patch_setup_cfg_version(project_dir)
     if not patched:
         print("No static version field found to patch (continuing).")
-
-    if args.strip_cflag:
-        print(f"=== Stripping compiler flags: {args.strip_cflag} ===")
-        _strip_cflags(project_dir, args.strip_cflag)
 
     print("=== Building sdist + wheel ===")
     out_dir = dist_root / args.repo_id
