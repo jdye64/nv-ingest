@@ -4,7 +4,7 @@ Nightly builder/publisher for Hugging Face-hosted NVIDIA OSS repos.
 
 Behavior:
 - Clones a HF git repo with Git LFS smudge disabled (so large weights are not downloaded).
-- Attempts to append a PEP 440 dev version suffix (YYYYMMDD) to pyproject.toml or setup.cfg.
+- Attempts to append a PEP 440 dev version suffix (YYYYMMDDHHmmss) to pyproject.toml or setup.cfg.
 - Builds sdist + wheel via `python -m build`.
 - Optionally uploads to (Test)PyPI via twine.
 
@@ -36,12 +36,18 @@ def _write_text(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def _nightly_suffix_yyyymmdd() -> str:
-    # Allow overriding for reproducibility.
-    forced = os.environ.get("NIGHTLY_DATE_YYYYMMDD")
+def _nightly_suffix() -> str:
+    """Return a PEP 440 dev suffix that is unique per build.
+
+    Uses ``YYYYMMDDHHmmss`` so multiple builds on the same calendar day
+    each receive a distinct, monotonically increasing version.
+    The ``NIGHTLY_DATE_SUFFIX`` (or legacy ``NIGHTLY_DATE_YYYYMMDD``) env
+    var can override the value for reproducible builds.
+    """
+    forced = os.environ.get("NIGHTLY_DATE_SUFFIX") or os.environ.get("NIGHTLY_DATE_YYYYMMDD")
     if forced:
         return forced
-    return _dt.datetime.now(_dt.UTC).strftime("%Y%m%d")
+    return _dt.datetime.now(_dt.UTC).strftime("%Y%m%d%H%M%S")
 
 
 def _venv_python(venv_dir: Path) -> Path:
@@ -80,17 +86,16 @@ def _ensure_venv(venv_dir: Path, *, system_site_packages: bool) -> Path:
     return py
 
 
-def _pep440_nightly(base_version: str, yyyymmdd: str) -> str:
+def _pep440_nightly(base_version: str, suffix: str) -> str:
     """
     Convert a base version to a nightly dev version.
     Examples:
-      1.2.3 -> 1.2.3.dev20260127
-      1.2.3+local -> 1.2.3.dev20260127
+      1.2.3 -> 1.2.3.dev20260127031517
+      1.2.3+local -> 1.2.3.dev20260127031517
     """
     base = base_version.split("+", 1)[0].strip()
-    # If already has a .dev segment, replace it to keep it monotonic daily.
     base = re.sub(r"\.dev\d+$", "", base)
-    return f"{base}.dev{yyyymmdd}"
+    return f"{base}.dev{suffix}"
 
 
 def _patch_pyproject_version(repo_dir: Path) -> bool:
@@ -105,7 +110,7 @@ def _patch_pyproject_version(repo_dir: Path) -> bool:
         return False
 
     old_version = m.group(1)
-    new_version = _pep440_nightly(old_version, _nightly_suffix_yyyymmdd())
+    new_version = _pep440_nightly(old_version, _nightly_suffix())
     if new_version == old_version:
         return False
 
@@ -127,7 +132,7 @@ def _patch_setup_cfg_version(repo_dir: Path) -> bool:
         return False
 
     old_version = m.group(1).strip().strip('"').strip("'")
-    new_version = _pep440_nightly(old_version, _nightly_suffix_yyyymmdd())
+    new_version = _pep440_nightly(old_version, _nightly_suffix())
     if new_version == old_version:
         return False
 
