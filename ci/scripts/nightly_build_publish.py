@@ -7,6 +7,7 @@ Behavior:
 - Patches a PEP 440 dev version into pyproject.toml or setup.cfg (default suffix: UTC
   YYYYMMDD; override with NIGHTLY_DATE_SUFFIX or NIGHTLY_DATE_YYYYMMDD, e.g. from CI).
 - Builds sdist + wheel via `python -m build`.
+- Optional ``--auditwheel-repair`` rewrites ``linux_*`` wheels to ``manylinux_*`` for PyPI.
 - Optionally uploads to (Test)PyPI via twine.
 
 This is intentionally best-effort across heterogeneous upstream projects.
@@ -318,6 +319,42 @@ def _build(
         shutil.copy2(artifact, out_dir / artifact.name)
 
 
+def _auditwheel_repair_dist_dir(dist_dir: Path) -> None:
+    """
+    Rewrite linux_* wheels to manylinux_* so TestPyPI/PyPI accept the upload.
+    Requires ``patchelf`` on PATH (e.g. apt install patchelf).
+    """
+    wheels = sorted(dist_dir.glob("*.whl"))
+    if not wheels:
+        return
+
+    venv_dir = Path(os.environ.get("ORCH_VENV_DIR", ".venv-build"))
+    py = _ensure_venv(venv_dir, system_site_packages=False)
+    env = os.environ.copy()
+    env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
+    env = _ensure_tmpdir(env)
+    _pip_install(py, ["auditwheel"], cwd=dist_dir.parent, env=env)
+
+    repair_out = dist_dir / ".auditwheel-out"
+    _ensure_clean_dir(repair_out)
+    cmd = [str(py), "-m", "auditwheel", "repair", *[str(w) for w in wheels], "-w", str(repair_out)]
+    _run(cmd, env=env)
+
+    repaired = sorted(repair_out.glob("*.whl"))
+    if not repaired:
+        raise RuntimeError("auditwheel repair produced no wheels")
+
+    for w in wheels:
+        w.unlink()
+
+    for rw in repaired:
+        dest = dist_dir / rw.name
+        shutil.move(str(rw), dest)
+        print(f"auditwheel: {dest.name}")
+
+    shutil.rmtree(repair_out)
+
+
 def _twine_upload(
     dist_dir: Path,
     repository_url: str,
@@ -405,6 +442,11 @@ def main() -> int:
         action="store_true",
         help="Patch hatch_build.py so hatchling emits a platform-specific wheel (not py3-none-any)",
     )
+    ap.add_argument(
+        "--auditwheel-repair",
+        action="store_true",
+        help="Run auditwheel repair on built wheels (manylinux tag; needed for PyPI/TestPyPI)",
+    )
     args = ap.parse_args()
 
     root = Path.cwd()
@@ -447,6 +489,10 @@ def main() -> int:
         venv_pip_install=args.venv_pip_install,
     )
     print(f"Artifacts in: {out_dir}")
+
+    if args.auditwheel_repair:
+        print("=== auditwheel repair ===")
+        _auditwheel_repair_dist_dir(out_dir)
 
     if args.upload:
         token = os.environ.get(args.token_env)
