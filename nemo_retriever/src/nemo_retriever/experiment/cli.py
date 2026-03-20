@@ -51,23 +51,21 @@ def _gpu_mem_mb() -> str:
 def _run_fused(
     pdfs: list[Path],
     device: str,
-    torch_compile: bool,
     warmup_runs: int,
     console: Console,
 ) -> list:
     from nemo_retriever.experiment.fused_pipeline import FusedPDFPipeline
 
-    compile_tag = "torch.compile(dynamic) · " if torch_compile else ""
     console.print(
         Panel(
             "[bold]Fused Pipeline — Optimized[/bold]\n"
-            f"Single process · all models on one GPU · {compile_tag}batched YOLOX · "
-            "GPU-native crops · no HTTP/Redis/base64 · TF32 enabled",
+            "Single process · all models on one GPU · cuDNN benchmark · "
+            "batched YOLOX · GPU-native crops · TF32 · no HTTP/Redis/base64",
             style="green",
         )
     )
 
-    pipeline = FusedPDFPipeline(device=device, use_torch_compile=torch_compile)
+    pipeline = FusedPDFPipeline(device=device)
 
     # Load models
     console.print("\n[bold]Loading models …[/bold]")
@@ -314,7 +312,6 @@ def _print_per_stage_comparison(
 def run_cmd(
     input_dir: str = typer.Option(..., "--input-dir", "-i", help="Directory with PDFs"),
     device: str = typer.Option("cuda:0", "--device", "-d", help="CUDA device"),
-    torch_compile: bool = typer.Option(True, "--torch-compile/--no-torch-compile", help="Apply torch.compile with dynamic shapes"),
     warmup_runs: int = typer.Option(2, "--warmup-runs", help="Warmup iterations"),
     compare: bool = typer.Option(False, "--compare", "-c", help="Also run baseline for comparison"),
     limit: Optional[int] = typer.Option(None, "--limit", "-n", help="Max PDFs to process"),
@@ -326,7 +323,7 @@ def run_cmd(
     console.print(f"\nFound [bold]{len(pdfs)}[/bold] PDFs in {input_dir}\n")
 
     # ── Fused pipeline ──
-    fused_results = _run_fused(pdfs, device, torch_compile, warmup_runs, console)
+    fused_results = _run_fused(pdfs, device, warmup_runs, console)
 
     # ── Baseline (optional) ──
     baseline_results = None

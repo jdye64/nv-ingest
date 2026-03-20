@@ -81,7 +81,6 @@ class FusedPDFPipeline:
     def __init__(
         self,
         device: str = "cuda:0",
-        use_torch_compile: bool = False,
         embed_batch_size: int = 128,
         pe_batch_size: int = 32,
         score_threshold: float = 0.3,
@@ -90,7 +89,6 @@ class FusedPDFPipeline:
         self.embed_batch_size = embed_batch_size
         self.pe_batch_size = pe_batch_size
         self.score_threshold = score_threshold
-        self._use_compile = use_torch_compile
         self._models_loaded = False
 
     # ------------------------------------------------------------------
@@ -99,6 +97,12 @@ class FusedPDFPipeline:
 
     def load_models(self) -> OrderedDict:
         """Load all models onto the target GPU.  Returns per-model load times."""
+        # cuDNN benchmark: auto-selects the fastest convolution algorithm
+        # per layer/shape.  Adds ~1-2 s to the first forward pass, then
+        # every subsequent call uses the cached winner.  Zero risk of
+        # CUDA context corruption (unlike torch.compile on custom ops).
+        torch.backends.cudnn.benchmark = True
+
         times: OrderedDict[str, float] = OrderedDict()
 
         t0 = time.perf_counter()
@@ -119,80 +123,30 @@ class FusedPDFPipeline:
         self.embedder = create_local_embedder(device=str(self.device))
         times["embedder_s"] = time.perf_counter() - t0
 
-        if self._use_compile:
-            t0 = time.perf_counter()
-            self._apply_torch_compile()
-            times["torch_compile_s"] = time.perf_counter() - t0
-
         times["total_s"] = sum(times.values())
         self._models_loaded = True
         return times
 
-    def _apply_torch_compile(self) -> None:
-        """Wrap the YOLOX backbone with torch.compile (fixed-shape mode).
-
-        We only compile the page-element detector.  Its spatial dims are
-        always 1024x1024 so the only varying dimension is the batch size.
-        torch.compile caches a separate compiled graph per distinct shape,
-        so we pre-warm the common sizes in ``warmup()``.
-
-        The embedder is *not* compiled — its internal tokeniser produces
-        varying sequence lengths that cause sympy's symbolic analysis to
-        spin (the ``pow_by_natural`` warnings).
-        """
-        inner = getattr(self.pe_model, "_model", None)
-        if inner is not None:
-            backbone = getattr(inner, "model", inner)
-            if isinstance(backbone, torch.nn.Module):
-                try:
-                    compiled = torch.compile(backbone, mode="default")
-                    if hasattr(inner, "model"):
-                        inner.model = compiled
-                    else:
-                        self.pe_model._model = compiled
-                except Exception:
-                    pass
-
     def warmup(self, runs: int = 2) -> float:
-        """Pre-warm CUDA context, cuDNN autotuner, and Triton caches.
+        """Pre-warm CUDA context and cuDNN autotuner.
 
-        When torch.compile is active, each distinct batch size triggers a
-        one-time Triton compilation (~20-40 s).  We pre-compile the most
-        common sizes here so actual PDF processing hits the cache.
+        The first forward pass through each model triggers cuDNN's
+        benchmark mode to select optimal conv algorithms.  Subsequent
+        calls at the same spatial size hit the cache.
         """
         if not self._models_loaded:
             raise RuntimeError("Call load_models() before warmup()")
-        import logging
-
-        # Suppress the noisy torch._dynamo / sympy warnings during compile
-        _loggers = ["torch._dynamo", "torch._inductor", "torch._functorch"]
-        saved_levels = {}
-        for name in _loggers:
-            lg = logging.getLogger(name)
-            saved_levels[name] = lg.level
-            lg.setLevel(logging.ERROR)
-
         t0 = time.perf_counter()
 
-        # Pre-compile YOLOX at common batch sizes.  Spatial dims are
-        # always [3, 1024, 1024] so each batch size triggers one compile,
-        # then gets cached.  Covers 1-32 page PDFs.
-        warmup_batches = [1, 2, 4, 8, 16, 32]
-        for batch_size in warmup_batches:
-            dummy = torch.randn(
-                batch_size, 3, 1024, 1024, device=self.device,
-            ).clamp(0, 255)
-            for _ in range(runs):
-                with torch.inference_mode(), torch.autocast(device_type="cuda"):
-                    try:
-                        preds = self.pe_model.invoke(
-                            dummy, [(1024, 1024)] * batch_size,
-                        )
-                        self.pe_model.postprocess(preds)
-                    except Exception:
-                        pass
+        dummy = torch.randn(1, 3, 1024, 1024, device=self.device).clamp(0, 255)
+        for _ in range(runs):
+            with torch.inference_mode(), torch.autocast(device_type="cuda"):
+                try:
+                    preds = self.pe_model.invoke(dummy, [(1024, 1024)])
+                    self.pe_model.postprocess(preds)
+                except Exception:
+                    pass
 
-        # Warmup embedder (no torch.compile — just CUDA/cuDNN init)
         for _ in range(runs):
             try:
                 self.embedder.embed(["warmup text passage"], batch_size=1)
@@ -200,12 +154,7 @@ class FusedPDFPipeline:
                 pass
 
         torch.cuda.synchronize(self.device)
-        elapsed = time.perf_counter() - t0
-
-        for name, lvl in saved_levels.items():
-            logging.getLogger(name).setLevel(lvl)
-
-        return elapsed
+        return time.perf_counter() - t0
 
     # ------------------------------------------------------------------
     # Main entry point
