@@ -22,13 +22,18 @@ from __future__ import annotations
 
 import os
 import time
+import warnings
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from io import BytesIO
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
+
+# Enable TF32 on Ampere+ for ~2× matmul throughput at negligible accuracy cost
+torch.set_float32_matmul_precision("high")
 
 try:
     import pypdfium2 as pdfium
@@ -127,12 +132,16 @@ class FusedPDFPipeline:
         return times
 
     def _apply_torch_compile(self) -> None:
+        # "default" mode: Triton JIT kernels without the expensive CUDA-graph
+        # capture that "reduce-overhead" triggers (which adds 30-60 s warmup).
+        compile_mode = "default"
+
         inner = getattr(self.pe_model, "_model", None)
         if inner is not None:
             backbone = getattr(inner, "model", inner)
             if isinstance(backbone, torch.nn.Module):
                 try:
-                    compiled = torch.compile(backbone, mode="reduce-overhead")
+                    compiled = torch.compile(backbone, mode=compile_mode)
                     if hasattr(inner, "model"):
                         inner.model = compiled
                     else:
@@ -143,7 +152,7 @@ class FusedPDFPipeline:
         emb_model = getattr(self.embedder, "_model", None)
         if isinstance(emb_model, torch.nn.Module):
             try:
-                self.embedder._model = torch.compile(emb_model, mode="reduce-overhead")
+                self.embedder._model = torch.compile(emb_model, mode=compile_mode)
             except Exception:
                 pass
 
@@ -240,7 +249,7 @@ class FusedPDFPipeline:
         )
 
     # ------------------------------------------------------------------
-    # Stage 1 — parallel PDF rasterization + text extraction
+    # Stage 1 — PDF text extraction + rendering
     # ------------------------------------------------------------------
 
     def _render_pages(self, path: str) -> List[Dict[str, Any]]:
@@ -253,26 +262,50 @@ class FusedPDFPipeline:
             doc.close()
             return []
 
-        # Sequentially extract text + page geometry (very fast, <1 ms/page)
+        # Phase A — sequentially extract text + split into independent
+        # single-page byte buffers.  pdfium's C library is NOT thread-safe
+        # for operations on the same document, so we must isolate pages
+        # before handing them to worker threads.
         page_meta: List[Dict[str, Any]] = []
         for i in range(n):
             pg = doc[i]
-            tp = pg.get_textpage()
-            txt = tp.get_text_range()
-            tp.close()
-            pw, ph = float(pg.get_width()), float(pg.get_height())
-            page_meta.append({"idx": i, "text": txt, "pw": pw, "ph": ph, "page": pg})
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                tp = pg.get_textpage()
+                txt = tp.get_text_bounded()
+                tp.close()
 
-        # Parallel rendering (pdfium page renders are independent / thread-safe)
+            # Save single-page PDF bytes so each thread gets its own doc
+            single = pdfium.PdfDocument.new()
+            single.import_pages(doc, pages=[i])
+            buf = BytesIO()
+            single.save(buf)
+            single.close()
+            pg.close()
+
+            page_meta.append(
+                {
+                    "idx": i,
+                    "text": txt,
+                    "page_bytes": buf.getvalue(),
+                }
+            )
+        doc.close()
+
+        # Phase B — render each page in parallel.  Each worker opens its
+        # own independent PdfDocument from the single-page bytes so there
+        # is zero shared mutable state → no segfaults.
         def _render_one(meta: Dict[str, Any]) -> Dict[str, Any]:
-            pg = meta["page"]
-            # fit-to-model: scale so largest dimension ≤ 1024 (matches NIM ~93 DPI)
-            scale = min(1024.0 / max(meta["pw"], 1.0), 1024.0 / max(meta["ph"], 1.0))
+            one_doc = pdfium.PdfDocument(meta["page_bytes"])
+            pg = one_doc[0]
+            pw, ph = float(pg.get_width()), float(pg.get_height())
+            scale = min(1024.0 / max(pw, 1.0), 1024.0 / max(ph, 1.0))
             bmp = pg.render(scale=scale)
             pil = bmp.to_pil()
             arr = np.array(pil.convert("RGB"))
             bmp.close()
             pg.close()
+            one_doc.close()
             return {
                 "page_number": meta["idx"] + 1,
                 "native_text": meta["text"],
@@ -282,13 +315,12 @@ class FusedPDFPipeline:
             }
 
         workers = max(1, min(self.render_threads, n))
-        if workers > 1:
+        if workers > 1 and n > 1:
             with ThreadPoolExecutor(max_workers=workers) as pool:
                 results = list(pool.map(_render_one, page_meta))
         else:
             results = [_render_one(m) for m in page_meta]
 
-        doc.close()
         return results
 
     # ------------------------------------------------------------------
