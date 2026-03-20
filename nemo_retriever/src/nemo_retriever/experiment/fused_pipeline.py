@@ -129,21 +129,23 @@ class FusedPDFPipeline:
         return times
 
     def _apply_torch_compile(self) -> None:
-        """Wrap YOLOX backbone and embedder with torch.compile.
+        """Wrap the YOLOX backbone with torch.compile (fixed-shape mode).
 
-        ``dynamic=True`` generates shape-generic Triton kernels so a
-        single compilation covers *any* batch size.  Without it the
-        compiled graph is specialised to the warmup shape and segfaults
-        (or recompiles) when the real batch size differs.
+        We only compile the page-element detector.  Its spatial dims are
+        always 1024x1024 so the only varying dimension is the batch size.
+        torch.compile caches a separate compiled graph per distinct shape,
+        so we pre-warm the common sizes in ``warmup()``.
+
+        The embedder is *not* compiled — its internal tokeniser produces
+        varying sequence lengths that cause sympy's symbolic analysis to
+        spin (the ``pow_by_natural`` warnings).
         """
-        compile_kwargs = dict(mode="default", dynamic=True)
-
         inner = getattr(self.pe_model, "_model", None)
         if inner is not None:
             backbone = getattr(inner, "model", inner)
             if isinstance(backbone, torch.nn.Module):
                 try:
-                    compiled = torch.compile(backbone, **compile_kwargs)
+                    compiled = torch.compile(backbone, mode="default")
                     if hasattr(inner, "model"):
                         inner.model = compiled
                     else:
@@ -151,28 +153,32 @@ class FusedPDFPipeline:
                 except Exception:
                     pass
 
-        emb_model = getattr(self.embedder, "_model", None)
-        if isinstance(emb_model, torch.nn.Module):
-            try:
-                self.embedder._model = torch.compile(emb_model, **compile_kwargs)
-            except Exception:
-                pass
-
     def warmup(self, runs: int = 2) -> float:
         """Pre-warm CUDA context, cuDNN autotuner, and Triton caches.
 
-        When torch.compile is active the first invocation triggers Triton
-        kernel compilation (30-90 s one-time cost).  Subsequent calls at
-        *any* batch size are fast thanks to ``dynamic=True``.
+        When torch.compile is active, each distinct batch size triggers a
+        one-time Triton compilation (~20-40 s).  We pre-compile the most
+        common sizes here so actual PDF processing hits the cache.
         """
         if not self._models_loaded:
             raise RuntimeError("Call load_models() before warmup()")
+        import logging
+
+        # Suppress the noisy torch._dynamo / sympy warnings during compile
+        _loggers = ["torch._dynamo", "torch._inductor", "torch._functorch"]
+        saved_levels = {}
+        for name in _loggers:
+            lg = logging.getLogger(name)
+            saved_levels[name] = lg.level
+            lg.setLevel(logging.ERROR)
+
         t0 = time.perf_counter()
 
-        # Warmup YOLOX — use batch=2 so Triton sees a non-trivial batch
-        # dimension.  With dynamic=True the compiled kernel generalises
-        # to any N.
-        for batch_size in (1, 2):
+        # Pre-compile YOLOX at common batch sizes.  Spatial dims are
+        # always [3, 1024, 1024] so each batch size triggers one compile,
+        # then gets cached.  Covers 1-32 page PDFs.
+        warmup_batches = [1, 2, 4, 8, 16, 32]
+        for batch_size in warmup_batches:
             dummy = torch.randn(
                 batch_size, 3, 1024, 1024, device=self.device,
             ).clamp(0, 255)
@@ -186,21 +192,20 @@ class FusedPDFPipeline:
                     except Exception:
                         pass
 
-        # Warmup embedder — single text + small batch
+        # Warmup embedder (no torch.compile — just CUDA/cuDNN init)
         for _ in range(runs):
             try:
                 self.embedder.embed(["warmup text passage"], batch_size=1)
             except Exception:
                 pass
-        try:
-            self.embedder.embed(
-                ["warmup one", "warmup two", "warmup three"], batch_size=4,
-            )
-        except Exception:
-            pass
 
         torch.cuda.synchronize(self.device)
-        return time.perf_counter() - t0
+        elapsed = time.perf_counter() - t0
+
+        for name, lvl in saved_levels.items():
+            logging.getLogger(name).setLevel(lvl)
+
+        return elapsed
 
     # ------------------------------------------------------------------
     # Main entry point
