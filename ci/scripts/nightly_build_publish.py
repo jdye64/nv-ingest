@@ -4,7 +4,8 @@ Nightly builder/publisher for Hugging Face-hosted NVIDIA OSS repos.
 
 Behavior:
 - Clones a HF git repo with Git LFS smudge disabled (so large weights are not downloaded).
-- Attempts to append a PEP 440 dev version suffix (YYYYMMDDHHmmss) to pyproject.toml or setup.cfg.
+- Patches a PEP 440 dev version into pyproject.toml or setup.cfg (default suffix: UTC
+  YYYYMMDD; override with NIGHTLY_DATE_SUFFIX or NIGHTLY_DATE_YYYYMMDD, e.g. from CI).
 - Builds sdist + wheel via `python -m build`.
 - Optionally uploads to (Test)PyPI via twine.
 
@@ -37,17 +38,16 @@ def _write_text(path: Path, text: str) -> None:
 
 
 def _nightly_suffix() -> str:
-    """Return a PEP 440 dev suffix that is unique per build.
+    """Return the numeric part after ``.dev`` in the nightly PEP 440 version.
 
-    Uses ``YYYYMMDDHHmmss`` so multiple builds on the same calendar day
-    each receive a distinct, monotonically increasing version.
-    The ``NIGHTLY_DATE_SUFFIX`` (or legacy ``NIGHTLY_DATE_YYYYMMDD``) env
-    var can override the value for reproducible builds.
+    Default is UTC ``YYYYMMDD`` so parallel matrix legs (e.g. x86_64 + aarch64) publish
+    under the same version. Override with ``NIGHTLY_DATE_SUFFIX`` or
+    ``NIGHTLY_DATE_YYYYMMDD`` (e.g. set once per workflow run in CI).
     """
     forced = os.environ.get("NIGHTLY_DATE_SUFFIX") or os.environ.get("NIGHTLY_DATE_YYYYMMDD")
     if forced:
         return forced
-    return _dt.datetime.now(_dt.UTC).strftime("%Y%m%d%H%M%S")
+    return _dt.datetime.now(_dt.UTC).strftime("%Y%m%d")
 
 
 def _venv_python(venv_dir: Path) -> Path:
@@ -90,8 +90,8 @@ def _pep440_nightly(base_version: str, suffix: str) -> str:
     """
     Convert a base version to a nightly dev version.
     Examples:
-      1.2.3 -> 1.2.3.dev20260127031517
-      1.2.3+local -> 1.2.3.dev20260127031517
+      1.2.3 -> 1.2.3.dev20260127
+      1.2.3+local -> 1.2.3.dev20260127
     """
     base = base_version.split("+", 1)[0].strip()
     base = re.sub(r"\.dev\d+$", "", base)
@@ -117,6 +117,75 @@ def _patch_pyproject_version(repo_dir: Path) -> bool:
     text2 = text[: m.start(1)] + new_version + text[m.end(1) :]
     _write_text(pyproject, text2)
     print(f"Patched pyproject.toml version: {old_version} -> {new_version}")
+    return True
+
+
+def _patch_hatch_build_force_platform_wheel(project_dir: Path) -> bool:
+    """
+    Hatchling may emit py3-none-any for extension builds unless the hook sets
+    build_data[\"pure_python\"] = False and build_data[\"infer_tag\"] = True so the
+    wheel tag matches the current interpreter/platform. Patch upstream hatch_build.py
+    when we recognize the Nemotron OCR layout.
+    """
+    path = project_dir / "hatch_build.py"
+    if not path.is_file():
+        return False
+    text = _read_text(path)
+    has_pp = 'build_data["pure_python"]' in text or "build_data['pure_python']" in text
+    has_it = 'build_data["infer_tag"]' in text or "build_data['infer_tag']" in text
+    if has_pp and has_it:
+        return False
+    if "CustomBuildHook" not in text or "def initialize" not in text:
+        return False
+    needle = "def initialize(self, version: str, build_data: dict) -> None:"
+    idx = text.find(needle)
+    if idx < 0:
+        return False
+    body_start = idx + len(needle)
+    insert_at = body_start
+    while insert_at < len(text) and text[insert_at] in " \t":
+        insert_at += 1
+    if insert_at < len(text) and text[insert_at] == "\n":
+        insert_at += 1
+
+    block = '        build_data["pure_python"] = False\n' '        build_data["infer_tag"] = True\n'
+
+    if not has_pp and not has_it:
+        patched = text[:insert_at] + block + text[insert_at:]
+        _write_text(path, patched)
+        print("Patched hatch_build.py: pure_python=False, infer_tag=True")
+        return True
+
+    if has_pp and not has_it:
+        lines = text.splitlines(keepends=True)
+        out: list[str] = []
+        inserted = False
+        for line in lines:
+            out.append(line)
+            if inserted:
+                continue
+            if ('build_data["pure_python"]' in line or "build_data['pure_python']" in line) and "False" in line:
+                out.append('        build_data["infer_tag"] = True\n')
+                inserted = True
+        if not inserted:
+            return False
+        _write_text(path, "".join(out))
+        print('Patched hatch_build.py: build_data["infer_tag"] = True')
+        return True
+
+    # has_it and not has_pp: insert pure_python line before first infer_tag line
+    lines = text.splitlines(keepends=True)
+    out = []
+    inserted = False
+    for line in lines:
+        if not inserted and ('build_data["infer_tag"]' in line or "build_data['infer_tag']" in line):
+            out.append('        build_data["pure_python"] = False\n')
+            inserted = True
+        out.append(line)
+    if not inserted:
+        return False
+    _write_text(path, "".join(out))
+    print('Patched hatch_build.py: build_data["pure_python"] = False')
     return True
 
 
@@ -316,6 +385,11 @@ def main() -> int:
     ap.add_argument("--repository-url", default="https://test.pypi.org/legacy/", help="Twine repository URL")
     ap.add_argument("--token-env", default="TEST_PYPI_API_TOKEN", help="Env var containing API token")
     ap.add_argument("--skip-existing", action="store_true", help="Pass --skip-existing to twine")
+    ap.add_argument(
+        "--hatch-force-platform-wheel",
+        action="store_true",
+        help="Patch hatch_build.py so hatchling emits a platform-specific wheel (not py3-none-any)",
+    )
     args = ap.parse_args()
 
     root = Path.cwd()
@@ -341,6 +415,10 @@ def main() -> int:
     patched = _patch_pyproject_version(project_dir) or _patch_setup_cfg_version(project_dir)
     if not patched:
         print("No static version field found to patch (continuing).")
+
+    if args.hatch_force_platform_wheel:
+        if not _patch_hatch_build_force_platform_wheel(project_dir):
+            print("hatch-force-platform-wheel: no applicable hatch_build.py patch applied")
 
     print("=== Building sdist + wheel ===")
     out_dir = dist_root / args.repo_id

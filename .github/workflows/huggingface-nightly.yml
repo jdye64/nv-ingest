@@ -25,7 +25,19 @@ permissions:
   contents: read
 
 jobs:
+  # One dev suffix for the whole workflow so matrix legs (e.g. OCR x86 + aarch64) share
+  # the same release. UTC YYYYMMDDHHMMSS + run id allows multiple uploads per day and
+  # avoids collisions if two runs start in the same second.
+  nightly_coordinate:
+    runs-on: ubuntu-latest
+    outputs:
+      nightly_date_suffix: ${{ steps.suffix.outputs.nightly_date_suffix }}
+    steps:
+      - id: suffix
+        run: echo "nightly_date_suffix=$(date -u +%Y%m%d%H%M%S)${{ github.run_id }}" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: nightly_coordinate
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -80,6 +92,7 @@ jobs:
 
       - name: Build (and maybe upload)
         env:
+          NIGHTLY_DATE_SUFFIX: ${{ needs.nightly_coordinate.outputs.nightly_date_suffix }}
           TEST_PYPI_API_TOKEN: ${{ secrets.TEST_PYPI_API_TOKEN }}
           PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         shell: bash
@@ -123,6 +136,7 @@ jobs:
           path: dist-out/${{ matrix.repo.id }}/*
 
   build_ocr_cuda:
+    needs: nightly_coordinate
     # nemotron-ocr-v1 needs nvcc/CUDA headers to build its extension.
     # Build with Python 3.12 to match upstream package constraints and
     # avoid producing an extension for the wrong Python ABI.
@@ -183,6 +197,7 @@ jobs:
 
       - name: Build nemotron-ocr-v1 (and maybe upload)
         env:
+          NIGHTLY_DATE_SUFFIX: ${{ needs.nightly_coordinate.outputs.nightly_date_suffix }}
           TEST_PYPI_API_TOKEN: ${{ secrets.TEST_PYPI_API_TOKEN }}
           PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
           CUDA_HOME: /usr/local/cuda
@@ -226,6 +241,7 @@ jobs:
             --work-dir ".work" \
             --dist-dir "dist-out" \
             --project-subdir "nemotron-ocr" \
+            --hatch-force-platform-wheel \
             --build-no-isolation \
             --venv-pip-install "hatchling" \
             --venv-pip-install "setuptools>=68" \
@@ -265,6 +281,12 @@ jobs:
               raise SystemExit(
                   f"Built extension ABI does not match runner Python ({py_tag}). Found:\n{formatted}"
               )
+          for wheel in wheels:
+              if "py3-none-any" in wheel.name:
+                  raise SystemExit(
+                      "Wheel is tagged py3-none-any; pip cannot select x86_64 vs aarch64. "
+                      f"Got: {wheel.name}"
+                  )
           print("Verified nemotron_ocr_cpp extension ABI:", py_tag)
           PY
 
