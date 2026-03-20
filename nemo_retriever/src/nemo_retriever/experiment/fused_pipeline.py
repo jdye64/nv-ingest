@@ -3,27 +3,26 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Ultra-low-latency fused PDF processing pipeline.
+Ultra-low-latency fused PDF processing pipeline — dual-GPU edition.
 
-Key optimizations over the standard inprocess pipeline:
- 1. Single process — all models loaded on the same GPU (no NIM/HTTP/gRPC)
- 2. Batched YOLOX — all pages in a single forward pass (not one-by-one)
- 3. GPU-native region cropping — tensor slicing instead of PIL + base64
- 4. Smart OCR routing — aggressive filtering to minimize OCR invocations
- 5. Direct numpy handoff to OCR — bypass PNG/base64 encode-decode loop
- 6. Coarse chunking — merge page texts to cut embedding count by 5-10x
- 7. Fast embedder option — sentence-transformers ~33-110M instead of 1B
- 8. TF32 + cuDNN benchmark — free speedups on Ampere+
- 9. Pinned memory + async H→D transfer
-10. No DataFrames, no Redis, no Ray, no queues
+Key optimizations:
+ 1. Multiprocess PDF rendering — separate OS processes, each with its own
+    pdfium instance, fully parallelised across CPU cores
+ 2. Dual GPU — YOLOX + OCR on gpu0, embedder on gpu1
+ 3. Pipeline overlap — embedding runs on gpu1 concurrently with OCR on gpu0
+ 4. Parallel CPU preprocessing — multiprocess resize_pad + tensor build
+ 5. Batched YOLOX, GPU-native crops, smart OCR routing, coarse chunking
+ 6. TF32 + cuDNN benchmark on both GPUs
 """
 
 from __future__ import annotations
 
+import multiprocessing as mp
 import os
 import time
 import warnings
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -63,7 +62,7 @@ class PDFResult:
     source_path: str
     num_pages: int
     page_results: List[PageResult]
-    chunks: List[Any]  # List[ChunkInfo] — forward ref
+    chunks: List[Any]
     all_texts: List[str]
     embeddings: Optional[torch.Tensor]
     timings: OrderedDict
@@ -71,19 +70,19 @@ class PDFResult:
     ocr_stats: Dict[str, int] = field(default_factory=dict)
 
 
+@dataclass
+class ChunkInfo:
+    text: str
+    page_numbers: List[int]
+
+
 # ======================================================================
-# Lightweight embedder — sentence-transformers via HuggingFace
+# Lightweight embedder
 # ======================================================================
 
 
 @dataclass
 class FastEmbedder:
-    """Minimal wrapper around a small HF sentence-transformer.
-
-    Loads any model that follows the standard AutoModel + mean-pooling
-    pattern (e5-small, snowflake-arctic-embed-m, etc.).
-    """
-
     model_id: str = "intfloat/e5-small-v2"
     device: str = "cuda:0"
     max_length: int = 512
@@ -112,14 +111,11 @@ class FastEmbedder:
             for i in range(0, len(texts_list), batch_size):
                 chunk = texts_list[i : i + batch_size]
                 batch = self._tokenizer(
-                    chunk,
-                    padding=True,
-                    truncation=True,
-                    max_length=self.max_length,
-                    return_tensors="pt",
+                    chunk, padding=True, truncation=True,
+                    max_length=self.max_length, return_tensors="pt",
                 ).to(self._device)
                 out = self._model(**batch)
-                lhs = out.last_hidden_state  # [B, S, D]
+                lhs = out.last_hidden_state
                 mask = batch["attention_mask"].unsqueeze(-1)
                 vec = (lhs * mask).sum(dim=1) / mask.sum(dim=1).clamp_min(1e-9)
                 vec = vec.detach().cpu().float()
@@ -131,15 +127,8 @@ class FastEmbedder:
 
 
 # ======================================================================
-# Coarse chunker — merge per-page texts into larger windows
+# Coarse chunker
 # ======================================================================
-
-
-@dataclass
-class ChunkInfo:
-    """A text chunk with metadata about which pages it spans."""
-    text: str
-    page_numbers: List[int]
 
 
 def coarse_chunk(
@@ -148,11 +137,6 @@ def coarse_chunk(
     target_chars: int = 2000,
     overlap_chars: int = 200,
 ) -> List[ChunkInfo]:
-    """Merge per-page texts into larger chunks to reduce embedding count.
-
-    Returns ``ChunkInfo`` objects that track which page numbers each
-    chunk covers — needed for recall evaluation against page-level GT.
-    """
     if not page_texts:
         return []
 
@@ -173,7 +157,6 @@ def coarse_chunk(
             merged = "\n\n".join(buf_texts)
             chunks.append(ChunkInfo(text=merged, page_numbers=list(buf_pages)))
             tail = merged[-overlap_chars:] if overlap_chars and len(merged) > overlap_chars else ""
-            # Overlap carries last page's number for matching
             buf_texts = [tail] if tail else []
             buf_pages = [buf_pages[-1]] if tail else []
             buf_len = len(tail)
@@ -187,34 +170,88 @@ def coarse_chunk(
 
 
 # ======================================================================
-# Main pipeline
+# Multiprocess PDF rendering — each worker gets its own pdfium instance
+# ======================================================================
+
+
+def _render_one_page(args: Tuple[str, int]) -> Dict[str, Any]:
+    """Render a single page in a worker process.
+
+    Each process imports its own pypdfium2 and opens the PDF independently,
+    so there is zero shared C-level global state across workers.
+    """
+    path, page_idx = args
+    import pypdfium2 as _pdfium
+    import numpy as _np
+
+    doc = _pdfium.PdfDocument(path)
+    pg = doc[page_idx]
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        tp = pg.get_textpage()
+        try:
+            txt = tp.get_text_bounded()
+        except (TypeError, AttributeError):
+            txt = tp.get_text_range()
+        tp.close()
+
+    pw, ph = float(pg.get_width()), float(pg.get_height())
+    scale = min(1024.0 / max(pw, 1.0), 1024.0 / max(ph, 1.0))
+    bmp = pg.render(scale=scale)
+    pil = bmp.to_pil()
+    arr = _np.array(pil.convert("RGB"))
+    bmp.close()
+    pg.close()
+    doc.close()
+
+    return {
+        "page_number": page_idx + 1,
+        "native_text": txt,
+        "is_scanned": len(txt.strip()) < 10,
+        "image_np": arr,
+        "orig_hw": (int(arr.shape[0]), int(arr.shape[1])),
+    }
+
+
+# ======================================================================
+# Main pipeline — dual GPU
 # ======================================================================
 
 
 class FusedPDFPipeline:
-    """Single-process, single-GPU fused pipeline with aggressive OCR
-    filtering, coarse chunking, and optional fast embedder."""
+    """Dual-GPU fused pipeline.
+
+    - ``gpu0``: page-element detection (YOLOX) + OCR
+    - ``gpu1``: embedding model
+    - CPU cores: parallel PDF rendering + image preprocessing
+    """
 
     def __init__(
         self,
-        device: str = "cuda:0",
+        gpu0: str = "cuda:0",
+        gpu1: str = "cuda:1",
         embed_batch_size: int = 128,
         pe_batch_size: int = 32,
-        # --- OCR filtering knobs ---
+        render_workers: int = 0,
+        # --- OCR filtering ---
         score_threshold: float = 0.3,
         min_crop_px: int = 32,
         max_crops_per_page: int = 5,
         skip_ocr_if_text: bool = True,
-        # --- Chunking knobs ---
+        # --- Chunking ---
         chunk_target_chars: int = 2000,
         chunk_overlap_chars: int = 200,
-        # --- Embedder choice ---
+        # --- Embedder ---
         use_fast_embedder: bool = False,
         fast_embedder_model: str = "intfloat/e5-small-v2",
     ):
-        self.device = torch.device(device)
+        self.gpu0 = torch.device(gpu0)
+        self.gpu1 = torch.device(gpu1)
         self.embed_batch_size = embed_batch_size
         self.pe_batch_size = pe_batch_size
+        # 0 = auto (cpu_count / 2, capped at 16)
+        self.render_workers = render_workers or min(16, max(1, (os.cpu_count() or 4) // 2))
         self.score_threshold = score_threshold
         self.min_crop_px = min_crop_px
         self.max_crops_per_page = max_crops_per_page
@@ -224,36 +261,50 @@ class FusedPDFPipeline:
         self._use_fast_embedder = use_fast_embedder
         self._fast_embedder_model = fast_embedder_model
         self._models_loaded = False
+        self._render_pool: Optional[mp.pool.Pool] = None
 
     # ------------------------------------------------------------------
     # Model lifecycle
     # ------------------------------------------------------------------
 
     def load_models(self) -> OrderedDict:
-        torch.backends.cudnn.benchmark = True
+        for dev in (self.gpu0, self.gpu1):
+            if dev.type == "cuda":
+                with torch.cuda.device(dev):
+                    torch.backends.cudnn.benchmark = True
+
         times: OrderedDict[str, float] = OrderedDict()
 
+        # GPU 0: YOLOX + OCR
         t0 = time.perf_counter()
         from nemo_retriever.model.local import NemotronPageElementsV3
         self.pe_model = NemotronPageElementsV3()
-        times["page_elements_s"] = time.perf_counter() - t0
+        times["page_elements_s (gpu0)"] = time.perf_counter() - t0
 
         t0 = time.perf_counter()
         from nemo_retriever.model.local import NemotronOCRV1
         self.ocr_model = NemotronOCRV1()
-        times["ocr_s"] = time.perf_counter() - t0
+        times["ocr_s (gpu0)"] = time.perf_counter() - t0
 
+        # GPU 1: Embedder
         t0 = time.perf_counter()
+        embed_device = str(self.gpu1)
         if self._use_fast_embedder:
             self.embedder = FastEmbedder(
                 model_id=self._fast_embedder_model,
-                device=str(self.device),
+                device=embed_device,
             )
-            times["embedder_s (fast)"] = time.perf_counter() - t0
+            times[f"embedder_s (fast, {embed_device})"] = time.perf_counter() - t0
         else:
             from nemo_retriever.model import create_local_embedder
-            self.embedder = create_local_embedder(device=str(self.device))
-            times["embedder_s (1B)"] = time.perf_counter() - t0
+            self.embedder = create_local_embedder(device=embed_device)
+            times[f"embedder_s (1B, {embed_device})"] = time.perf_counter() - t0
+
+        # Spin up render process pool
+        t0 = time.perf_counter()
+        ctx = mp.get_context("forkserver")
+        self._render_pool = ctx.Pool(processes=self.render_workers)
+        times[f"render_pool_s ({self.render_workers} workers)"] = time.perf_counter() - t0
 
         times["total_s"] = sum(times.values())
         self._models_loaded = True
@@ -264,7 +315,8 @@ class FusedPDFPipeline:
             raise RuntimeError("Call load_models() before warmup()")
         t0 = time.perf_counter()
 
-        dummy = torch.randn(1, 3, 1024, 1024, device=self.device).clamp(0, 255)
+        # Warmup YOLOX on gpu0
+        dummy = torch.randn(1, 3, 1024, 1024, device=self.gpu0).clamp(0, 255)
         for _ in range(runs):
             with torch.inference_mode(), torch.autocast(device_type="cuda"):
                 try:
@@ -273,14 +325,22 @@ class FusedPDFPipeline:
                 except Exception:
                     pass
 
+        # Warmup embedder on gpu1
         for _ in range(runs):
             try:
                 self.embedder.embed(["warmup text passage"], batch_size=1)
             except Exception:
                 pass
 
-        torch.cuda.synchronize(self.device)
+        torch.cuda.synchronize(self.gpu0)
+        torch.cuda.synchronize(self.gpu1)
         return time.perf_counter() - t0
+
+    def shutdown(self) -> None:
+        if self._render_pool is not None:
+            self._render_pool.terminate()
+            self._render_pool.join()
+            self._render_pool = None
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -294,39 +354,71 @@ class FusedPDFPipeline:
         src = os.path.abspath(pdf_path)
         ocr_stats = {"crops_sent": 0, "crops_skipped": 0, "pages_skipped_ocr": 0}
 
-        # ── Stage 1: render + text extraction ────────────────────────
+        # ── Stage 1: multiprocess render + text extraction ───────────
         t0 = time.perf_counter()
-        pages = self._render_pages(src)
+        pages = self._render_pages_parallel(src)
         timings["1_render_ms"] = (time.perf_counter() - t0) * 1000
 
         n = len(pages)
         if n == 0:
             return PDFResult(src, 0, [], [], [], None, timings)
 
-        # ── Stage 2: GPU batch ───────────────────────────────────────
+        # ── Stage 2: GPU batch on gpu0 ───────────────────────────────
         t0 = time.perf_counter()
         batch, orig_shapes = self._to_gpu_batch(pages)
-        torch.cuda.synchronize(self.device)
+        torch.cuda.synchronize(self.gpu0)
         timings["2_transfer_ms"] = (time.perf_counter() - t0) * 1000
 
-        # ── Stage 3: batched page-element detection ──────────────────
+        # ── Stage 3: batched page-element detection (gpu0) ───────────
         t0 = time.perf_counter()
         boxes_l, labels_l, scores_l = self._detect_elements(batch, orig_shapes)
-        torch.cuda.synchronize(self.device)
+        torch.cuda.synchronize(self.gpu0)
         timings["3_page_elements_ms"] = (time.perf_counter() - t0) * 1000
 
-        # ── Stage 4: smart classify + crop (with aggressive filtering)
+        # ── Stage 4: classify + crop ─────────────────────────────────
         t0 = time.perf_counter()
         page_results, crops = self._classify_and_crop(
             pages, batch, boxes_l, labels_l, scores_l, ocr_stats,
         )
         timings["4_classify_crop_ms"] = (time.perf_counter() - t0) * 1000
 
-        # ── Stage 5: OCR (only the crops that survived filtering) ────
+        # ── Identify text already ready for embedding (pre-OCR) ──────
+        pre_ocr_texts: List[str] = []
+        pre_ocr_pages: List[int] = []
+        for pr in page_results:
+            if pr.ocr_skipped and pr.native_text.strip():
+                pre_ocr_texts.append(pr.native_text.strip())
+                pre_ocr_pages.append(pr.page_number)
+
+        # ── Stage 5 + early embed: OCR on gpu0 || embed on gpu1 ─────
         t0 = time.perf_counter()
+        embed_future = None
+
+        if pre_ocr_texts:
+            # Start embedding text-only pages on gpu1 while OCR runs on gpu0
+            pre_chunks = coarse_chunk(
+                pre_ocr_texts, pre_ocr_pages,
+                target_chars=self.chunk_target_chars,
+                overlap_chars=self.chunk_overlap_chars,
+            )
+            pre_texts = [c.text for c in pre_chunks]
+            executor = ThreadPoolExecutor(max_workers=1)
+            embed_future = executor.submit(self._embed, pre_texts)
+        else:
+            pre_chunks = []
+            pre_texts = []
+            executor = None
+
+        # OCR runs on gpu0 in the main thread
         self._ocr_crops(page_results, crops)
         ocr_stats["crops_sent"] = len(crops)
         timings["5_ocr_ms"] = (time.perf_counter() - t0) * 1000
+
+        # Wait for early embedding if it was started
+        early_emb = None
+        if embed_future is not None:
+            early_emb = embed_future.result()
+            executor.shutdown(wait=False)
 
         # ── Stage 6: text assembly ───────────────────────────────────
         t0 = time.perf_counter()
@@ -336,18 +428,28 @@ class FusedPDFPipeline:
         # ── Stage 6b: coarse chunking ────────────────────────────────
         t0 = time.perf_counter()
         chunk_infos = coarse_chunk(
-            per_page_texts,
-            per_page_numbers,
+            per_page_texts, per_page_numbers,
             target_chars=self.chunk_target_chars,
             overlap_chars=self.chunk_overlap_chars,
         )
         texts = [c.text for c in chunk_infos]
         timings["6b_chunk_ms"] = (time.perf_counter() - t0) * 1000
 
-        # ── Stage 7: batched embedding ───────────────────────────────
+        # ── Stage 7: embed remaining text on gpu1 ────────────────────
+        #
+        # Pages that went through OCR produced new text that wasn't in the
+        # early-embed batch.  Identify which chunks contain OCR text and
+        # embed only those; merge with the early embeddings.
         t0 = time.perf_counter()
-        emb = self._embed(texts)
-        torch.cuda.synchronize(self.device)
+
+        if early_emb is not None and len(pre_texts) == len(texts):
+            # All text came from text-only pages (OCR produced nothing new)
+            emb = early_emb
+        else:
+            # Some or all chunks are new — just embed everything.
+            # The overlap with early embed is small; simplicity > micro-opt.
+            emb = self._embed(texts)
+        torch.cuda.synchronize(self.gpu1)
         timings["7_embed_ms"] = (time.perf_counter() - t0) * 1000
 
         timings["total_ms"] = sum(timings.values())
@@ -365,52 +467,31 @@ class FusedPDFPipeline:
         )
 
     # ------------------------------------------------------------------
-    # Stage 1 — sequential PDF rendering
+    # Stage 1 — multiprocess PDF rendering
     # ------------------------------------------------------------------
 
-    def _render_pages(self, path: str) -> List[Dict[str, Any]]:
+    def _render_pages_parallel(self, path: str) -> List[Dict[str, Any]]:
         if pdfium is None:
             raise ImportError("pypdfium2 is required")
 
+        # Quick page count (sequential, cheap)
         doc = pdfium.PdfDocument(path)
         n = len(doc)
+        doc.close()
         if n == 0:
-            doc.close()
             return []
 
-        results: List[Dict[str, Any]] = []
-        for i in range(n):
-            pg = doc[i]
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", UserWarning)
-                tp = pg.get_textpage()
-                try:
-                    txt = tp.get_text_bounded()
-                except (TypeError, AttributeError):
-                    txt = tp.get_text_range()
-                tp.close()
+        args = [(path, i) for i in range(n)]
 
-            pw, ph = float(pg.get_width()), float(pg.get_height())
-            scale = min(1024.0 / max(pw, 1.0), 1024.0 / max(ph, 1.0))
-            bmp = pg.render(scale=scale)
-            pil = bmp.to_pil()
-            arr = np.array(pil.convert("RGB"))
-            bmp.close()
-            pg.close()
+        if self._render_pool is not None and n > 1:
+            results = self._render_pool.map(_render_one_page, args)
+        else:
+            results = [_render_one_page(a) for a in args]
 
-            results.append({
-                "page_number": i + 1,
-                "native_text": txt,
-                "is_scanned": len(txt.strip()) < 10,
-                "image_np": arr,
-                "orig_hw": (int(arr.shape[0]), int(arr.shape[1])),
-            })
-
-        doc.close()
-        return results
+        return list(results)
 
     # ------------------------------------------------------------------
-    # Stage 2 — batch assembly
+    # Stage 2 — batch assembly (sends to gpu0)
     # ------------------------------------------------------------------
 
     def _to_gpu_batch(
@@ -431,14 +512,14 @@ class FusedPDFPipeline:
 
         if torch.cuda.is_available():
             pinned = cpu_batch.pin_memory()
-            gpu_batch = pinned.to(self.device, non_blocking=True)
+            gpu_batch = pinned.to(self.gpu0, non_blocking=True)
         else:
-            gpu_batch = cpu_batch.to(self.device)
+            gpu_batch = cpu_batch.to(self.gpu0)
 
         return gpu_batch, orig_shapes
 
     # ------------------------------------------------------------------
-    # Stage 3 — batched YOLOX
+    # Stage 3 — batched YOLOX (gpu0)
     # ------------------------------------------------------------------
 
     def _detect_elements(
@@ -466,14 +547,7 @@ class FusedPDFPipeline:
         return all_boxes, all_labels, all_scores
 
     # ------------------------------------------------------------------
-    # Stage 4 — smart classify + crop with aggressive filtering
-    #
-    # Three OCR-reduction strategies:
-    #   (a) skip_ocr_if_text: if a page already has rich native text
-    #       (> 50 chars), skip OCR on its structured regions entirely.
-    #   (b) max_crops_per_page: cap the number of OCR calls per page.
-    #       Keep only the highest-confidence detections.
-    #   (c) min_crop_px: ignore tiny crops that are likely noise.
+    # Stage 4 — smart classify + crop
     # ------------------------------------------------------------------
 
     def _classify_and_crop(
@@ -509,14 +583,12 @@ class FusedPDFPipeline:
 
             has_rich_text = len(p["native_text"].strip()) > 50
 
-            # (a) If the page has rich native text, skip OCR entirely
             if self.skip_ocr_if_text and has_rich_text and not p["is_scanned"]:
                 pr.ocr_skipped = True
                 ocr_stats["pages_skipped_ocr"] = ocr_stats.get("pages_skipped_ocr", 0) + 1
                 page_results.append(pr)
                 continue
 
-            # Collect candidate crops with their scores for ranking
             candidates: List[Tuple[float, torch.Tensor, str]] = []
 
             for j in range(n_det):
@@ -539,8 +611,6 @@ class FusedPDFPipeline:
                 y2 = min(h_img, int(bx[3].item() * h_img))
 
                 crop_w, crop_h = x2 - x1, y2 - y1
-
-                # (c) Skip tiny crops
                 if crop_w < self.min_crop_px or crop_h < self.min_crop_px:
                     ocr_stats["crops_skipped"] = ocr_stats.get("crops_skipped", 0) + 1
                     continue
@@ -548,7 +618,6 @@ class FusedPDFPipeline:
                 crop = page_img[:, y1:y2, x1:x2].contiguous()
                 candidates.append((score, crop, lbl))
 
-            # (b) Keep only top-K crops by confidence
             candidates.sort(key=lambda x: x[0], reverse=True)
             kept = candidates[: self.max_crops_per_page]
             ocr_stats["crops_skipped"] = ocr_stats.get("crops_skipped", 0) + (len(candidates) - len(kept))
@@ -556,7 +625,6 @@ class FusedPDFPipeline:
             for score, crop, lbl in kept:
                 crops.append((i, crop, lbl))
 
-            # Scanned pages with no structured content → OCR full page
             if p["is_scanned"] and len(kept) == 0:
                 crops.append((i, page_img.contiguous(), "full_page"))
 
@@ -565,7 +633,7 @@ class FusedPDFPipeline:
         return page_results, crops
 
     # ------------------------------------------------------------------
-    # Stage 5 — OCR
+    # Stage 5 — OCR (gpu0)
     # ------------------------------------------------------------------
 
     def _ocr_crops(
@@ -603,7 +671,7 @@ class FusedPDFPipeline:
                 print(f"  OCR warning (page {page_idx}, {label}): {e}")
 
     # ------------------------------------------------------------------
-    # Stage 6 — text assembly (per-page texts)
+    # Stage 6 — text assembly
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -627,7 +695,7 @@ class FusedPDFPipeline:
         return texts, page_nums
 
     # ------------------------------------------------------------------
-    # Stage 7 — batched embedding
+    # Stage 7 — embedding (gpu1)
     # ------------------------------------------------------------------
 
     def _embed(self, texts: List[str]) -> Optional[torch.Tensor]:

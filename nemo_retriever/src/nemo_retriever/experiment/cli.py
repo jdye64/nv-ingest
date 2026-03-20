@@ -50,8 +50,10 @@ def _gpu_mem_mb() -> str:
 
 def _run_fused(
     pdfs: list[Path],
-    device: str,
+    gpu0: str,
+    gpu1: str,
     warmup_runs: int,
+    render_workers: int,
     console: Console,
     *,
     score_threshold: float = 0.3,
@@ -66,19 +68,22 @@ def _run_fused(
 ) -> list:
     from nemo_retriever.experiment.fused_pipeline import FusedPDFPipeline
 
-    emb_tag = f"fast embedder ({fast_embedder_model})" if fast_embedder else "LlamaNemotron-1B embedder"
+    emb_tag = f"fast embedder ({fast_embedder_model})" if fast_embedder else "LlamaNemotron-1B"
     ocr_tag = "smart OCR routing" if skip_ocr_if_text else "full OCR"
     console.print(
         Panel(
-            "[bold]Fused Pipeline — Optimized[/bold]\n"
-            f"cuDNN benchmark · batched YOLOX · {ocr_tag} · "
-            f"coarse chunking ({chunk_chars} chars) · {emb_tag}",
+            "[bold]Fused Pipeline — Dual GPU[/bold]\n"
+            f"YOLOX+OCR on {gpu0} · embed on {gpu1} · "
+            f"multiprocess render · {ocr_tag} · "
+            f"chunking ({chunk_chars} chars) · {emb_tag}",
             style="green",
         )
     )
 
     pipeline = FusedPDFPipeline(
-        device=device,
+        gpu0=gpu0,
+        gpu1=gpu1,
+        render_workers=render_workers,
         score_threshold=score_threshold,
         max_crops_per_page=max_crops,
         min_crop_px=min_crop_px,
@@ -337,8 +342,10 @@ def _print_per_stage_comparison(
 @app.command("run")
 def run_cmd(
     input_dir: str = typer.Option(..., "--input-dir", "-i", help="Directory with PDFs"),
-    device: str = typer.Option("cuda:0", "--device", "-d", help="CUDA device"),
+    gpu0: str = typer.Option("cuda:0", "--gpu0", help="GPU for YOLOX + OCR"),
+    gpu1: str = typer.Option("cuda:1", "--gpu1", help="GPU for embedder"),
     warmup_runs: int = typer.Option(2, "--warmup-runs", help="Warmup iterations"),
+    render_workers: int = typer.Option(0, "--render-workers", help="Render process count (0=auto)"),
     compare: bool = typer.Option(False, "--compare", "-c", help="Also run baseline for comparison"),
     limit: Optional[int] = typer.Option(None, "--limit", "-n", help="Max PDFs to process"),
     output_json: Optional[str] = typer.Option(None, "--output-json", help="Save results to JSON"),
@@ -354,7 +361,7 @@ def run_cmd(
     fast_embedder: bool = typer.Option(False, "--fast-embedder", help="Use a small fast embedder instead of 1B"),
     fast_embedder_model: str = typer.Option("intfloat/e5-small-v2", "--fast-embedder-model", help="HF model ID for fast embedder"),
     # --- LanceDB + Recall ---
-    query_csv: Optional[str] = typer.Option(None, "--query-csv", "-q", help="Query GT CSV for recall evaluation (e.g. data/bo767_query_gt.csv)"),
+    query_csv: Optional[str] = typer.Option(None, "--query-csv", "-q", help="Query GT CSV for recall evaluation"),
     lancedb_uri: str = typer.Option("/tmp/experiment_lancedb", "--lancedb-uri", help="LanceDB database URI"),
     lancedb_table: str = typer.Option("experiment", "--lancedb-table", help="LanceDB table name"),
 ) -> None:
@@ -365,7 +372,7 @@ def run_cmd(
 
     pipeline_holder: list = []
     fused_results = _run_fused(
-        pdfs, device, warmup_runs, console,
+        pdfs, gpu0, gpu1, warmup_runs, render_workers, console,
         score_threshold=score_threshold,
         max_crops=max_crops,
         min_crop_px=min_crop_px,
@@ -390,20 +397,24 @@ def run_cmd(
     console.print("\n[bold]Writing embeddings to LanceDB …[/bold]")
     _write_lancedb(fused_results, lancedb_uri, lancedb_table, console)
 
-    # ── Recall evaluation (reuses the already-loaded embedder) ──
+    # ── Recall evaluation (reuses the already-loaded embedder on gpu1) ──
     if query_csv:
         embedder = pipeline_holder[0].embedder if pipeline_holder else None
         if embedder is None:
             if fast_embedder:
                 from nemo_retriever.experiment.fused_pipeline import FastEmbedder
-                embedder = FastEmbedder(model_id=fast_embedder_model, device=device)
+                embedder = FastEmbedder(model_id=fast_embedder_model, device=gpu1)
             else:
                 from nemo_retriever.model import create_local_embedder
-                embedder = create_local_embedder(device=device)
+                embedder = create_local_embedder(device=gpu1)
 
         _run_recall(
             lancedb_uri, lancedb_table, query_csv, embedder, console,
         )
+
+    # Clean up render process pool
+    if pipeline_holder:
+        pipeline_holder[0].shutdown()
 
     if output_json:
         _save_json(output_json, fused_results, baseline_results)
