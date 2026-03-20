@@ -318,7 +318,14 @@ def _build(
         shutil.copy2(artifact, out_dir / artifact.name)
 
 
-def _twine_upload(dist_dir: Path, repository_url: str, token: str, *, skip_existing: bool) -> None:
+def _twine_upload(
+    dist_dir: Path,
+    repository_url: str,
+    token: str,
+    *,
+    skip_existing: bool,
+    verbose: bool,
+) -> None:
     venv_dir = Path(os.environ.get("ORCH_VENV_DIR", ".venv-build"))
     # Twine doesn't need system site packages; keep it off by default.
     py = _ensure_venv(venv_dir, system_site_packages=False)
@@ -339,6 +346,8 @@ def _twine_upload(dist_dir: Path, repository_url: str, token: str, *, skip_exist
     ]
     if skip_existing:
         cmd.append("--skip-existing")
+    if verbose:
+        cmd.append("--verbose")
     cmd.append(str(dist_dir / "*"))
     _run(cmd, env=env)
 
@@ -385,6 +394,12 @@ def main() -> int:
     ap.add_argument("--repository-url", default="https://test.pypi.org/legacy/", help="Twine repository URL")
     ap.add_argument("--token-env", default="TEST_PYPI_API_TOKEN", help="Env var containing API token")
     ap.add_argument("--skip-existing", action="store_true", help="Pass --skip-existing to twine")
+    ap.add_argument(
+        "--twine-verbose",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Pass --verbose to twine upload (default: true; use --no-twine-verbose to silence)",
+    )
     ap.add_argument(
         "--hatch-force-platform-wheel",
         action="store_true",
@@ -438,7 +453,13 @@ def main() -> int:
         if not token:
             raise RuntimeError(f"Missing required env var: {args.token_env}")
         print(f"=== Uploading to {args.repository_url} ===")
-        _twine_upload(out_dir, args.repository_url, token, skip_existing=args.skip_existing)
+        _twine_upload(
+            out_dir,
+            args.repository_url,
+            token,
+            skip_existing=args.skip_existing,
+            verbose=args.twine_verbose,
+        )
 
     return 0
 
