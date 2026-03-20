@@ -53,19 +53,40 @@ def _run_fused(
     device: str,
     warmup_runs: int,
     console: Console,
+    *,
+    score_threshold: float = 0.3,
+    max_crops: int = 5,
+    min_crop_px: int = 32,
+    skip_ocr_if_text: bool = True,
+    chunk_chars: int = 2000,
+    chunk_overlap: int = 200,
+    fast_embedder: bool = False,
+    fast_embedder_model: str = "intfloat/e5-small-v2",
 ) -> list:
     from nemo_retriever.experiment.fused_pipeline import FusedPDFPipeline
 
+    emb_tag = f"fast embedder ({fast_embedder_model})" if fast_embedder else "LlamaNemotron-1B embedder"
+    ocr_tag = "smart OCR routing" if skip_ocr_if_text else "full OCR"
     console.print(
         Panel(
             "[bold]Fused Pipeline — Optimized[/bold]\n"
-            "Single process · all models on one GPU · cuDNN benchmark · "
-            "batched YOLOX · GPU-native crops · TF32 · no HTTP/Redis/base64",
+            f"cuDNN benchmark · batched YOLOX · {ocr_tag} · "
+            f"coarse chunking ({chunk_chars} chars) · {emb_tag}",
             style="green",
         )
     )
 
-    pipeline = FusedPDFPipeline(device=device)
+    pipeline = FusedPDFPipeline(
+        device=device,
+        score_threshold=score_threshold,
+        max_crops_per_page=max_crops,
+        min_crop_px=min_crop_px,
+        skip_ocr_if_text=skip_ocr_if_text,
+        chunk_target_chars=chunk_chars,
+        chunk_overlap_chars=chunk_overlap,
+        use_fast_embedder=fast_embedder,
+        fast_embedder_model=fast_embedder_model,
+    )
 
     # Load models
     console.print("\n[bold]Loading models …[/bold]")
@@ -85,10 +106,10 @@ def _run_fused(
         result = pipeline.process_pdf(str(pdf_path))
         results.append(result)
 
-        # Per-PDF timing table
         name = pdf_path.name
         t = result.timings
         n_struct = sum(pr.num_structured_regions for pr in result.page_results)
+        n_skipped = sum(1 for pr in result.page_results if pr.ocr_skipped)
         n_text = len(result.all_texts)
         emb_shape = tuple(result.embeddings.shape) if result.embeddings is not None else "(none)"
 
@@ -104,8 +125,13 @@ def _run_fused(
             style = "bold green" if stage == "total_ms" else ""
             label = stage.replace("_ms", "").replace("_", " ")
             tbl.add_row(label, f"{ms:.1f}", style=style)
-        tbl.add_row("texts embedded", str(n_text))
-        tbl.add_row("embedding shape", str(emb_shape))
+
+        tbl.add_section()
+        tbl.add_row("pages skipped OCR", str(n_skipped), style="dim")
+        tbl.add_row("OCR crops sent", str(result.ocr_stats.get("crops_sent", 0)), style="dim")
+        tbl.add_row("OCR crops filtered", str(result.ocr_stats.get("crops_skipped", 0)), style="dim")
+        tbl.add_row("chunks embedded", str(n_text), style="dim")
+        tbl.add_row("embedding shape", str(emb_shape), style="dim")
         console.print(tbl)
         console.print()
 
@@ -131,7 +157,6 @@ def _run_baseline(pdfs: list[Path], console: Console) -> list[dict]:
         )
     )
 
-    # Build the task list (loads models once)
     console.print("\n[bold]Setting up baseline (loading models) …[/bold]")
     t0 = time.perf_counter()
     ingestor = InProcessIngestor()
@@ -262,8 +287,6 @@ def _print_per_stage_comparison(
     baseline_results: list[dict],
     console: Console,
 ) -> None:
-    """Aggregate timings per stage and show where the wins come from."""
-    # Fused stage totals
     fused_stages: dict[str, float] = {}
     for r in fused_results:
         for key, ms in r.timings.items():
@@ -271,7 +294,6 @@ def _print_per_stage_comparison(
                 continue
             fused_stages[key] = fused_stages.get(key, 0.0) + ms
 
-    # Baseline stage totals
     baseline_stages: dict[str, float] = {}
     for r in baseline_results:
         for m in r["metrics"]:
@@ -316,27 +338,44 @@ def run_cmd(
     compare: bool = typer.Option(False, "--compare", "-c", help="Also run baseline for comparison"),
     limit: Optional[int] = typer.Option(None, "--limit", "-n", help="Max PDFs to process"),
     output_json: Optional[str] = typer.Option(None, "--output-json", help="Save results to JSON"),
+    # --- OCR filtering ---
+    score_threshold: float = typer.Option(0.3, "--score-threshold", help="Min detection confidence for OCR"),
+    max_crops: int = typer.Option(5, "--max-crops", help="Max OCR crops per page (top-K by score)"),
+    min_crop_px: int = typer.Option(32, "--min-crop-px", help="Min crop dimension in pixels"),
+    no_skip_ocr: bool = typer.Option(False, "--no-skip-ocr", help="Disable smart OCR skipping for text-rich pages"),
+    # --- Chunking ---
+    chunk_chars: int = typer.Option(2000, "--chunk-chars", help="Target chunk size in characters"),
+    chunk_overlap: int = typer.Option(200, "--chunk-overlap", help="Overlap between chunks in characters"),
+    # --- Embedder ---
+    fast_embedder: bool = typer.Option(False, "--fast-embedder", help="Use a small fast embedder instead of 1B"),
+    fast_embedder_model: str = typer.Option("intfloat/e5-small-v2", "--fast-embedder-model", help="HF model ID for fast embedder"),
 ) -> None:
     """Run the fused low-latency pipeline on a directory of PDFs."""
     console = Console()
     pdfs = _find_pdfs(input_dir, limit)
     console.print(f"\nFound [bold]{len(pdfs)}[/bold] PDFs in {input_dir}\n")
 
-    # ── Fused pipeline ──
-    fused_results = _run_fused(pdfs, device, warmup_runs, console)
+    fused_results = _run_fused(
+        pdfs, device, warmup_runs, console,
+        score_threshold=score_threshold,
+        max_crops=max_crops,
+        min_crop_px=min_crop_px,
+        skip_ocr_if_text=not no_skip_ocr,
+        chunk_chars=chunk_chars,
+        chunk_overlap=chunk_overlap,
+        fast_embedder=fast_embedder,
+        fast_embedder_model=fast_embedder_model,
+    )
 
-    # ── Baseline (optional) ──
     baseline_results = None
     if compare:
         console.print()
         baseline_results = _run_baseline(pdfs, console)
 
-    # ── Summary ──
     _print_summary(fused_results, baseline_results, console)
     if baseline_results:
         _print_per_stage_comparison(fused_results, baseline_results, console)
 
-    # ── JSON output ──
     if output_json:
         _save_json(output_json, fused_results, baseline_results)
         console.print(f"\nResults saved to [bold]{output_json}[/bold]")
@@ -373,6 +412,7 @@ def _save_json(path: str, fused: list, baseline: list[dict] | None) -> None:
                 "num_pages": r.num_pages,
                 "num_texts": len(r.all_texts),
                 "embedding_dim": r.embedding_dim,
+                "ocr_stats": r.ocr_stats,
                 "timings": dict(r.timings),
             }
             for r in fused
