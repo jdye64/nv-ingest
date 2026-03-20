@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
+import torch.cuda.nvtx as nvtx
 
 torch.set_float32_matmul_precision("high")
 
@@ -268,6 +269,7 @@ class FusedPDFPipeline:
     # ------------------------------------------------------------------
 
     def load_models(self) -> OrderedDict:
+        nvtx.range_push("load_models")
         for dev in (self.gpu0, self.gpu1):
             if dev.type == "cuda":
                 with torch.cuda.device(dev):
@@ -308,11 +310,13 @@ class FusedPDFPipeline:
 
         times["total_s"] = sum(times.values())
         self._models_loaded = True
+        nvtx.range_pop()  # load_models
         return times
 
     def warmup(self, runs: int = 2) -> float:
         if not self._models_loaded:
             raise RuntimeError("Call load_models() before warmup()")
+        nvtx.range_push("warmup")
         t0 = time.perf_counter()
 
         # Warmup YOLOX on gpu0
@@ -334,6 +338,7 @@ class FusedPDFPipeline:
 
         torch.cuda.synchronize(self.gpu0)
         torch.cuda.synchronize(self.gpu1)
+        nvtx.range_pop()  # warmup
         return time.perf_counter() - t0
 
     def shutdown(self) -> None:
@@ -350,37 +355,46 @@ class FusedPDFPipeline:
         if not self._models_loaded:
             raise RuntimeError("Call load_models() first")
 
+        nvtx.range_push(f"process_pdf:{os.path.basename(pdf_path)}")
         timings: OrderedDict[str, float] = OrderedDict()
         src = os.path.abspath(pdf_path)
         ocr_stats = {"crops_sent": 0, "crops_skipped": 0, "pages_skipped_ocr": 0}
 
         # ── Stage 1: multiprocess render + text extraction ───────────
+        nvtx.range_push("1_render")
         t0 = time.perf_counter()
         pages = self._render_pages_parallel(src)
         timings["1_render_ms"] = (time.perf_counter() - t0) * 1000
+        nvtx.range_pop()
 
         n = len(pages)
         if n == 0:
             return PDFResult(src, 0, [], [], [], None, timings)
 
         # ── Stage 2: GPU batch on gpu0 ───────────────────────────────
+        nvtx.range_push("2_transfer")
         t0 = time.perf_counter()
         batch, orig_shapes = self._to_gpu_batch(pages)
         torch.cuda.synchronize(self.gpu0)
         timings["2_transfer_ms"] = (time.perf_counter() - t0) * 1000
+        nvtx.range_pop()
 
         # ── Stage 3: batched page-element detection (gpu0) ───────────
+        nvtx.range_push("3_page_elements")
         t0 = time.perf_counter()
         boxes_l, labels_l, scores_l = self._detect_elements(batch, orig_shapes)
         torch.cuda.synchronize(self.gpu0)
         timings["3_page_elements_ms"] = (time.perf_counter() - t0) * 1000
+        nvtx.range_pop()
 
         # ── Stage 4: classify + crop ─────────────────────────────────
+        nvtx.range_push("4_classify_crop")
         t0 = time.perf_counter()
         page_results, crops = self._classify_and_crop(
             pages, batch, boxes_l, labels_l, scores_l, ocr_stats,
         )
         timings["4_classify_crop_ms"] = (time.perf_counter() - t0) * 1000
+        nvtx.range_pop()
 
         # ── Identify text already ready for embedding (pre-OCR) ──────
         pre_ocr_texts: List[str] = []
@@ -391,6 +405,7 @@ class FusedPDFPipeline:
                 pre_ocr_pages.append(pr.page_number)
 
         # ── Stage 5 + early embed: OCR on gpu0 || embed on gpu1 ─────
+        nvtx.range_push("5_ocr_and_early_embed")
         t0 = time.perf_counter()
         embed_future = None
 
@@ -413,6 +428,7 @@ class FusedPDFPipeline:
         self._ocr_crops(page_results, crops)
         ocr_stats["crops_sent"] = len(crops)
         timings["5_ocr_ms"] = (time.perf_counter() - t0) * 1000
+        nvtx.range_pop()
 
         # Wait for early embedding if it was started
         early_emb = None
@@ -421,11 +437,14 @@ class FusedPDFPipeline:
             executor.shutdown(wait=False)
 
         # ── Stage 6: text assembly ───────────────────────────────────
+        nvtx.range_push("6_assemble")
         t0 = time.perf_counter()
         per_page_texts, per_page_numbers = self._assemble(page_results)
         timings["6_assemble_ms"] = (time.perf_counter() - t0) * 1000
+        nvtx.range_pop()
 
         # ── Stage 6b: coarse chunking ────────────────────────────────
+        nvtx.range_push("6b_chunk")
         t0 = time.perf_counter()
         chunk_infos = coarse_chunk(
             per_page_texts, per_page_numbers,
@@ -434,25 +453,26 @@ class FusedPDFPipeline:
         )
         texts = [c.text for c in chunk_infos]
         timings["6b_chunk_ms"] = (time.perf_counter() - t0) * 1000
+        nvtx.range_pop()
 
         # ── Stage 7: embed remaining text on gpu1 ────────────────────
         #
         # Pages that went through OCR produced new text that wasn't in the
         # early-embed batch.  Identify which chunks contain OCR text and
         # embed only those; merge with the early embeddings.
+        nvtx.range_push("7_embed")
         t0 = time.perf_counter()
 
         if early_emb is not None and len(pre_texts) == len(texts):
-            # All text came from text-only pages (OCR produced nothing new)
             emb = early_emb
         else:
-            # Some or all chunks are new — just embed everything.
-            # The overlap with early embed is small; simplicity > micro-opt.
             emb = self._embed(texts)
         torch.cuda.synchronize(self.gpu1)
         timings["7_embed_ms"] = (time.perf_counter() - t0) * 1000
+        nvtx.range_pop()
 
         timings["total_ms"] = sum(timings.values())
+        nvtx.range_pop()  # process_pdf
 
         return PDFResult(
             source_path=src,
