@@ -53,25 +53,21 @@ def _run_fused(
     device: str,
     torch_compile: bool,
     warmup_runs: int,
-    render_threads: int,
     console: Console,
 ) -> list:
     from nemo_retriever.experiment.fused_pipeline import FusedPDFPipeline
 
+    compile_tag = "torch.compile(dynamic) · " if torch_compile else ""
     console.print(
         Panel(
             "[bold]Fused Pipeline — Optimized[/bold]\n"
-            "Single process · all models on one GPU · batched YOLOX · "
-            "GPU-native crops · no HTTP/Redis/base64",
+            f"Single process · all models on one GPU · {compile_tag}batched YOLOX · "
+            "GPU-native crops · no HTTP/Redis/base64 · TF32 enabled",
             style="green",
         )
     )
 
-    pipeline = FusedPDFPipeline(
-        device=device,
-        use_torch_compile=torch_compile,
-        render_threads=render_threads,
-    )
+    pipeline = FusedPDFPipeline(device=device, use_torch_compile=torch_compile)
 
     # Load models
     console.print("\n[bold]Loading models …[/bold]")
@@ -318,9 +314,8 @@ def _print_per_stage_comparison(
 def run_cmd(
     input_dir: str = typer.Option(..., "--input-dir", "-i", help="Directory with PDFs"),
     device: str = typer.Option("cuda:0", "--device", "-d", help="CUDA device"),
-    torch_compile: bool = typer.Option(False, "--torch-compile", help="Apply torch.compile"),
+    torch_compile: bool = typer.Option(True, "--torch-compile/--no-torch-compile", help="Apply torch.compile with dynamic shapes"),
     warmup_runs: int = typer.Option(2, "--warmup-runs", help="Warmup iterations"),
-    render_threads: int = typer.Option(8, "--render-threads", help="Parallel render workers"),
     compare: bool = typer.Option(False, "--compare", "-c", help="Also run baseline for comparison"),
     limit: Optional[int] = typer.Option(None, "--limit", "-n", help="Max PDFs to process"),
     output_json: Optional[str] = typer.Option(None, "--output-json", help="Save results to JSON"),
@@ -331,7 +326,7 @@ def run_cmd(
     console.print(f"\nFound [bold]{len(pdfs)}[/bold] PDFs in {input_dir}\n")
 
     # ── Fused pipeline ──
-    fused_results = _run_fused(pdfs, device, torch_compile, warmup_runs, render_threads, console)
+    fused_results = _run_fused(pdfs, device, torch_compile, warmup_runs, console)
 
     # ── Baseline (optional) ──
     baseline_results = None
