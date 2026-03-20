@@ -62,6 +62,7 @@ def _run_fused(
     chunk_overlap: int = 200,
     fast_embedder: bool = False,
     fast_embedder_model: str = "intfloat/e5-small-v2",
+    _pipeline_out: list | None = None,
 ) -> list:
     from nemo_retriever.experiment.fused_pipeline import FusedPDFPipeline
 
@@ -134,6 +135,9 @@ def _run_fused(
         tbl.add_row("embedding shape", str(emb_shape), style="dim")
         console.print(tbl)
         console.print()
+
+    if _pipeline_out is not None:
+        _pipeline_out.append(pipeline)
 
     return results
 
@@ -349,12 +353,17 @@ def run_cmd(
     # --- Embedder ---
     fast_embedder: bool = typer.Option(False, "--fast-embedder", help="Use a small fast embedder instead of 1B"),
     fast_embedder_model: str = typer.Option("intfloat/e5-small-v2", "--fast-embedder-model", help="HF model ID for fast embedder"),
+    # --- LanceDB + Recall ---
+    query_csv: Optional[str] = typer.Option(None, "--query-csv", "-q", help="Query GT CSV for recall evaluation (e.g. data/bo767_query_gt.csv)"),
+    lancedb_uri: str = typer.Option("/tmp/experiment_lancedb", "--lancedb-uri", help="LanceDB database URI"),
+    lancedb_table: str = typer.Option("experiment", "--lancedb-table", help="LanceDB table name"),
 ) -> None:
     """Run the fused low-latency pipeline on a directory of PDFs."""
     console = Console()
     pdfs = _find_pdfs(input_dir, limit)
     console.print(f"\nFound [bold]{len(pdfs)}[/bold] PDFs in {input_dir}\n")
 
+    pipeline_holder: list = []
     fused_results = _run_fused(
         pdfs, device, warmup_runs, console,
         score_threshold=score_threshold,
@@ -365,6 +374,7 @@ def run_cmd(
         chunk_overlap=chunk_overlap,
         fast_embedder=fast_embedder,
         fast_embedder_model=fast_embedder_model,
+        _pipeline_out=pipeline_holder,
     )
 
     baseline_results = None
@@ -375,6 +385,25 @@ def run_cmd(
     _print_summary(fused_results, baseline_results, console)
     if baseline_results:
         _print_per_stage_comparison(fused_results, baseline_results, console)
+
+    # ── LanceDB write ──
+    console.print("\n[bold]Writing embeddings to LanceDB …[/bold]")
+    _write_lancedb(fused_results, lancedb_uri, lancedb_table, console)
+
+    # ── Recall evaluation (reuses the already-loaded embedder) ──
+    if query_csv:
+        embedder = pipeline_holder[0].embedder if pipeline_holder else None
+        if embedder is None:
+            if fast_embedder:
+                from nemo_retriever.experiment.fused_pipeline import FastEmbedder
+                embedder = FastEmbedder(model_id=fast_embedder_model, device=device)
+            else:
+                from nemo_retriever.model import create_local_embedder
+                embedder = create_local_embedder(device=device)
+
+        _run_recall(
+            lancedb_uri, lancedb_table, query_csv, embedder, console,
+        )
 
     if output_json:
         _save_json(output_json, fused_results, baseline_results)
@@ -402,6 +431,139 @@ def baseline_cmd(
 
 
 # ─── JSON export ─────────────────────────────────────────────────────
+
+
+def _write_lancedb(
+    fused_results: list,
+    db_uri: str,
+    table_name: str,
+    console: Console,
+) -> None:
+    """Write all chunk embeddings to a LanceDB table."""
+    import lancedb
+    import pyarrow as pa
+
+    rows = []
+    for r in fused_results:
+        if r.embeddings is None:
+            continue
+        pdf_stem = Path(r.source_path).stem
+        emb_list = r.embeddings.cpu().float().tolist()
+        for idx, (chunk, emb) in enumerate(zip(r.chunks, emb_list)):
+            for pn in chunk.page_numbers:
+                rows.append({
+                    "vector": emb,
+                    "text": chunk.text[:500],
+                    "pdf_page": f"{pdf_stem}_{pn}",
+                    "filename": Path(r.source_path).name,
+                    "pdf_basename": pdf_stem,
+                    "page_number": pn,
+                    "source_id": r.source_path,
+                    "path": r.source_path,
+                    "chunk_index": idx,
+                })
+
+    if not rows:
+        console.print("[yellow]No embeddings to write to LanceDB[/yellow]")
+        return
+
+    dim = len(rows[0]["vector"])
+    schema = pa.schema([
+        pa.field("vector", pa.list_(pa.float32(), dim)),
+        pa.field("text", pa.string()),
+        pa.field("pdf_page", pa.string()),
+        pa.field("filename", pa.string()),
+        pa.field("pdf_basename", pa.string()),
+        pa.field("page_number", pa.int32()),
+        pa.field("source_id", pa.string()),
+        pa.field("path", pa.string()),
+        pa.field("chunk_index", pa.int32()),
+    ])
+
+    db = lancedb.connect(db_uri)
+    tbl = db.create_table(table_name, data=rows, schema=schema, mode="overwrite")
+    console.print(
+        f"  Wrote [bold]{len(rows)}[/bold] rows to LanceDB "
+        f"([dim]{db_uri}[/dim] / [bold]{table_name}[/bold]) — "
+        f"vector dim={dim}"
+    )
+    return tbl
+
+
+def _run_recall(
+    db_uri: str,
+    table_name: str,
+    query_csv: str,
+    embedder: object,
+    console: Console,
+    ks: tuple[int, ...] = (1, 5, 10),
+    top_k: int = 10,
+) -> dict[str, float]:
+    """Embed queries, search LanceDB, and compute Recall@K."""
+    import lancedb
+    import pandas as pd
+
+    console.print(f"\n[bold]Running recall evaluation …[/bold]")
+
+    df = pd.read_csv(query_csv)
+    queries = df["query"].astype(str).tolist()
+
+    # Build golden keys
+    if "pdf_page" in df.columns:
+        gold = df["pdf_page"].astype(str).tolist()
+    else:
+        df["pdf"] = df["pdf"].astype(str).str.replace(".pdf", "", regex=False)
+        df["page"] = df["page"].astype(str)
+        gold = (df["pdf"] + "_" + df["page"]).tolist()
+
+    console.print(f"  Queries: {len(queries)}, Top-K: {top_k}")
+
+    # Embed queries — use "query: " prefix for e5 models, standard for others
+    import torch
+    t0 = time.perf_counter()
+    prefixed = [f"query: {q}" for q in queries]
+    query_embs = embedder.embed(prefixed, batch_size=64)
+    torch.cuda.synchronize()
+    embed_s = time.perf_counter() - t0
+    console.print(f"  Query embedding: {embed_s:.2f}s ({len(queries)} queries)")
+
+    # Search LanceDB
+    db = lancedb.connect(db_uri)
+    tbl = db.open_table(table_name)
+
+    t0 = time.perf_counter()
+    retrieved_keys: list[list[str]] = []
+    for i in range(len(queries)):
+        vec = query_embs[i].cpu().float().tolist()
+        hits = tbl.search(vec).limit(top_k).to_list()
+        keys = [h["pdf_page"] for h in hits if h.get("pdf_page")]
+        retrieved_keys.append(keys)
+    search_s = time.perf_counter() - t0
+    console.print(f"  LanceDB search: {search_s:.2f}s")
+
+    # Compute recall
+    metrics: dict[str, float] = {}
+    for k in ks:
+        hits = 0
+        for g, rets in zip(gold, retrieved_keys):
+            if g in rets[:k]:
+                hits += 1
+        metrics[f"recall@{k}"] = hits / max(1, len(gold))
+
+    # Print results
+    tbl_out = Table(title="Recall Evaluation", show_header=True, header_style="bold")
+    tbl_out.add_column("Metric", style="cyan")
+    tbl_out.add_column("Value", justify="right", style="bold green")
+    for name, val in metrics.items():
+        tbl_out.add_row(name, f"{val:.4f}  ({val * 100:.1f}%)")
+    tbl_out.add_section()
+    tbl_out.add_row("queries", str(len(queries)), style="dim")
+    tbl_out.add_row("query embed time", f"{embed_s:.2f}s", style="dim")
+    tbl_out.add_row("search time", f"{search_s:.2f}s", style="dim")
+    console.print()
+    console.print(tbl_out)
+
+    return metrics
 
 
 def _save_json(path: str, fused: list, baseline: list[dict] | None) -> None:

@@ -63,6 +63,7 @@ class PDFResult:
     source_path: str
     num_pages: int
     page_results: List[PageResult]
+    chunks: List[Any]  # List[ChunkInfo] — forward ref
     all_texts: List[str]
     embeddings: Optional[torch.Tensor]
     timings: OrderedDict
@@ -134,42 +135,53 @@ class FastEmbedder:
 # ======================================================================
 
 
+@dataclass
+class ChunkInfo:
+    """A text chunk with metadata about which pages it spans."""
+    text: str
+    page_numbers: List[int]
+
+
 def coarse_chunk(
     page_texts: List[str],
+    page_numbers: List[int],
     target_chars: int = 2000,
     overlap_chars: int = 200,
-) -> List[str]:
+) -> List[ChunkInfo]:
     """Merge per-page texts into larger chunks to reduce embedding count.
 
-    Concatenates consecutive page texts until ``target_chars`` is reached,
-    then starts a new chunk with ``overlap_chars`` of trailing context.
+    Returns ``ChunkInfo`` objects that track which page numbers each
+    chunk covers — needed for recall evaluation against page-level GT.
     """
     if not page_texts:
         return []
 
-    chunks: List[str] = []
-    buf: List[str] = []
+    chunks: List[ChunkInfo] = []
+    buf_texts: List[str] = []
+    buf_pages: List[int] = []
     buf_len = 0
 
-    for txt in page_texts:
+    for txt, pn in zip(page_texts, page_numbers):
         t = txt.strip()
         if not t:
             continue
-        buf.append(t)
+        buf_texts.append(t)
+        buf_pages.append(pn)
         buf_len += len(t)
 
         if buf_len >= target_chars:
-            merged = "\n\n".join(buf)
-            chunks.append(merged)
-            # Carry overlap from end of current chunk
+            merged = "\n\n".join(buf_texts)
+            chunks.append(ChunkInfo(text=merged, page_numbers=list(buf_pages)))
             tail = merged[-overlap_chars:] if overlap_chars and len(merged) > overlap_chars else ""
-            buf = [tail] if tail else []
+            # Overlap carries last page's number for matching
+            buf_texts = [tail] if tail else []
+            buf_pages = [buf_pages[-1]] if tail else []
             buf_len = len(tail)
 
-    if buf:
-        merged = "\n\n".join(buf)
+    if buf_texts:
+        merged = "\n\n".join(buf_texts)
         if merged.strip():
-            chunks.append(merged)
+            chunks.append(ChunkInfo(text=merged, page_numbers=list(buf_pages)))
 
     return chunks
 
@@ -289,7 +301,7 @@ class FusedPDFPipeline:
 
         n = len(pages)
         if n == 0:
-            return PDFResult(src, 0, [], [], None, timings)
+            return PDFResult(src, 0, [], [], [], None, timings)
 
         # ── Stage 2: GPU batch ───────────────────────────────────────
         t0 = time.perf_counter()
@@ -318,16 +330,18 @@ class FusedPDFPipeline:
 
         # ── Stage 6: text assembly ───────────────────────────────────
         t0 = time.perf_counter()
-        per_page_texts = self._assemble(page_results)
+        per_page_texts, per_page_numbers = self._assemble(page_results)
         timings["6_assemble_ms"] = (time.perf_counter() - t0) * 1000
 
         # ── Stage 6b: coarse chunking ────────────────────────────────
         t0 = time.perf_counter()
-        texts = coarse_chunk(
+        chunk_infos = coarse_chunk(
             per_page_texts,
+            per_page_numbers,
             target_chars=self.chunk_target_chars,
             overlap_chars=self.chunk_overlap_chars,
         )
+        texts = [c.text for c in chunk_infos]
         timings["6b_chunk_ms"] = (time.perf_counter() - t0) * 1000
 
         # ── Stage 7: batched embedding ───────────────────────────────
@@ -342,6 +356,7 @@ class FusedPDFPipeline:
             source_path=src,
             num_pages=n,
             page_results=page_results,
+            chunks=chunk_infos,
             all_texts=texts,
             embeddings=emb,
             timings=timings,
@@ -592,8 +607,9 @@ class FusedPDFPipeline:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _assemble(page_results: List[PageResult]) -> List[str]:
+    def _assemble(page_results: List[PageResult]) -> Tuple[List[str], List[int]]:
         texts: List[str] = []
+        page_nums: List[int] = []
         for pr in page_results:
             parts: List[str] = []
             nt = pr.native_text.strip()
@@ -607,7 +623,8 @@ class FusedPDFPipeline:
             pr.final_text = final
             if final:
                 texts.append(final)
-        return texts
+                page_nums.append(pr.page_number)
+        return texts, page_nums
 
     # ------------------------------------------------------------------
     # Stage 7 — batched embedding
