@@ -319,10 +319,14 @@ def _build(
         shutil.copy2(artifact, out_dir / artifact.name)
 
 
-def _auditwheel_repair_dist_dir(dist_dir: Path) -> None:
+def _auditwheel_repair_dist_dir(dist_dir: Path, *, exclude_libs: list[str] | None = None) -> None:
     """
     Rewrite linux_* wheels to manylinux_* so TestPyPI/PyPI accept the upload.
     Requires ``patchelf`` on PATH (e.g. apt install patchelf).
+
+    *exclude_libs* is a list of shared library basenames (e.g. ``libtorch_cpu.so``)
+    that auditwheel should NOT bundle.  This is needed for wheels that link against
+    PyTorch: the torch libs are a runtime dependency, not something to vendor.
     """
     wheels = sorted(dist_dir.glob("*.whl"))
     if not wheels:
@@ -337,7 +341,19 @@ def _auditwheel_repair_dist_dir(dist_dir: Path) -> None:
 
     repair_out = dist_dir / ".auditwheel-out"
     _ensure_clean_dir(repair_out)
-    cmd = [str(py), "-m", "auditwheel", "repair", *[str(w) for w in wheels], "-w", str(repair_out)]
+    exclude_flags: list[str] = []
+    for lib in exclude_libs or []:
+        exclude_flags += ["--exclude", lib]
+    cmd = [
+        str(py),
+        "-m",
+        "auditwheel",
+        "repair",
+        *[str(w) for w in wheels],
+        "-w",
+        str(repair_out),
+        *exclude_flags,
+    ]
     _run(cmd, env=env)
 
     repaired = sorted(repair_out.glob("*.whl"))
@@ -447,6 +463,13 @@ def main() -> int:
         action="store_true",
         help="Run auditwheel repair on built wheels (manylinux tag; needed for PyPI/TestPyPI)",
     )
+    ap.add_argument(
+        "--auditwheel-exclude",
+        action="append",
+        default=[],
+        help="Shared library to exclude from auditwheel bundling (repeatable). "
+        "Use for runtime deps like libtorch_cpu.so that should not be vendored.",
+    )
     args = ap.parse_args()
 
     root = Path.cwd()
@@ -492,7 +515,7 @@ def main() -> int:
 
     if args.auditwheel_repair:
         print("=== auditwheel repair ===")
-        _auditwheel_repair_dist_dir(out_dir)
+        _auditwheel_repair_dist_dir(out_dir, exclude_libs=args.auditwheel_exclude)
 
     if args.upload:
         token = os.environ.get(args.token_env)

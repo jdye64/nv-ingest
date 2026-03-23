@@ -244,6 +244,12 @@ jobs:
             --project-subdir "nemotron-ocr" \
             --hatch-force-platform-wheel \
             --auditwheel-repair \
+            --auditwheel-exclude libtorch_cpu.so \
+            --auditwheel-exclude libtorch_cuda.so \
+            --auditwheel-exclude libtorch.so \
+            --auditwheel-exclude libc10.so \
+            --auditwheel-exclude libc10_cuda.so \
+            --auditwheel-exclude libtorch_python.so \
             --build-no-isolation \
             --venv-pip-install "hatchling" \
             --venv-pip-install "setuptools>=68" \
