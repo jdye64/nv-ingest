@@ -96,6 +96,9 @@ class TRTYoloxEngine:
         *,
         input_shape: Tuple[int, int] = (1024, 1024),
         labels: Optional[List[str]] = None,
+        conf_thresh: float = 0.01,
+        iou_thresh: float = 0.5,
+        min_bbox_size: int = 0,
     ) -> None:
         import tensorrt as trt
 
@@ -105,6 +108,9 @@ class TRTYoloxEngine:
         self._engine_path = engine_path
         self._input_shape = input_shape
         self._labels = labels
+        self._conf_thresh = conf_thresh
+        self._iou_thresh = iou_thresh
+        self._min_bbox_size = min_bbox_size
 
         engine = _load_engine(engine_path)
         self._engine = engine
@@ -145,25 +151,45 @@ class TRTYoloxEngine:
     # Public interface matching NemotronPageElementsV3 / TableStructureV1
     # ------------------------------------------------------------------
 
-    def preprocess(self, tensor: torch.Tensor, orig_shape: Any = None) -> torch.Tensor:
-        """Resize / pad to engine input shape.
+    def preprocess(self, tensor: Any, orig_shape: Any = None) -> torch.Tensor:
+        """Resize / pad to engine input shape using the same aspect-preserving
+        letterbox as the HuggingFace ``resize_pad``.
 
-        Accepts CHW or BCHW tensors.  Returns BCHW ``float32`` on CPU
-        ready for ``invoke``.
+        Accepts CHW or BCHW torch tensors, or HWC / CHW numpy arrays.
+        Returns BCHW ``float32`` on CPU ready for ``invoke``.
         """
-        if tensor.ndim == 3:
-            tensor = tensor.unsqueeze(0)
-        if tensor.ndim != 4:
-            raise ValueError(f"Expected CHW or BCHW tensor, got shape {tuple(tensor.shape)}")
+        from nemotron_page_elements_v3.model import resize_pad as resize_pad_page_elements
 
-        h, w = self._input_shape
-        _, c, th, tw = tensor.shape
-        if th != h or tw != w:
-            tensor = torch.nn.functional.interpolate(
-                tensor.float(), size=(h, w), mode="bilinear", align_corners=False
-            )
+        if isinstance(tensor, np.ndarray):
+            arr = tensor
+            if arr.ndim == 4 and int(arr.shape[0]) == 1:
+                arr = arr[0]
+            if arr.ndim != 3:
+                raise ValueError(f"Expected 3D image array, got shape {getattr(arr, 'shape', None)}")
+            if int(arr.shape[-1]) == 3 and int(arr.shape[0]) != 3:
+                x = torch.from_numpy(np.ascontiguousarray(arr)).permute(2, 0, 1)
+            else:
+                x = torch.from_numpy(np.ascontiguousarray(arr))
+            x = x.to(dtype=torch.float32)
+        elif isinstance(tensor, torch.Tensor):
+            x = tensor.float()
+        else:
+            raise TypeError(f"Expected torch.Tensor or np.ndarray, got {type(tensor)!r}")
 
-        return tensor.to(dtype=torch.float32).contiguous()
+        if x.ndim == 4:
+            outs = []
+            for i in range(int(x.shape[0])):
+                y = resize_pad_page_elements(x[i], self._input_shape)
+                y = torch.clamp(y, 0, 255).to(torch.uint8).float()
+                outs.append(y)
+            return torch.stack(outs, dim=0).contiguous()
+
+        if x.ndim == 3:
+            y = resize_pad_page_elements(x, self._input_shape)
+            y = torch.clamp(y, 0, 255).to(torch.uint8).float()
+            return y.unsqueeze(0).contiguous()
+
+        raise ValueError(f"Expected CHW or BCHW tensor, got shape {tuple(x.shape)}")
 
     def invoke(
         self,
@@ -171,17 +197,28 @@ class TRTYoloxEngine:
         orig_shape: Union[Tuple[int, int], List[Tuple[int, int]]],
     ) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
         """Run TRT inference and return results in the same dict format as
-        the HuggingFace model wrappers."""
+        the HuggingFace model wrappers.
+
+        Boxes are returned **normalised to [0, 1]** relative to
+        ``orig_shape``, matching the HuggingFace ``YoloXWrapper``.
+        """
         if input_tensor.ndim == 3:
             input_tensor = input_tensor.unsqueeze(0)
 
         batch_size = int(input_tensor.shape[0])
+
+        if isinstance(orig_shape, (list, tuple)) and orig_shape and isinstance(orig_shape[0], (list, tuple)):
+            shapes = list(orig_shape)
+        else:
+            shapes = [orig_shape] * batch_size
+
         results: List[Dict[str, Any]] = []
 
         for b in range(batch_size):
             single = input_tensor[b : b + 1]
             raw_outputs = self._infer_single(single)
-            pred = self._raw_to_pred_dict(raw_outputs)
+            sh = shapes[b] if b < len(shapes) else shapes[-1]
+            pred = self._raw_to_pred_dict(raw_outputs, orig_shape=sh)
             results.append(pred)
 
         if batch_size == 1:
@@ -235,58 +272,105 @@ class TRTYoloxEngine:
 
         return [d_out.cpu().numpy() for d_out in d_outputs]
 
-    @staticmethod
-    def _cxcywh_to_xyxy(boxes: np.ndarray) -> np.ndarray:
-        """Convert ``[cx, cy, w, h]`` to ``[x1, y1, x2, y2]``."""
-        cx, cy, w, h = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
-        x1 = cx - w / 2
-        y1 = cy - h / 2
-        x2 = cx + w / 2
-        y2 = cy + h / 2
-        return np.stack([x1, y1, x2, y2], axis=1)
+    def _raw_to_pred_dict(
+        self,
+        raw_outputs: List[np.ndarray],
+        *,
+        orig_shape: Tuple[int, int],
+    ) -> Dict[str, Any]:
+        """Convert raw TRT output arrays into the prediction dict expected by
+        the shared post-processing code.
 
-    def _raw_to_pred_dict(self, raw_outputs: List[np.ndarray]) -> Dict[str, Any]:
-        """Convert raw TRT output arrays into the prediction dict format
-        expected by the shared post-processing code.
+        Replicates the full ``YoloXWrapper.forward()`` pipeline from
+        ``nemotron_page_elements_v3``:
+          1. NMS (conf threshold + torchvision NMS)
+          2. Scale boxes from model input space → original image pixel space
+          3. Clip to original image bounds & remove tiny boxes
+          4. Normalise to ``[0, 1]``
 
-        The YOLOX detection head typically outputs either:
-        - A single tensor of shape ``(1, N, 5+C)`` with columns
-          ``[cx, cy, w, h, objectness, class_0, class_1, …]``, or
-        - Multiple tensors for boxes, labels, scores separately.
-
-        Returns a dict with ``boxes`` in ``[x1, y1, x2, y2]`` format,
-        ``labels``, and ``scores`` as torch tensors.
+        Returns a dict with normalised ``boxes``, ``labels``, ``scores``.
         """
-        if len(raw_outputs) == 1:
-            out = raw_outputs[0]
-            if out.ndim == 3:
-                out = out[0]
-            boxes_xyxy = self._cxcywh_to_xyxy(out[:, :4])
-            obj = out[:, 4:5]
-            cls_scores = out[:, 5:]
-            scores = (obj * cls_scores).max(axis=-1)
-            labels = cls_scores.argmax(axis=-1)
-            return {
-                "boxes": torch.from_numpy(boxes_xyxy.copy()).float(),
-                "labels": torch.from_numpy(labels.copy()).long(),
-                "scores": torch.from_numpy(scores.copy()).float(),
-            }
-
-        if len(raw_outputs) >= 3:
-            boxes = raw_outputs[0].squeeze(0)
-            if boxes.shape[-1] == 4:
-                boxes = self._cxcywh_to_xyxy(boxes)
-            return {
-                "boxes": torch.from_numpy(boxes.copy()).float(),
-                "labels": torch.from_numpy(raw_outputs[1].squeeze(0).copy()).long(),
-                "scores": torch.from_numpy(raw_outputs[2].squeeze(0).copy()).float(),
-            }
-
-        return {
+        empty = {
             "boxes": torch.empty((0, 4), dtype=torch.float32),
             "labels": torch.empty((0,), dtype=torch.int64),
             "scores": torch.empty((0,), dtype=torch.float32),
         }
+
+        if len(raw_outputs) == 1:
+            out = raw_outputs[0]
+            if out.ndim == 2:
+                out = out[np.newaxis]  # (N, 5+C) → (1, N, 5+C)
+
+            prediction = torch.from_numpy(out).float()
+            num_classes = prediction.shape[-1] - 5
+
+            from nemotron_page_elements_v3.yolox.boxes import postprocess as yolox_nms
+
+            nms_results = yolox_nms(
+                prediction,
+                num_classes,
+                conf_thre=self._conf_thresh,
+                nms_thre=self._iou_thresh,
+                class_agnostic=True,
+            )
+
+            p = nms_results[0]  # single image
+            if p is None or p.numel() == 0:
+                return empty
+
+            p = p.view(-1, p.size(-1))
+
+            orig_h, orig_w = orig_shape
+            ratio = min(
+                self._input_shape[0] / orig_h,
+                self._input_shape[1] / orig_w,
+            )
+            boxes = p[:, :4] / ratio
+
+            boxes[:, [0, 2]] = torch.clamp(boxes[:, [0, 2]], 0, orig_w)
+            boxes[:, [1, 3]] = torch.clamp(boxes[:, [1, 3]], 0, orig_h)
+
+            kept = (
+                (boxes[:, 2] - boxes[:, 0] > self._min_bbox_size)
+                & (boxes[:, 3] - boxes[:, 1] > self._min_bbox_size)
+            )
+            boxes = boxes[kept]
+            p = p[kept]
+
+            boxes[:, [0, 2]] /= orig_w
+            boxes[:, [1, 3]] /= orig_h
+
+            scores = p[:, 4] * p[:, 5]
+            labels = p[:, 6]
+
+            return {
+                "boxes": boxes.float(),
+                "labels": labels.long(),
+                "scores": scores.float(),
+            }
+
+        if len(raw_outputs) >= 3:
+            boxes_np = raw_outputs[0].squeeze(0)
+            boxes = torch.from_numpy(boxes_np.copy()).float()
+
+            orig_h, orig_w = orig_shape
+            ratio = min(
+                self._input_shape[0] / orig_h,
+                self._input_shape[1] / orig_w,
+            )
+            boxes /= ratio
+            boxes[:, [0, 2]] = torch.clamp(boxes[:, [0, 2]], 0, orig_w)
+            boxes[:, [1, 3]] = torch.clamp(boxes[:, [1, 3]], 0, orig_h)
+            boxes[:, [0, 2]] /= orig_w
+            boxes[:, [1, 3]] /= orig_h
+
+            return {
+                "boxes": boxes,
+                "labels": torch.from_numpy(raw_outputs[1].squeeze(0).copy()).long(),
+                "scores": torch.from_numpy(raw_outputs[2].squeeze(0).copy()).float(),
+            }
+
+        return empty
 
 
 # ======================================================================
