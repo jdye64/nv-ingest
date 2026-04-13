@@ -1,0 +1,5 @@
+.venv/
+.corpus_data/
+__pycache__/
+*.py[cod]
+*.sqlite3

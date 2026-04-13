@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=78.1.1", "wheel>=0.46.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "corpus-suite-poc"
+version = "0.1.0"
+description = "POC: page-level corpus pipeline, local SQLite + FTS, agent APIs"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.114.0",
+  "uvicorn[standard]>=0.30.0",
+  "python-multipart>=0.0.9",
+  "pydantic>=2.8.0",
+  "pydantic-settings>=2.4.0",
+  "aiosqlite>=0.20.0",
+  "pypdf>=5.0.0",
+  "typer>=0.12.0",
+]
+
+[project.optional-dependencies]
+dev = ["httpx>=0.27.0", "ruff>=0.8.0"]
+
+[project.scripts]
+corpus-suite = "corpus_suite_poc.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
