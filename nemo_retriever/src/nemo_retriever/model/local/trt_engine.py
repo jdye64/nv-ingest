@@ -71,6 +71,19 @@ def _load_engine(engine_path: str) -> Any:
     return engine
 
 
+class _InferSlot:
+    """Resources for one side of the double-buffer: execution context,
+    CUDA stream, and reusable output buffers."""
+
+    __slots__ = ("ctx", "stream", "cached_shapes", "bufs")
+
+    def __init__(self, engine: Any, device: torch.device) -> None:
+        self.ctx = engine.create_execution_context()
+        self.stream = torch.cuda.Stream(device)
+        self.cached_shapes: Optional[List[Tuple[int, ...]]] = None
+        self.bufs: List[torch.Tensor] = []
+
+
 class TRTYoloxEngine:
     """TensorRT engine wrapper that mimics the ``invoke`` / ``preprocess`` API
     used by ``NemotronPageElementsV3``, ``NemotronTableStructureV1``, and
@@ -84,6 +97,9 @@ class TRTYoloxEngine:
       box normalisation; only the final prediction dicts are copied to CPU.
     * **Buffer reuse** – output device buffers are allocated once and reused
       across calls of the same batch size, eliminating per-call ``cudaMalloc``.
+    * **Double-buffered pipelining** – two execution contexts alternate so
+      GPU inference of batch N+1 overlaps with CPU post-processing of
+      batch N.  Use ``invoke_async`` / ``flush`` to opt in.
 
     Parameters
     ----------
@@ -120,9 +136,7 @@ class TRTYoloxEngine:
 
         engine = _load_engine(engine_path)
         self._engine = engine
-        self._context = engine.create_execution_context()
         self._trt = trt
-        self._stream = torch.cuda.Stream(self._device)
 
         self._input_name: Optional[str] = None
         self._output_names: List[str] = []
@@ -144,22 +158,22 @@ class TRTYoloxEngine:
         if self._input_name is None:
             raise RuntimeError(f"TRT engine {engine_path} has no input tensor")
 
-        # Detect dynamic batch dimension.
         self._has_dynamic_batch = (
             tuple(engine.get_tensor_shape(self._input_name))[0] == -1
         )
 
-        # Cache for reusable GPU output buffers keyed by resolved output shapes.
-        self._cached_out_shapes: Optional[List[Tuple[int, ...]]] = None
-        self._cached_out_bufs: List[torch.Tensor] = []
+        # Double-buffer: two slots with independent contexts / streams / buffers.
+        self._slots = [_InferSlot(engine, self._device) for _ in range(2)]
+        self._active_slot = 0
+        # (slot_index, orig_shapes, batch_size) for the in-flight batch, or None.
+        self._inflight: Optional[Tuple[int, List[Tuple[int, int]], int]] = None
 
-        # Pre-import the upstream NMS function once to avoid per-call overhead.
         from nemotron_page_elements_v3.yolox.boxes import postprocess as _yolox_nms
         self._yolox_nms = _yolox_nms
 
         logger.info(
             "TRTYoloxEngine loaded: path=%s, input=%s, outputs=%s, "
-            "spatial=%s, dynamic_batch=%s, device=%s",
+            "spatial=%s, dynamic_batch=%s, double_buffer=True, device=%s",
             engine_path,
             self._input_name,
             self._output_names,
@@ -169,7 +183,7 @@ class TRTYoloxEngine:
         )
 
     # ------------------------------------------------------------------
-    # Public interface matching NemotronPageElementsV3 / TableStructureV1
+    # Public interface
     # ------------------------------------------------------------------
 
     def preprocess(self, tensor: Any, orig_shape: Any = None) -> torch.Tensor:
@@ -217,12 +231,28 @@ class TRTYoloxEngine:
         input_tensor: torch.Tensor,
         orig_shape: Union[Tuple[int, int], List[Tuple[int, int]]],
     ) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
-        """Run TRT inference and return results in the same dict format as
-        the HuggingFace model wrappers.
+        """Synchronous inference — submit then immediately flush."""
+        self.invoke_async(input_tensor, orig_shape)
+        return self.flush()  # type: ignore[return-value]
 
-        The full batch is executed in **one** TRT call.  NMS and box
-        normalisation run on GPU; only the final prediction dicts are
-        moved to CPU.
+    def invoke_async(
+        self,
+        input_tensor: torch.Tensor,
+        orig_shape: Union[Tuple[int, int], List[Tuple[int, int]]],
+    ) -> Optional[Union[Dict[str, Any], List[Dict[str, Any]]]]:
+        """Launch TRT inference **asynchronously** and return the
+        **previous** batch's post-processed results (or ``None`` on the
+        first call).
+
+        Use with :meth:`flush` to drain the final in-flight batch::
+
+            for batch, shapes in chunks:
+                prev = model.invoke_async(batch, shapes)
+                if prev is not None:
+                    handle(prev)
+            last = model.flush()
+            if last is not None:
+                handle(last)
         """
         if input_tensor.ndim == 3:
             input_tensor = input_tensor.unsqueeze(0)
@@ -234,12 +264,36 @@ class TRTYoloxEngine:
         else:
             shapes = [orig_shape] * batch_size
 
-        gpu_outputs = self._infer_batched(input_tensor)
-        results = self._postprocess_batch(gpu_outputs, shapes)
+        # ---- collect previous in-flight results (if any) ----
+        prev_results: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None
+        if self._inflight is not None:
+            prev_slot_idx, prev_shapes, prev_bs = self._inflight
+            prev_slot = self._slots[prev_slot_idx]
+            prev_slot.stream.synchronize()
+            preds = self._postprocess_batch(prev_slot.bufs, prev_shapes)
+            prev_results = preds[0] if prev_bs == 1 else preds
 
-        if batch_size == 1:
-            return results[0]
-        return results
+        # ---- launch new batch on the current slot (no sync) ----
+        slot = self._slots[self._active_slot]
+        self._launch_on_slot(slot, input_tensor)
+        self._inflight = (self._active_slot, shapes, batch_size)
+        self._active_slot = 1 - self._active_slot
+
+        return prev_results
+
+    def flush(self) -> Optional[Union[Dict[str, Any], List[Dict[str, Any]]]]:
+        """Synchronise and return the last in-flight batch's results.
+
+        Returns ``None`` if nothing is in flight.
+        """
+        if self._inflight is None:
+            return None
+        slot_idx, shapes, bs = self._inflight
+        slot = self._slots[slot_idx]
+        slot.stream.synchronize()
+        preds = self._postprocess_batch(slot.bufs, shapes)
+        self._inflight = None
+        return preds[0] if bs == 1 else preds
 
     def __call__(
         self,
@@ -263,47 +317,47 @@ class TRTYoloxEngine:
         return {}
 
     # ------------------------------------------------------------------
-    # Batched GPU inference
+    # Double-buffered GPU inference
     # ------------------------------------------------------------------
 
-    def _infer_batched(self, input_nchw: torch.Tensor) -> List[torch.Tensor]:
-        """Execute batched TRT inference.  Returns **GPU-resident** tensors.
-
-        Output buffers are cached and reused across calls of the same
-        effective shape, eliminating per-call ``cudaMalloc`` overhead.
+    def _launch_on_slot(self, slot: _InferSlot, input_nchw: torch.Tensor) -> None:
+        """Transfer *input_nchw* to GPU on *slot*'s stream, configure the
+        execution context, and launch ``execute_async_v3`` **without**
+        synchronising.  The caller is responsible for later calling
+        ``slot.stream.synchronize()`` before reading from ``slot.bufs``.
         """
         torch_dtype = _NP_TO_TORCH_DTYPE.get(np.dtype(self._input_dtype), torch.float32)
         d_input = input_nchw.to(device=self._device, dtype=torch_dtype).contiguous()
 
+        ctx = slot.ctx
         if self._has_dynamic_batch:
-            self._context.set_input_shape(self._input_name, tuple(d_input.shape))
+            ctx.set_input_shape(self._input_name, tuple(d_input.shape))
 
-        self._context.set_tensor_address(self._input_name, d_input.data_ptr())
+        ctx.set_tensor_address(self._input_name, d_input.data_ptr())
 
-        # Resolve actual output shapes (batch dim may be dynamic).
         needed_shapes: List[Tuple[int, ...]] = [
-            tuple(self._context.get_tensor_shape(name))
+            tuple(ctx.get_tensor_shape(name))
             for name in self._output_names
         ]
 
-        # Allocate or reuse output buffers.
-        if needed_shapes != self._cached_out_shapes:
-            self._cached_out_bufs = []
+        if needed_shapes != slot.cached_shapes:
+            slot.bufs = []
             for shape, np_dtype in zip(needed_shapes, self._output_dtypes):
                 t_dtype = _NP_TO_TORCH_DTYPE.get(np.dtype(np_dtype), torch.float32)
-                self._cached_out_bufs.append(
+                slot.bufs.append(
                     torch.empty(shape, dtype=t_dtype, device=self._device)
                 )
-            self._cached_out_shapes = needed_shapes
+            slot.cached_shapes = needed_shapes
 
-        for name, d_out in zip(self._output_names, self._cached_out_bufs):
-            self._context.set_tensor_address(name, d_out.data_ptr())
+        for name, d_out in zip(self._output_names, slot.bufs):
+            ctx.set_tensor_address(name, d_out.data_ptr())
 
-        with torch.cuda.stream(self._stream):
-            self._context.execute_async_v3(stream_handle=self._stream.cuda_stream)
-        self._stream.synchronize()
+        # Keep d_input alive until execution completes by recording an event.
+        # We stash it on the slot so GC doesn't free the memory early.
+        slot._d_input_ref = d_input  # type: ignore[attr-defined]
 
-        return self._cached_out_bufs
+        with torch.cuda.stream(slot.stream):
+            ctx.execute_async_v3(stream_handle=slot.stream.cuda_stream)
 
     # ------------------------------------------------------------------
     # GPU-resident post-processing (NMS + normalisation)
@@ -331,16 +385,12 @@ class TRTYoloxEngine:
         B = len(shapes)
 
         if len(gpu_outputs) == 1:
-            raw = gpu_outputs[0]  # (B, N, 5+C) on GPU
+            raw = gpu_outputs[0]
             if raw.ndim == 2:
                 raw = raw.unsqueeze(0)
 
             num_classes = raw.shape[-1] - 5
 
-            # NMS runs on GPU tensors (torchvision.ops.nms supports CUDA).
-            # The upstream postprocess modifies the tensor in-place
-            # (cxcywh → xyxy), which is fine because TRT overwrites
-            # the buffer on the next call.
             nms_results = self._yolox_nms(
                 raw,
                 num_classes,
@@ -389,9 +439,9 @@ class TRTYoloxEngine:
             return results
 
         if len(gpu_outputs) >= 3:
-            all_boxes = gpu_outputs[0]   # (B, N, 4) on GPU
-            all_labels = gpu_outputs[1]  # (B, N) on GPU
-            all_scores = gpu_outputs[2]  # (B, N) on GPU
+            all_boxes = gpu_outputs[0]
+            all_labels = gpu_outputs[1]
+            all_scores = gpu_outputs[2]
 
             results = []
             for b in range(B):
@@ -428,6 +478,18 @@ def _l2_normalize(x: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
     return x / denom
 
 
+class _EmbedSlot:
+    """Resources for one side of the embed double-buffer."""
+
+    __slots__ = ("ctx", "stream", "d_output", "d_inputs")
+
+    def __init__(self, engine: Any, device: torch.device) -> None:
+        self.ctx = engine.create_execution_context()
+        self.stream = torch.cuda.Stream(device)
+        self.d_output: Optional[torch.Tensor] = None
+        self.d_inputs: Dict[str, torch.Tensor] = {}
+
+
 class TRTEmbedEngine:
     """TensorRT engine wrapper that mimics the ``embed()`` API of
     ``LlamaNemotronEmbed1BV2Embedder``.
@@ -436,6 +498,12 @@ class TRTEmbedEngine:
     tensors (int32, shape ``[B, S]``) and produce a last-hidden-state
     output of shape ``[B, S, D]``.  Mean-pooling and optional L2
     normalisation are applied on top.
+
+    Performance characteristics
+    --------------------------
+    * **Double-buffered pipelining** – two execution contexts alternate
+      across sub-batches so GPU inference of sub-batch N+1 overlaps with
+      CPU-side pooling, normalisation, and ``cpu()`` transfer of sub-batch N.
 
     Parameters
     ----------
@@ -482,9 +550,7 @@ class TRTEmbedEngine:
 
         engine = _load_engine(engine_path)
         self._engine = engine
-        self._context = engine.create_execution_context()
         self._trt = trt
-        self._stream = torch.cuda.Stream(self._device)
 
         self._io_info: Dict[str, Dict[str, Any]] = {}
         for i in range(engine.num_io_tensors):
@@ -497,8 +563,15 @@ class TRTEmbedEngine:
                 "is_input": mode == trt.TensorIOMode.INPUT,
             }
 
-        # Parse optimization profiles: list of (profile_idx, max_batch, max_seq)
-        # sorted by max_seq ascending so we pick the tightest fit first.
+        # Resolve the output tensor name once.
+        self._output_name: Optional[str] = None
+        for name, info in self._io_info.items():
+            if not info["is_input"]:
+                self._output_name = name
+                break
+        if self._output_name is None:
+            raise RuntimeError("TRT embed engine has no output tensor")
+
         self._profiles: List[Tuple[int, int, int]] = []
         input_tensor_name = next(
             (n for n, info in self._io_info.items() if info["is_input"]),
@@ -514,13 +587,16 @@ class TRTEmbedEngine:
 
         self._profiles.sort(key=lambda t: (t[2], t[1]))
 
-        # Clamp max_length to the absolute max sequence any profile supports.
         abs_max_seq = max(p[2] for p in self._profiles) if self._profiles else max_length
         self._max_length = min(max_length, abs_max_seq)
 
+        # Double-buffer: two slots with independent contexts / streams.
+        self._slots = [_EmbedSlot(engine, self._device) for _ in range(2)]
+        self._active_slot = 0
+
         logger.info(
             "TRTEmbedEngine loaded: path=%s, tensors=%s, max_length=%d, "
-            "normalize=%s, profiles=%s, device=%s",
+            "normalize=%s, profiles=%s, double_buffer=True, device=%s",
             engine_path,
             list(self._io_info.keys()),
             self._max_length,
@@ -540,10 +616,10 @@ class TRTEmbedEngine:
     def embed(self, texts: "Sequence[str]", *, batch_size: int = 64) -> torch.Tensor:
         """Return a CPU tensor of shape ``[N, D]``, matching the HF embedder API.
 
-        Tokenised inputs are automatically split into sub-batches that
-        respect the engine's optimisation profile limits on
-        ``(batch, seq_len)``.  Mean-pooling and L2 normalisation run on
-        GPU; only the final vectors are copied to CPU.
+        Tokenised inputs are split into sub-batches that respect the
+        engine's optimisation profile limits.  Sub-batches are
+        **double-buffered**: GPU inference of sub-batch N+1 overlaps
+        with CPU-side pooling / normalisation / transfer of sub-batch N.
         """
         texts_list = [str(t) for t in texts if str(t).strip()]
         if not texts_list:
@@ -561,6 +637,11 @@ class TRTEmbedEngine:
 
         result_vecs: List[Optional[torch.Tensor]] = [None] * len(texts_list)
 
+        # Double-buffer state for the previous in-flight sub-batch.
+        pending_slot_idx: Optional[int] = None
+        pending_mask: Optional[torch.Tensor] = None
+        pending_indices: Optional[List[int]] = None
+
         for indices in sub_batches:
             chunk = [texts_list[i] for i in indices]
             max_seq = max(lengths[i] for i in indices)
@@ -574,26 +655,109 @@ class TRTEmbedEngine:
             input_ids = tokens["input_ids"].astype(np.int32)
             attention_mask = tokens["attention_mask"].astype(np.int32)
 
-            # hidden stays on GPU
-            hidden = self._infer_batch(input_ids, attention_mask)
+            # Launch this sub-batch's TRT inference async on the current slot.
+            slot = self._slots[self._active_slot]
+            self._launch_embed_on_slot(slot, input_ids, attention_mask)
+            launched_slot_idx = self._active_slot
+            self._active_slot = 1 - self._active_slot
 
-            # Pooling and normalisation on GPU
-            mask_gpu = (
+            # While GPU executes, drain the previous sub-batch (if any).
+            if pending_slot_idx is not None:
+                self._drain_embed_slot(
+                    pending_slot_idx, pending_mask, pending_indices, result_vecs,  # type: ignore[arg-type]
+                )
+
+            # Record this sub-batch as pending.
+            pending_slot_idx = launched_slot_idx
+            pending_mask = (
                 torch.from_numpy(attention_mask.astype(np.float32))
                 .to(device=self._device)
                 .unsqueeze(-1)
             )
-            pooled = (hidden * mask_gpu).sum(dim=1) / mask_gpu.sum(dim=1)
-            if self._normalize:
-                pooled = _l2_normalize(pooled)
+            pending_indices = indices
 
-            # Single CPU transfer for the whole sub-batch
-            pooled_cpu = pooled.cpu()
-            for local_i, orig_i in enumerate(indices):
-                result_vecs[orig_i] = pooled_cpu[local_i]
+        # Flush the last in-flight sub-batch.
+        if pending_slot_idx is not None:
+            self._drain_embed_slot(
+                pending_slot_idx, pending_mask, pending_indices, result_vecs,  # type: ignore[arg-type]
+            )
 
         filled = [v for v in result_vecs if v is not None]
         return torch.stack(filled, dim=0) if filled else torch.empty((0, 0), dtype=torch.float32)
+
+    # ------------------------------------------------------------------
+    # Double-buffer helpers
+    # ------------------------------------------------------------------
+
+    def _launch_embed_on_slot(
+        self,
+        slot: _EmbedSlot,
+        input_ids: np.ndarray,
+        attention_mask: np.ndarray,
+    ) -> None:
+        """Configure the slot's context and launch ``execute_async_v3``
+        **without** synchronising.
+        """
+        B, S = input_ids.shape
+        profile_idx = self._best_profile(B, S)
+        if profile_idx is None:
+            raise RuntimeError(
+                f"No TRT optimization profile supports shape ({B}, {S}). "
+                f"Available profiles: {self._profiles}"
+            )
+
+        ctx = slot.ctx
+        if ctx.active_optimization_profile != profile_idx:
+            ctx.set_optimization_profile_async(profile_idx, slot.stream.cuda_stream)
+            slot.stream.synchronize()
+
+        inputs_np = {
+            "input_ids": np.ascontiguousarray(input_ids),
+            "attention_mask": np.ascontiguousarray(attention_mask),
+        }
+
+        slot.d_inputs = {}
+        for name, arr in inputs_np.items():
+            if name in self._io_info:
+                ctx.set_input_shape(name, arr.shape)
+                np_dtype = np.dtype(arr.dtype)
+                t_dtype = _NP_TO_TORCH_DTYPE.get(np_dtype, torch.int32)
+                d_buf = torch.from_numpy(arr).to(
+                    device=self._device, dtype=t_dtype
+                ).contiguous()
+                ctx.set_tensor_address(name, d_buf.data_ptr())
+                slot.d_inputs[name] = d_buf
+
+        out_shape = tuple(ctx.get_tensor_shape(self._output_name))
+        out_np_dtype = np.dtype(self._io_info[self._output_name]["dtype"])
+        out_t_dtype = _NP_TO_TORCH_DTYPE.get(out_np_dtype, torch.float32)
+        slot.d_output = torch.empty(out_shape, dtype=out_t_dtype, device=self._device)
+        ctx.set_tensor_address(self._output_name, slot.d_output.data_ptr())
+
+        with torch.cuda.stream(slot.stream):
+            ctx.execute_async_v3(stream_handle=slot.stream.cuda_stream)
+
+    def _drain_embed_slot(
+        self,
+        slot_idx: int,
+        mask_gpu: torch.Tensor,
+        indices: List[int],
+        result_vecs: List[Optional[torch.Tensor]],
+    ) -> None:
+        """Synchronise a slot, pool + normalise its output, and scatter
+        the resulting CPU vectors into *result_vecs*.
+        """
+        slot = self._slots[slot_idx]
+        slot.stream.synchronize()
+
+        hidden = slot.d_output.float()  # type: ignore[union-attr]
+        pooled = (hidden * mask_gpu).sum(dim=1) / mask_gpu.sum(dim=1)
+        if self._normalize:
+            pooled = _l2_normalize(pooled)
+
+        pooled_cpu = pooled.cpu()
+        for local_i, orig_i in enumerate(indices):
+            result_vecs[orig_i] = pooled_cpu[local_i]
 
     # ------------------------------------------------------------------
     # Profile-aware batching helpers
@@ -636,8 +800,6 @@ class TRTEmbedEngine:
         sub_batches: List[List[int]] = []
         pos = 0
         while pos < len(order):
-            # The longest text in this candidate sub-batch determines
-            # the required seq_len.  Start with one text and grow.
             end = pos + 1
             while end < len(order):
                 candidate_seq = lengths[order[end]]
@@ -648,12 +810,9 @@ class TRTEmbedEngine:
                     break
                 end += 1
 
-            # Validate the sub-batch we formed.
             sub = order[pos:end]
             max_seq = max(lengths[i] for i in sub)
             if self._best_profile(len(sub), max_seq) is None:
-                # Even a single text doesn't fit (shouldn't happen if
-                # max_length was clamped, but be defensive).
                 sub_batches.append([sub[0]])
                 pos += 1
             else:
@@ -661,64 +820,3 @@ class TRTEmbedEngine:
                 pos = end
 
         return sub_batches
-
-    # ------------------------------------------------------------------
-    # TRT inference
-    # ------------------------------------------------------------------
-
-    def _infer_batch(self, input_ids: np.ndarray, attention_mask: np.ndarray) -> torch.Tensor:
-        """Run TRT inference and return the last-hidden-state as a **GPU-resident**
-        float32 tensor.
-
-        Automatically selects the best optimisation profile for the
-        input shape ``(B, S)``.
-        """
-        B, S = input_ids.shape
-        profile_idx = self._best_profile(B, S)
-        if profile_idx is None:
-            raise RuntimeError(
-                f"No TRT optimization profile supports shape ({B}, {S}). "
-                f"Available profiles: {self._profiles}"
-            )
-
-        if self._context.active_optimization_profile != profile_idx:
-            self._context.set_optimization_profile_async(
-                profile_idx, self._stream.cuda_stream
-            )
-            self._stream.synchronize()
-
-        inputs_np = {
-            "input_ids": np.ascontiguousarray(input_ids),
-            "attention_mask": np.ascontiguousarray(attention_mask),
-        }
-
-        d_inputs: Dict[str, torch.Tensor] = {}
-        for name, arr in inputs_np.items():
-            if name in self._io_info:
-                self._context.set_input_shape(name, arr.shape)
-                np_dtype = np.dtype(arr.dtype)
-                t_dtype = _NP_TO_TORCH_DTYPE.get(np_dtype, torch.int32)
-                d_buf = torch.from_numpy(arr).to(device=self._device, dtype=t_dtype).contiguous()
-                self._context.set_tensor_address(name, d_buf.data_ptr())
-                d_inputs[name] = d_buf
-
-        output_name: Optional[str] = None
-        for name, info in self._io_info.items():
-            if not info["is_input"]:
-                output_name = name
-                break
-        if output_name is None:
-            raise RuntimeError("TRT embed engine has no output tensor")
-
-        out_shape = tuple(self._context.get_tensor_shape(output_name))
-        out_np_dtype = np.dtype(self._io_info[output_name]["dtype"])
-        out_t_dtype = _NP_TO_TORCH_DTYPE.get(out_np_dtype, torch.float32)
-        d_output = torch.empty(out_shape, dtype=out_t_dtype, device=self._device)
-        self._context.set_tensor_address(output_name, d_output.data_ptr())
-
-        with torch.cuda.stream(self._stream):
-            self._context.execute_async_v3(stream_handle=self._stream.cuda_stream)
-
-        self._stream.synchronize()
-
-        return d_output.float()

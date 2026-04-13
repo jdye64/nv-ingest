@@ -15,6 +15,7 @@ extract = ExtractParams(
     ocr_trt_engine_path=str(NGC_MODELS / "ocr"),
     use_table_structure=True,
     use_graphic_elements=True,
+    inference_batch_size=32,
 )
 
 embed = EmbedParams(
@@ -26,6 +27,11 @@ ing = GraphIngestor(
     ray_address="auto",
     node_overrides={
         "PDFExtractionActor": {"concurrency": 48},
+        "PageElementDetectionActor": {"concurrency": 16, "num_gpus": 0.1},
+        "TableStructureActor": {"concurrency": 8, "num_gpus": 0.1},
+        "GraphicElementsActor": {"concurrency": 8, "num_gpus": 0.1},
+        "OCRActor": {"concurrency": 16, "num_gpus": 0.1},
+        "_BatchEmbedActor": {"concurrency": 8, "num_gpus": 0.25},
     },
 )
 ing = ing.files(docs).extract(extract).embed(embed)

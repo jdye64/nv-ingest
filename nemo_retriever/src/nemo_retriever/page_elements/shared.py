@@ -599,15 +599,67 @@ def detect_page_elements_v3(
                     "timing": {"seconds": float(elapsed)}
                 }
 
-    for chunk_start in range(0, len(valid_indices), int(inference_batch_size)):
-        chunk_idx = valid_indices[chunk_start : chunk_start + int(inference_batch_size)]
-        if not chunk_idx:
-            continue
+    def _finalize_chunk_preds(
+        preds: Any,
+        chunk_idx: List[int],
+        num_images: int,
+        elapsed: float,
+    ) -> None:
+        """Postprocess model predictions and write results into *row_payloads*."""
+        if isinstance(preds, dict):
+            preds_list2 = [preds]
+        elif isinstance(preds, list):
+            preds_list2 = preds
+        else:
+            preds_list2 = [preds]
 
-        if use_remote:
-            continue
+        try:
+            if hasattr(model, "postprocess"):
+                boxes, labels, scores = model.postprocess(preds_list2)  # type: ignore[attr-defined]
+            else:
+                boxes_list_: List["torch.Tensor"] = []
+                labels_list_: List["torch.Tensor"] = []
+                scores_list_: List["torch.Tensor"] = []
+                for p in preds_list2:
+                    if not isinstance(p, dict):
+                        boxes_list_.append(torch.empty((0, 4), dtype=torch.float32))
+                        labels_list_.append(torch.empty((0,), dtype=torch.int64))
+                        scores_list_.append(torch.empty((0,), dtype=torch.float32))
+                        continue
+                    b_np, l_np, s_np = postprocess_preds_page_element(
+                        p,
+                        thresholds_per_class,
+                        label_names,
+                    )
+                    boxes_list_.append(torch.as_tensor(b_np, dtype=torch.float32))
+                    labels_list_.append(torch.as_tensor(l_np, dtype=torch.int64))
+                    scores_list_.append(torch.as_tensor(s_np, dtype=torch.float32))
+                boxes, labels, scores = boxes_list_, labels_list_, scores_list_
 
-        # Preprocess each image to a fixed shape so we can stack.
+            per_image_dets = _postprocess_to_per_image_detections(
+                boxes=boxes,
+                labels=labels,
+                scores=scores,
+                batch_size=num_images,
+                label_names=label_names,
+            )
+            per_image_dets = [_apply_page_elements_v3_postprocess(dets) for dets in per_image_dets]
+            per_image_dets = [_apply_final_score_filter(dets) for dets in per_image_dets]
+            for local_i, row_i in enumerate(chunk_idx):
+                dets = per_image_dets[local_i] if local_i < len(per_image_dets) else []
+                row_payloads[row_i] = {
+                    "detections": dets,
+                    "timing": {"seconds": float(elapsed)},
+                    "error": None,
+                }
+        except BaseException as e:
+            for row_i in chunk_idx:
+                row_payloads[row_i] = _error_payload(stage="postprocess", exc=e) | {
+                    "timing": {"seconds": float(elapsed)}
+                }
+
+    def _preprocess_chunk(chunk_idx: List[int]) -> Optional[Tuple[List[TensorOrArray], List[Tuple[int, int]], "torch.Tensor"]]:
+        """Decode, preprocess, and stack a chunk of images. Returns None if empty."""
         pre_list: List[TensorOrArray] = []
         orig_shapes: List[Tuple[int, int]] = []
         for i in chunk_idx:
@@ -617,10 +669,7 @@ def detect_page_elements_v3(
                 continue
             orig_shapes.append(sh)
             try:
-                # `preprocess` may accept/return torch.Tensor or np.ndarray.
                 pre = model.preprocess(t)  # type: ignore[arg-type]
-
-                # Normalize to a single-image CHW-like item (torch or numpy); we'll convert to torch at stack time.
                 if isinstance(pre, torch.Tensor):
                     if pre.ndim == 4 and int(pre.shape[0]) == 1:
                         pre_list.append(pre[0])
@@ -639,91 +688,89 @@ def detect_page_elements_v3(
                 pre_list.append(t)
 
         if not pre_list:
-            continue
+            return None
 
         batch = torch.stack([_ensure_chw_float_tensor(x) for x in pre_list], dim=0)
+        return pre_list, orig_shapes, batch
 
-        t0 = time.perf_counter()
-        try:
-            # Best-effort: pass list of shapes for batching; fall back to per-image if unsupported.
+    _use_async = (
+        not use_remote
+        and model is not None
+        and hasattr(model, "invoke_async")
+        and hasattr(model, "flush")
+    )
+
+    # State for the double-buffered async path: metadata for the in-flight batch.
+    _pending_chunk_idx: Optional[List[int]] = None
+    _pending_num_images: Optional[int] = None
+    _pending_t0: Optional[float] = None
+
+    for chunk_start in range(0, len(valid_indices), int(inference_batch_size)):
+        chunk_idx = valid_indices[chunk_start : chunk_start + int(inference_batch_size)]
+        if not chunk_idx:
+            continue
+
+        if use_remote:
+            continue
+
+        prep = _preprocess_chunk(chunk_idx)
+        if prep is None:
+            continue
+        pre_list, orig_shapes, batch = prep
+
+        if _use_async:
+            t0 = time.perf_counter()
             with torch.inference_mode():
                 with torch.autocast(device_type="cuda"):
-                    preds = model(batch, orig_shapes) if len(pre_list) > 1 else model(batch, orig_shapes[0])
-            # Some local wrappers return only the first prediction dict even for batched inputs.
-            # Detect that and force per-image invocation so every row gets its own detections.
-            if len(pre_list) > 1:
-                if isinstance(preds, dict):
-                    raise RuntimeError("Model returned a single pred dict for batched input.")
-                if isinstance(preds, list) and len(preds) != len(pre_list):
-                    raise RuntimeError(
-                        f"Model returned {len(preds)} preds for batch size {len(pre_list)}; falling back to per-image."
+                    prev_preds = model.invoke_async(
+                        batch, orig_shapes if len(pre_list) > 1 else orig_shapes[0],
                     )
-        except Exception as ex:
-            print(f"Error invoking model: {ex}")
-            preds_list: List[Any] = []
-            for j in range(int(batch.shape[0])):
-                preds_list.append(model(batch[j : j + 1], orig_shapes[j]))
-            preds = preds_list
-        elapsed = time.perf_counter() - t0
 
-        # Normalize preds into a list of per-image prediction dicts.
-        if isinstance(preds, dict):
-            preds_list2 = [preds]
-        elif isinstance(preds, list):
-            preds_list2 = preds
+            if prev_preds is not None and _pending_chunk_idx is not None:
+                _finalize_chunk_preds(
+                    prev_preds,
+                    _pending_chunk_idx,
+                    _pending_num_images,  # type: ignore[arg-type]
+                    time.perf_counter() - _pending_t0,  # type: ignore[operator]
+                )
+
+            _pending_chunk_idx = chunk_idx
+            _pending_num_images = len(pre_list)
+            _pending_t0 = t0
         else:
-            preds_list2 = [preds]  # type: ignore[list-item]
+            t0 = time.perf_counter()
+            try:
+                with torch.inference_mode():
+                    with torch.autocast(device_type="cuda"):
+                        preds = model(batch, orig_shapes) if len(pre_list) > 1 else model(batch, orig_shapes[0])
+                if len(pre_list) > 1:
+                    if isinstance(preds, dict):
+                        raise RuntimeError("Model returned a single pred dict for batched input.")
+                    if isinstance(preds, list) and len(preds) != len(pre_list):
+                        raise RuntimeError(
+                            f"Model returned {len(preds)} preds for batch size {len(pre_list)}; falling back to per-image."
+                        )
+            except Exception as ex:
+                print(f"Error invoking model: {ex}")
+                preds_list_fb: List[Any] = []
+                for j in range(int(batch.shape[0])):
+                    preds_list_fb.append(model(batch[j : j + 1], orig_shapes[j]))
+                preds = preds_list_fb
+            elapsed = time.perf_counter() - t0
+            _finalize_chunk_preds(preds, chunk_idx, len(pre_list), elapsed)
 
-        try:
-            # Preferred: allow model wrapper to handle batched postprocess.
-            if hasattr(model, "postprocess"):
-                boxes, labels, scores = model.postprocess(preds_list2)  # type: ignore[attr-defined]
-            else:
-                # Fallback: run upstream util per-image.
-                # `postprocess_preds_page_element` expects a single pred dict and returns numpy arrays.
-                boxes_list: List["torch.Tensor"] = []
-                labels_list: List["torch.Tensor"] = []
-                scores_list: List["torch.Tensor"] = []
-                for p in preds_list2:
-                    if not isinstance(p, dict):
-                        boxes_list.append(torch.empty((0, 4), dtype=torch.float32))
-                        labels_list.append(torch.empty((0,), dtype=torch.int64))
-                        scores_list.append(torch.empty((0,), dtype=torch.float32))
-                        continue
-                    b_np, l_np, s_np = postprocess_preds_page_element(
-                        p,
-                        thresholds_per_class,
-                        label_names,
-                    )
-                    boxes_list.append(torch.as_tensor(b_np, dtype=torch.float32))
-                    labels_list.append(torch.as_tensor(l_np, dtype=torch.int64))
-                    scores_list.append(torch.as_tensor(s_np, dtype=torch.float32))
-                boxes, labels, scores = boxes_list, labels_list, scores_list
-
-            per_image_dets = _postprocess_to_per_image_detections(
-                boxes=boxes,
-                labels=labels,
-                scores=scores,
-                batch_size=len(pre_list),
-                label_names=label_names,
+    # Drain the last in-flight batch (double-buffer flush).
+    if _use_async and _pending_chunk_idx is not None:
+        with torch.inference_mode():
+            with torch.autocast(device_type="cuda"):
+                last_preds = model.flush()
+        if last_preds is not None:
+            _finalize_chunk_preds(
+                last_preds,
+                _pending_chunk_idx,
+                _pending_num_images,  # type: ignore[arg-type]
+                time.perf_counter() - _pending_t0,  # type: ignore[operator]
             )
-            # Apply v3 postprocessing (box fusion via WBF at iou=0.01, title matching, expansion, overlap removal)
-            per_image_dets = [_apply_page_elements_v3_postprocess(dets) for dets in per_image_dets]
-            # Apply per-class final score filtering AFTER WBF (matches NIM pipeline ordering)
-            per_image_dets = [_apply_final_score_filter(dets) for dets in per_image_dets]
-            for local_i, row_i in enumerate(chunk_idx):
-                dets = per_image_dets[local_i] if local_i < len(per_image_dets) else []
-                row_payloads[row_i] = {
-                    "detections": dets,
-                    "timing": {"seconds": float(elapsed)},
-                    "error": None,
-                }
-        except BaseException as e:
-            # If postprocess fails, attach an error but keep job alive.
-            for row_i in chunk_idx:
-                row_payloads[row_i] = _error_payload(stage="postprocess", exc=e) | {
-                    "timing": {"seconds": float(elapsed)}
-                }
 
     out = pages_df.copy()
     out[output_column] = row_payloads
