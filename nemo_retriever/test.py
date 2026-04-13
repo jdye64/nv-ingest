@@ -27,11 +27,13 @@ ing = GraphIngestor(
     ray_address="auto",
     node_overrides={
         "PDFExtractionActor": {"concurrency": 48},
-        "PageElementDetectionActor": {"concurrency": 16, "num_gpus": 0.1},
-        "TableStructureActor": {"concurrency": 8, "num_gpus": 0.1},
-        "GraphicElementsActor": {"concurrency": 8, "num_gpus": 0.1},
-        "OCRActor": {"concurrency": 16, "num_gpus": 0.1},
-        "_BatchEmbedActor": {"concurrency": 8, "num_gpus": 0.25},
+        # Single-GPU budget: total = 1.0 GPU so all stages coexist.
+        #   5×0.05 + 2×0.05 + 2×0.05 + 5×0.05 + 6×0.05 = 1.0 GPU
+        "PageElementDetectionActor": {"concurrency": 5, "num_gpus": 0.05},
+        "TableStructureActor": {"concurrency": 2, "num_gpus": 0.05},
+        "GraphicElementsActor": {"concurrency": 2, "num_gpus": 0.05},
+        "OCRActor": {"concurrency": 5, "num_gpus": 0.05},
+        "_BatchEmbedActor": {"concurrency": 6, "num_gpus": 0.05},
     },
 )
 ing = ing.files(docs).extract(extract).embed(embed)
