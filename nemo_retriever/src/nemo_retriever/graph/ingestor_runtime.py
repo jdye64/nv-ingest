@@ -207,10 +207,11 @@ def batch_tuning_to_node_overrides(
         table_structure_invoke_url = _positive(getattr(extract_params, "table_structure_invoke_url", None))
         ts_bs = plan.table_structure_batch_size if plan else None
         _set(TableStructureActor.__name__, "batch_size", ts_bs)
+        if ts_bs:
+            overrides.setdefault(TableStructureActor.__name__, {})["target_num_rows_per_block"] = ts_bs
         ts_concurrency: int = 0
         if table_structure_invoke_url:
-            # Remote NIM — don't scale by GPU count; use a modest fixed pool.
-            ts_concurrency = min(plan.table_structure_initial_actors, 4) if plan else 2
+            ts_concurrency = (plan.table_structure_initial_actors if plan else None) or 2
         else:
             ts_concurrency = (plan.table_structure_initial_actors if plan else None) or 0
         _set(TableStructureActor.__name__, "concurrency", ts_concurrency or None)
@@ -228,10 +229,11 @@ def batch_tuning_to_node_overrides(
         graphic_elements_invoke_url = _positive(getattr(extract_params, "graphic_elements_invoke_url", None))
         ge_bs = plan.graphic_elements_batch_size if plan else None
         _set(GraphicElementsActor.__name__, "batch_size", ge_bs)
+        if ge_bs:
+            overrides.setdefault(GraphicElementsActor.__name__, {})["target_num_rows_per_block"] = ge_bs
         ge_concurrency: int = 0
         if graphic_elements_invoke_url:
-            # Remote NIM — don't scale by GPU count; use a modest fixed pool.
-            ge_concurrency = min(plan.graphic_elements_initial_actors, 4) if plan else 2
+            ge_concurrency = (plan.graphic_elements_initial_actors if plan else None) or 2
         else:
             ge_concurrency = (plan.graphic_elements_initial_actors if plan else None) or 0
         _set(GraphicElementsActor.__name__, "concurrency", ge_concurrency or None)

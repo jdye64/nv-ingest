@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 import time
@@ -230,6 +231,7 @@ def table_structure_ocr_page_elements(
     ocr_invoke_url: str = "",
     api_key: str = "",
     request_timeout_s: float = 120.0,
+    inference_batch_size: int = 8,
     remote_retry: RemoteRetryParams | None = None,
     nim_client: NIMClient | None = None,
     **kwargs: Any,
@@ -297,7 +299,7 @@ def table_structure_ocr_page_elements(
     label_names = _labels_from_model(table_structure_model) if table_structure_model is not None else []
     if not label_names:
         label_names = _DEFAULT_TABLE_STRUCTURE_LABELS
-    inference_batch_size = int(kwargs.get("inference_batch_size", 8))
+    inference_batch_size = int(kwargs.get("inference_batch_size", inference_batch_size))
 
     num_rows = len(batch_df)
     all_table: List[List[Dict[str, Any]]] = [[] for _ in range(num_rows)]
@@ -361,27 +363,56 @@ def table_structure_ocr_page_elements(
     n_crops = len(flat_crops)
 
     # ---------------------------------------------------------------
-    # Pass 2: Run table-structure on ALL crops in one batched call.
+    # Pass 2 & 3: Run table-structure and OCR on ALL crops.
+    # When both use remote endpoints, fire them in parallel so the
+    # two independent HTTP round-trips overlap.
     # ---------------------------------------------------------------
     structure_results: List[List[Dict[str, Any]]] = [[] for _ in range(n_crops)]
-    try:
-        if use_remote_ts:
-            _ts_kw = dict(
-                invoke_url=ts_url,
-                image_b64_list=flat_crop_b64s,
-                api_key=api_key or None,
-                timeout_s=float(request_timeout_s),
-                max_batch_size=inference_batch_size,
-                max_retries=int(retry.remote_max_retries),
-                max_429_retries=int(retry.remote_max_429_retries),
-            )
-            if nim_client is not None:
-                response_items = nim_client.invoke_image_inference_batches(**_ts_kw)
-            else:
-                response_items = invoke_image_inference_batches(
-                    **_ts_kw,
-                    max_pool_workers=int(retry.remote_max_pool_workers),
-                )
+    ocr_results: List[Any] = [None] * n_crops
+
+    def _run_remote_ts() -> List[Any]:
+        _ts_kw = dict(
+            invoke_url=ts_url,
+            image_b64_list=flat_crop_b64s,
+            api_key=api_key or None,
+            timeout_s=float(request_timeout_s),
+            max_batch_size=inference_batch_size,
+            max_retries=int(retry.remote_max_retries),
+            max_429_retries=int(retry.remote_max_429_retries),
+        )
+        if nim_client is not None:
+            return nim_client.invoke_image_inference_batches(**_ts_kw)
+        return invoke_image_inference_batches(
+            **_ts_kw,
+            max_pool_workers=int(retry.remote_max_pool_workers),
+        )
+
+    def _run_remote_ocr() -> List[Any]:
+        _ocr_kw = dict(
+            invoke_url=ocr_url,
+            image_b64_list=flat_crop_b64s,
+            api_key=api_key or None,
+            timeout_s=float(request_timeout_s),
+            max_batch_size=inference_batch_size,
+            max_retries=int(retry.remote_max_retries),
+            max_429_retries=int(retry.remote_max_429_retries),
+        )
+        if nim_client is not None:
+            return nim_client.invoke_image_inference_batches(**_ocr_kw)
+        return invoke_image_inference_batches(
+            **_ocr_kw,
+            max_pool_workers=int(retry.remote_max_pool_workers),
+        )
+
+    # When both endpoints are remote, overlap the two HTTP passes.
+    if use_remote_ts and use_remote_ocr:
+        _parallel_pool = ThreadPoolExecutor(max_workers=2)
+        ts_future: Future[List[Any]] = _parallel_pool.submit(_run_remote_ts)
+        ocr_future: Future[List[Any]] = _parallel_pool.submit(_run_remote_ocr)
+        _parallel_pool.shutdown(wait=False)
+
+        try:
+            response_items = ts_future.result()
             if len(response_items) != n_crops:
                 raise RuntimeError(f"Expected {n_crops} table-structure responses, got {len(response_items)}")
             for ci, resp in enumerate(response_items):
@@ -390,71 +421,93 @@ def table_structure_ocr_page_elements(
                     pred_item = _extract_remote_pred_item(resp)
                     parsed = _prediction_to_detections(pred_item, label_names=label_names)
                 structure_results[ci] = [d for d in parsed if (d.get("score") or 0.0) >= YOLOX_TABLE_MIN_SCORE]
-        else:
-            for ci, (_, _, crop_array) in enumerate(flat_crops):
-                chw = torch.from_numpy(crop_array).permute(2, 0, 1).contiguous().to(dtype=torch.float32)
-                h, w = crop_array.shape[:2]
-                x = chw.unsqueeze(0)
-                try:
-                    pre = table_structure_model.preprocess(x, (h, w))
-                except TypeError:
-                    pre = table_structure_model.preprocess(x)
-                if isinstance(pre, torch.Tensor) and pre.ndim == 3:
-                    pre = pre.unsqueeze(0)
-                pred = table_structure_model.invoke(pre, (h, w))
-                dets_local = _prediction_to_detections(pred, label_names=label_names)
-                structure_results[ci] = [d for d in dets_local if (d.get("score") or 0.0) >= YOLOX_TABLE_MIN_SCORE]
-    except BaseException as e:
-        print(f"Warning: table-structure batch inference failed: {type(e).__name__}: {e}")
-        err_payload = {
-            "stage": "table_structure_ocr_page_elements:table_structure",
-            "type": e.__class__.__name__,
-            "message": str(e),
-            "traceback": "".join(traceback.format_exception(type(e), e, e.__traceback__)),
-        }
-        for row_i in set(crop_row_indices):
-            all_meta[row_i]["error"] = err_payload
+        except BaseException as e:
+            print(f"Warning: table-structure batch inference failed: {type(e).__name__}: {e}")
+            err_payload = {
+                "stage": "table_structure_ocr_page_elements:table_structure",
+                "type": e.__class__.__name__,
+                "message": str(e),
+                "traceback": "".join(traceback.format_exception(type(e), e, e.__traceback__)),
+            }
+            for row_i in set(crop_row_indices):
+                all_meta[row_i]["error"] = err_payload
 
-    # ---------------------------------------------------------------
-    # Pass 3: Run OCR on ALL crops in one batched call.
-    # ---------------------------------------------------------------
-    ocr_results: List[Any] = [None] * n_crops
-    try:
-        if use_remote_ocr:
-            _ocr_kw = dict(
-                invoke_url=ocr_url,
-                image_b64_list=flat_crop_b64s,
-                api_key=api_key or None,
-                timeout_s=float(request_timeout_s),
-                max_batch_size=inference_batch_size,
-                max_retries=int(retry.remote_max_retries),
-                max_429_retries=int(retry.remote_max_429_retries),
-            )
-            if nim_client is not None:
-                ocr_response_items = nim_client.invoke_image_inference_batches(**_ocr_kw)
-            else:
-                ocr_response_items = invoke_image_inference_batches(
-                    **_ocr_kw,
-                    max_pool_workers=int(retry.remote_max_pool_workers),
-                )
+        try:
+            ocr_response_items = ocr_future.result()
             if len(ocr_response_items) != n_crops:
                 raise RuntimeError(f"Expected {n_crops} OCR responses, got {len(ocr_response_items)}")
             for ci, resp in enumerate(ocr_response_items):
                 ocr_results[ci] = _extract_remote_ocr_item(resp)
-        else:
-            for ci, (_, _, crop_array) in enumerate(flat_crops):
-                ocr_results[ci] = ocr_model.invoke(crop_array, merge_level="word")
-    except BaseException as e:
-        print(f"Warning: table OCR batch inference failed: {type(e).__name__}: {e}")
-        err_payload = {
-            "stage": "table_structure_ocr_page_elements:ocr",
-            "type": e.__class__.__name__,
-            "message": str(e),
-            "traceback": "".join(traceback.format_exception(type(e), e, e.__traceback__)),
-        }
-        for row_i in set(crop_row_indices):
-            if all_meta[row_i]["error"] is None:
+        except BaseException as e:
+            print(f"Warning: table OCR batch inference failed: {type(e).__name__}: {e}")
+            err_payload = {
+                "stage": "table_structure_ocr_page_elements:ocr",
+                "type": e.__class__.__name__,
+                "message": str(e),
+                "traceback": "".join(traceback.format_exception(type(e), e, e.__traceback__)),
+            }
+            for row_i in set(crop_row_indices):
+                if all_meta[row_i]["error"] is None:
+                    all_meta[row_i]["error"] = err_payload
+    else:
+        # Sequential path: at least one model is local.
+        try:
+            if use_remote_ts:
+                response_items = _run_remote_ts()
+                if len(response_items) != n_crops:
+                    raise RuntimeError(f"Expected {n_crops} table-structure responses, got {len(response_items)}")
+                for ci, resp in enumerate(response_items):
+                    parsed = _parse_nim_bounding_boxes(resp)
+                    if not parsed:
+                        pred_item = _extract_remote_pred_item(resp)
+                        parsed = _prediction_to_detections(pred_item, label_names=label_names)
+                    structure_results[ci] = [d for d in parsed if (d.get("score") or 0.0) >= YOLOX_TABLE_MIN_SCORE]
+            else:
+                for ci, (_, _, crop_array) in enumerate(flat_crops):
+                    chw = torch.from_numpy(crop_array).permute(2, 0, 1).contiguous().to(dtype=torch.float32)
+                    h, w = crop_array.shape[:2]
+                    x = chw.unsqueeze(0)
+                    try:
+                        pre = table_structure_model.preprocess(x, (h, w))
+                    except TypeError:
+                        pre = table_structure_model.preprocess(x)
+                    if isinstance(pre, torch.Tensor) and pre.ndim == 3:
+                        pre = pre.unsqueeze(0)
+                    pred = table_structure_model.invoke(pre, (h, w))
+                    dets_local = _prediction_to_detections(pred, label_names=label_names)
+                    structure_results[ci] = [d for d in dets_local if (d.get("score") or 0.0) >= YOLOX_TABLE_MIN_SCORE]
+        except BaseException as e:
+            print(f"Warning: table-structure batch inference failed: {type(e).__name__}: {e}")
+            err_payload = {
+                "stage": "table_structure_ocr_page_elements:table_structure",
+                "type": e.__class__.__name__,
+                "message": str(e),
+                "traceback": "".join(traceback.format_exception(type(e), e, e.__traceback__)),
+            }
+            for row_i in set(crop_row_indices):
                 all_meta[row_i]["error"] = err_payload
+
+        try:
+            if use_remote_ocr:
+                ocr_response_items = _run_remote_ocr()
+                if len(ocr_response_items) != n_crops:
+                    raise RuntimeError(f"Expected {n_crops} OCR responses, got {len(ocr_response_items)}")
+                for ci, resp in enumerate(ocr_response_items):
+                    ocr_results[ci] = _extract_remote_ocr_item(resp)
+            else:
+                for ci, (_, _, crop_array) in enumerate(flat_crops):
+                    ocr_results[ci] = ocr_model.invoke(crop_array, merge_level="word")
+        except BaseException as e:
+            print(f"Warning: table OCR batch inference failed: {type(e).__name__}: {e}")
+            err_payload = {
+                "stage": "table_structure_ocr_page_elements:ocr",
+                "type": e.__class__.__name__,
+                "message": str(e),
+                "traceback": "".join(traceback.format_exception(type(e), e, e.__traceback__)),
+            }
+            for row_i in set(crop_row_indices):
+                if all_meta[row_i]["error"] is None:
+                    all_meta[row_i]["error"] = err_payload
 
     # ---------------------------------------------------------------
     # Pass 4: Stitch results back to the correct rows.

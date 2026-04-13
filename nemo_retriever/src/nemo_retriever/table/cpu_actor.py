@@ -82,6 +82,7 @@ class TableStructureCPUActor(AbstractOperator, CPUOperator):
         api_key: Optional[str] = None,
         table_output_format: Optional[str] = None,
         request_timeout_s: float = 120.0,
+        inference_batch_size: int = 8,
         remote_max_pool_workers: int = 16,
         remote_max_retries: int = 10,
         remote_max_429_retries: int = 5,
@@ -93,6 +94,7 @@ class TableStructureCPUActor(AbstractOperator, CPUOperator):
         self._ocr_invoke_url = (ocr_invoke_url or invoke_url or self.DEFAULT_OCR_INVOKE_URL).strip()
         self._api_key = api_key
         self._request_timeout_s = float(request_timeout_s)
+        self._inference_batch_size = int(inference_batch_size)
         self._table_output_format = table_output_format
         self._remote_retry = RemoteRetryParams(
             remote_max_pool_workers=int(remote_max_pool_workers),
@@ -129,6 +131,7 @@ class TableStructureCPUActor(AbstractOperator, CPUOperator):
             api_key=self._api_key,
             table_output_format=self._table_output_format,
             request_timeout_s=self._request_timeout_s,
+            inference_batch_size=self._inference_batch_size,
             remote_retry=self._remote_retry,
             nim_client=self._nim_client,
             **kwargs,

@@ -13,12 +13,12 @@ extract = ExtractParams(
     graphic_elements_invoke_url="http://localhost:8003/v1/infer",
     use_table_structure=True,
     use_graphic_elements=True,
-    remote_retry=RemoteRetryParams(remote_max_pool_workers=48),
+    remote_retry=RemoteRetryParams(remote_max_pool_workers=16),
 )
 
 embed = EmbedParams(
     embed_invoke_url="http://localhost:8012/v1/embeddings",
-    nim_http_max_concurrent=48,
+    nim_http_max_concurrent=16,
 )
 
 ing = create_ingestor(run_mode="batch", ray_address="auto")
