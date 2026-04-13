@@ -24,6 +24,9 @@ embed = EmbedParams(
 ing = GraphIngestor(
     run_mode="batch",
     ray_address="auto",
+    node_overrides={
+        "PDFExtractionActor": {"concurrency": 48},
+    },
 )
 ing = ing.files(docs).extract(extract).embed(embed)
 t0 = time.perf_counter()
