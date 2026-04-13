@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 from nemo_retriever import create_ingestor
 from nemo_retriever.params import ExtractParams, EmbedParams, RemoteRetryParams
@@ -22,5 +23,9 @@ embed = EmbedParams(
 
 ing = create_ingestor(run_mode="batch", ray_address="auto")
 ing = ing.files(docs).extract(extract).embed(embed)
+t0 = time.perf_counter()
 ray_ds = ing.ingest()
-print("rows", ray_ds.get_dataset().count())
+elapsed = time.perf_counter() - t0
+num_rows = ray_ds.get_dataset().count()
+print("rows", num_rows)
+print(f"pages/sec: {num_rows / elapsed:.2f}  ({num_rows} pages in {elapsed:.2f}s)")

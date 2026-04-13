@@ -203,6 +203,38 @@ def batch_tuning_to_node_overrides(
                 plan.page_elements_gpus_per_actor if plan else None,
             )
 
+        # --- Table Structure ---
+        table_structure_invoke_url = _positive(getattr(extract_params, "table_structure_invoke_url", None))
+        ts_bs = plan.table_structure_batch_size if plan else None
+        _set(TableStructureActor.__name__, "batch_size", ts_bs)
+        ts_concurrency = (plan.table_structure_initial_actors if plan else None) or 0
+        _set(TableStructureActor.__name__, "concurrency", ts_concurrency or None)
+        _set(TableStructureActor.__name__, "num_cpus", 1)
+        if effective_allow_no_gpu:
+            _force_cpu_only(TableStructureActor.__name__)
+        elif not table_structure_invoke_url:
+            _set(
+                TableStructureActor.__name__,
+                "num_gpus",
+                plan.table_structure_gpus_per_actor if plan else None,
+            )
+
+        # --- Graphic Elements ---
+        graphic_elements_invoke_url = _positive(getattr(extract_params, "graphic_elements_invoke_url", None))
+        ge_bs = plan.graphic_elements_batch_size if plan else None
+        _set(GraphicElementsActor.__name__, "batch_size", ge_bs)
+        ge_concurrency = (plan.graphic_elements_initial_actors if plan else None) or 0
+        _set(GraphicElementsActor.__name__, "concurrency", ge_concurrency or None)
+        _set(GraphicElementsActor.__name__, "num_cpus", 1)
+        if effective_allow_no_gpu:
+            _force_cpu_only(GraphicElementsActor.__name__)
+        elif not graphic_elements_invoke_url:
+            _set(
+                GraphicElementsActor.__name__,
+                "num_gpus",
+                plan.graphic_elements_gpus_per_actor if plan else None,
+            )
+
         np_bs = _positive(
             getattr(extract_tuning, "nemotron_parse_batch_size", None) if extract_tuning is not None else None
         ) or (plan.nemotron_parse_batch_size if plan else None)
