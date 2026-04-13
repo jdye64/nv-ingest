@@ -250,6 +250,10 @@ class EmbedParams(_ParamsModel):
     # Concurrent HTTP embedding requests per Ray batch (OpenAI-compatible NIM).
     nim_http_max_concurrent: int = 32
 
+    # Optional path to a TensorRT engine file for local GPU embedding.
+    # Priority: embed_invoke_url (remote) > embed_trt_engine_path (TRT) > HuggingFace model.
+    embed_trt_engine_path: Optional[str] = None
+
     runtime: ModelRuntimeParams = Field(default_factory=ModelRuntimeParams)
     batch_tuning: BatchTuningParams = Field(default_factory=BatchTuningParams)
     fused_tuning: FusedTuningParams = Field(default_factory=FusedTuningParams)

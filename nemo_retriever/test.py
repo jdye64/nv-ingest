@@ -5,21 +5,20 @@ from nemo_retriever.params import ExtractParams, EmbedParams
 
 docs = [str(Path("/datasets/nv-ingest/bo767").resolve())]
 
-TRT_MODEL_DIR = Path("/models/trt")
+NGC_MODELS = Path("/datasets/nv-ingest/models")
 
 extract = ExtractParams(
     method="pdfium",
-    page_elements_trt_engine_path=str(TRT_MODEL_DIR / "page_elements.engine"),
-    table_structure_trt_engine_path=str(TRT_MODEL_DIR / "table_structure.engine"),
-    graphic_elements_trt_engine_path=str(TRT_MODEL_DIR / "graphic_elements.engine"),
-    ocr_trt_engine_path=str(TRT_MODEL_DIR / "ocr_detector.engine"),
+    page_elements_trt_engine_path=str(NGC_MODELS / "page-elements"),
+    table_structure_trt_engine_path=str(NGC_MODELS / "table-structure"),
+    graphic_elements_trt_engine_path=str(NGC_MODELS / "graphic-elements"),
+    ocr_trt_engine_path=str(NGC_MODELS / "ocr"),
     use_table_structure=True,
     use_graphic_elements=True,
 )
 
 embed = EmbedParams(
-    embed_invoke_url="http://localhost:8012/v1/embeddings",
-    nim_http_max_concurrent=16,
+    embed_trt_engine_path=str(NGC_MODELS / "embed"),
 )
 
 ing = GraphIngestor(

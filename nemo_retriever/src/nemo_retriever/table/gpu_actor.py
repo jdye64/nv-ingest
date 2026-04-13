@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any, Optional
 
 import pandas as pd
@@ -75,9 +76,13 @@ class TableStructureActor(AbstractOperator, GPUOperator):
             logger.info("TableStructureActor: ocr backend=REMOTE endpoint=%s", self._ocr_invoke_url)
         elif _ocr_trt:
             from nemo_retriever.model.local import NemotronOCRV1
+            from nemo_retriever.utils.hf_cache import resolve_model_dir
 
-            self._ocr_model = NemotronOCRV1()
-            logger.info("TableStructureActor: ocr backend=HUGGINGFACE model=NemotronOCRV1 (TRT N/A for OCR pipeline)")
+            ocr_model_dir: str | None = None
+            if Path(_ocr_trt).is_dir():
+                ocr_model_dir = resolve_model_dir(_ocr_trt, model_type="ocr")
+            self._ocr_model = NemotronOCRV1(model_dir=ocr_model_dir)
+            logger.info("TableStructureActor: ocr backend=HUGGINGFACE+TRT model_dir=%s", ocr_model_dir)
         else:
             from nemo_retriever.model.local import NemotronOCRV1
 

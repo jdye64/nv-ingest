@@ -2,20 +2,26 @@
 # All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""TensorRT engine wrapper for YOLOX-family detection models.
+"""TensorRT engine wrappers for local GPU inference.
 
-Provides drop-in replacements for ``NemotronPageElementsV3``,
-``NemotronTableStructureV1``, and ``NemotronGraphicElementsV1`` that
-load a pre-built ``.trt`` / ``.engine`` file and run inference via the
-TensorRT Python API with ``pycuda``.
+Provides drop-in replacements for HuggingFace-based models that load
+pre-built ``.trt`` / ``.engine`` files and run inference via the TensorRT
+Python API with ``pycuda``.
 
-Usage::
+**Detection models** (YOLOX family)::
 
     from nemo_retriever.model.local.trt_engine import TRTYoloxEngine
 
     model = TRTYoloxEngine("/models/page_elements.engine")
     preprocessed = model.preprocess(chw_tensor)
     preds = model.invoke(preprocessed, orig_shape)
+
+**Embedding models** (transformer encoder)::
+
+    from nemo_retriever.model.local.trt_engine import TRTEmbedEngine
+
+    model = TRTEmbedEngine("/models/embed.engine")
+    vectors = model.embed(["hello world", "another sentence"])
 """
 
 from __future__ import annotations
@@ -72,6 +78,9 @@ class TRTYoloxEngine:
         import pycuda.driver as cuda
         import pycuda.autoinit  # noqa: F401 – initializes CUDA context
 
+        from nemo_retriever.utils.hf_cache import resolve_engine_path
+
+        engine_path = resolve_engine_path(engine_path, model_type="yolox_detection")
         self._engine_path = engine_path
         self._input_shape = input_shape
         self._labels = labels
@@ -251,3 +260,181 @@ class TRTYoloxEngine:
             "labels": torch.empty((0,), dtype=torch.int64),
             "scores": torch.empty((0,), dtype=torch.float32),
         }
+
+
+# ======================================================================
+# TRTEmbedEngine – transformer encoder embedding via TensorRT
+# ======================================================================
+
+
+def _l2_normalize(x: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
+    x = x.float()
+    denom = x.norm(p=2, dim=-1, keepdim=True).clamp_min(eps)
+    return x / denom
+
+
+class TRTEmbedEngine:
+    """TensorRT engine wrapper that mimics the ``embed()`` API of
+    ``LlamaNemotronEmbed1BV2Embedder``.
+
+    The engine is expected to accept ``input_ids`` and ``attention_mask``
+    tensors (int32, shape ``[B, S]``) and produce a last-hidden-state
+    output of shape ``[B, S, D]``.  Mean-pooling and optional L2
+    normalisation are applied on top.
+
+    Parameters
+    ----------
+    engine_path
+        Path to the serialized ``.trt`` / ``.engine`` file.
+    tokenizer_name
+        HuggingFace tokenizer to use for text→token conversion.
+        Defaults to ``"nvidia/llama-nemotron-embed-1b-v2"``.
+    max_length
+        Maximum sequence length passed to the tokenizer.
+    normalize
+        Whether to L2-normalise the output vectors.
+    """
+
+    def __init__(
+        self,
+        engine_path: str,
+        *,
+        tokenizer_name: str = "nvidia/llama-nemotron-embed-1b-v2",
+        max_length: int = 8192,
+        normalize: bool = True,
+        hf_cache_dir: Optional[str] = None,
+    ) -> None:
+        import tensorrt as trt
+        import pycuda.driver as cuda
+        import pycuda.autoinit  # noqa: F401
+
+        from transformers import AutoTokenizer
+        from nemo_retriever.utils.hf_cache import configure_global_hf_cache_base, resolve_engine_path
+        from nemo_retriever.utils.hf_model_registry import get_hf_revision
+
+        engine_path = resolve_engine_path(engine_path, model_type="embedding")
+        self._engine_path = engine_path
+        self._max_length = max_length
+        self._normalize = normalize
+
+        cache_dir = configure_global_hf_cache_base(hf_cache_dir)
+        revision = get_hf_revision(tokenizer_name)
+        self._tokenizer = AutoTokenizer.from_pretrained(
+            tokenizer_name,
+            revision=revision,
+            cache_dir=cache_dir,
+            trust_remote_code=True,
+        )
+
+        engine = _load_engine(engine_path)
+        self._engine = engine
+        self._context = engine.create_execution_context()
+        self._trt = trt
+        self._cuda = cuda
+
+        self._io_info: Dict[str, Dict[str, Any]] = {}
+        for i in range(engine.num_io_tensors):
+            name = engine.get_tensor_name(i)
+            mode = engine.get_tensor_mode(name)
+            self._io_info[name] = {
+                "mode": mode,
+                "dtype": trt.nptype(engine.get_tensor_dtype(name)),
+                "shape": tuple(engine.get_tensor_shape(name)),
+                "is_input": mode == trt.TensorIOMode.INPUT,
+            }
+
+        self._stream = cuda.Stream()
+
+        logger.info(
+            "TRTEmbedEngine loaded: path=%s, tensors=%s, max_length=%d, normalize=%s",
+            engine_path,
+            list(self._io_info.keys()),
+            max_length,
+            normalize,
+        )
+
+    @property
+    def is_remote(self) -> bool:
+        return False
+
+    @property
+    def model_name(self) -> str:
+        return f"TRT:{self._engine_path}"
+
+    def embed(self, texts: "Sequence[str]", *, batch_size: int = 64) -> torch.Tensor:
+        """Return a CPU tensor of shape ``[N, D]``, matching the HF embedder API."""
+        from typing import Sequence as _Seq  # noqa: F811
+
+        texts_list = [str(t) for t in texts if str(t).strip()]
+        if not texts_list:
+            return torch.empty((0, 0), dtype=torch.float32)
+
+        bs = max(1, int(batch_size))
+        all_vecs: List[torch.Tensor] = []
+
+        for start in range(0, len(texts_list), bs):
+            chunk = texts_list[start : start + bs]
+            tokens = self._tokenizer(
+                chunk,
+                padding=True,
+                truncation=True,
+                max_length=max(1, self._max_length),
+                return_tensors="np",
+            )
+            input_ids = tokens["input_ids"].astype(np.int32)
+            attention_mask = tokens["attention_mask"].astype(np.int32)
+
+            hidden = self._infer_batch(input_ids, attention_mask)
+
+            mask_f = torch.from_numpy(attention_mask.astype(np.float32)).unsqueeze(-1)  # [B, S, 1]
+            pooled = (hidden * mask_f).sum(dim=1) / mask_f.sum(dim=1)  # [B, D]
+            if self._normalize:
+                pooled = _l2_normalize(pooled)
+            all_vecs.append(pooled)
+
+        return torch.cat(all_vecs, dim=0) if all_vecs else torch.empty((0, 0), dtype=torch.float32)
+
+    def _infer_batch(self, input_ids: np.ndarray, attention_mask: np.ndarray) -> torch.Tensor:
+        """Run TRT inference and return the last-hidden-state as a float32 CPU tensor."""
+        cuda = self._cuda
+        trt = self._trt
+
+        B, S = input_ids.shape
+
+        inputs_np = {
+            "input_ids": np.ascontiguousarray(input_ids),
+            "attention_mask": np.ascontiguousarray(attention_mask),
+        }
+
+        d_inputs: Dict[str, Any] = {}
+        for name, arr in inputs_np.items():
+            if name in self._io_info:
+                self._context.set_input_shape(name, arr.shape)
+                d_buf = cuda.mem_alloc(arr.nbytes)
+                cuda.memcpy_htod_async(d_buf, arr, self._stream)
+                self._context.set_tensor_address(name, int(d_buf))
+                d_inputs[name] = d_buf
+
+        output_name: Optional[str] = None
+        for name, info in self._io_info.items():
+            if not info["is_input"]:
+                output_name = name
+                break
+        if output_name is None:
+            raise RuntimeError("TRT embed engine has no output tensor")
+
+        out_shape = tuple(self._context.get_tensor_shape(output_name))
+        out_dtype = self._io_info[output_name]["dtype"]
+        h_output = np.empty(out_shape, dtype=out_dtype)
+        d_output = cuda.mem_alloc(h_output.nbytes)
+        self._context.set_tensor_address(output_name, int(d_output))
+
+        self._context.execute_async_v3(stream_handle=self._stream.handle)
+        cuda.memcpy_dtoh_async(h_output, d_output, self._stream)
+        self._stream.synchronize()
+
+        for d_buf in d_inputs.values():
+            d_buf.free()
+        d_output.free()
+
+        return torch.from_numpy(h_output.copy()).float()

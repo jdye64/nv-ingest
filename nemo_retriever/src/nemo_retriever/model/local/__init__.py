@@ -21,6 +21,7 @@ __all__ = [
     "NemotronVLMCaptioner",
     "ParakeetCTC1B1ASR",
     "TRTYoloxEngine",
+    "TRTEmbedEngine",
 ]
 
 
@@ -61,4 +62,8 @@ def __getattr__(name: str):
         from .trt_engine import TRTYoloxEngine
 
         return TRTYoloxEngine
+    if name == "TRTEmbedEngine":
+        from .trt_engine import TRTEmbedEngine
+
+        return TRTEmbedEngine
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

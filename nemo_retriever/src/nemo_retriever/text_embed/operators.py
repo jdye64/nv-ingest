@@ -21,7 +21,13 @@ class _BatchEmbedActor(ArchetypeOperator):
     def prefers_cpu_variant(cls, operator_kwargs: dict[str, Any] | None = None) -> bool:
         params = (operator_kwargs or {}).get("params")
         endpoint = getattr(params, "embed_invoke_url", None) or getattr(params, "embedding_endpoint", None)
-        return bool(str(endpoint or "").strip())
+        has_remote = bool(str(endpoint or "").strip())
+        # TRT needs a GPU, so only prefer the CPU variant when we have
+        # a remote endpoint and *no* TRT engine configured.
+        if has_remote:
+            has_trt = bool(getattr(params, "embed_trt_engine_path", None))
+            return not has_trt
+        return False
 
     @classmethod
     def cpu_variant_class(cls):

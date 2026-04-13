@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from nemo_retriever.graph.abstract_operator import AbstractOperator
@@ -13,6 +14,8 @@ from nemo_retriever.graph.gpu_operator import GPUOperator
 from nemo_retriever.params import EmbedParams
 from nemo_retriever.text_embed.runtime import embed_text_main_text_embed
 from nemo_retriever.text_embed.shared import build_embed_kwargs
+
+logger = logging.getLogger(__name__)
 
 
 class _BatchEmbedActor(AbstractOperator, GPUOperator):
@@ -33,11 +36,27 @@ class _BatchEmbedActor(AbstractOperator, GPUOperator):
 
         endpoint = (self._kwargs.get("embedding_endpoint") or self._kwargs.get("embed_invoke_url") or "").strip()
         if endpoint:
+            logger.info("EmbedActor: using REMOTE endpoint: %s", endpoint)
             self._model = None
+            return
+
+        trt_path = getattr(params, "embed_trt_engine_path", None)
+        if trt_path:
+            from nemo_retriever.model.local.trt_engine import TRTEmbedEngine
+
+            logger.info("EmbedActor: using TRT engine: %s", trt_path)
+            self._model = TRTEmbedEngine(
+                trt_path,
+                tokenizer_name=self._kwargs.get("model_name") or "nvidia/llama-nemotron-embed-1b-v2",
+                max_length=int(self._kwargs.get("max_length", 8192)),
+                normalize=bool(self._kwargs.get("normalize", True)),
+                hf_cache_dir=str(self._kwargs["hf_cache_dir"]) if self._kwargs.get("hf_cache_dir") else None,
+            )
             return
 
         from nemo_retriever.model import create_local_embedder
 
+        logger.info("EmbedActor: using HUGGINGFACE local model")
         self._model = create_local_embedder(
             self._kwargs.get("model_name"),
             device=str(self._kwargs["device"]) if self._kwargs.get("device") else None,

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -57,12 +58,18 @@ class OCRActor(AbstractOperator, GPUOperator):
         elif ocr_trt_engine_path:
             os.environ["RETRIEVER_ENABLE_TORCH_TRT"] = "1"
             from nemo_retriever.model.local import NemotronOCRV1
+            from nemo_retriever.utils.hf_cache import resolve_model_dir
 
-            self._model = NemotronOCRV1()
+            model_dir: str | None = None
+            ocr_path = Path(ocr_trt_engine_path)
+            if ocr_path.is_dir():
+                model_dir = resolve_model_dir(ocr_trt_engine_path, model_type="ocr")
+
+            self._model = NemotronOCRV1(model_dir=model_dir)
             self._nim_client = None
             logger.info(
                 "OCRActor: backend=HUGGINGFACE+TRT (detector compiled via torch_tensorrt, "
-                "engine hint=%s)", ocr_trt_engine_path,
+                "path=%s, resolved_model_dir=%s)", ocr_trt_engine_path, model_dir,
             )
         else:
             from nemo_retriever.model.local import NemotronOCRV1
