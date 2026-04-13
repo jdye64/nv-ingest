@@ -41,14 +41,42 @@ class PageElementDetectionActor(AbstractOperator, GPUOperator):
             )
             logger.info("PageElementDetectionActor: backend=REMOTE endpoint=%s", invoke_url)
         elif trt_engine_path:
-            from nemo_retriever.model.local.trt_engine import TRTYoloxEngine
+            from nemo_retriever.utils.hf_cache import resolve_engine_path
 
-            self._model = TRTYoloxEngine(
-                trt_engine_path,
-                labels=["table", "chart", "title", "infographic", "text", "header_footer"],
-            )
-            self._nim_client = None
-            logger.info("PageElementDetectionActor: backend=TRT engine=%s", trt_engine_path)
+            resolved_engine: str | None = None
+            try:
+                resolved_engine = resolve_engine_path(trt_engine_path, model_type="page_elements")
+            except FileNotFoundError:
+                pass
+
+            if resolved_engine is not None:
+                try:
+                    from nemo_retriever.model.local.trt_engine import TRTYoloxEngine
+
+                    self._model = TRTYoloxEngine(
+                        resolved_engine,
+                        labels=["table", "chart", "title", "infographic", "text", "header_footer"],
+                    )
+                    self._nim_client = None
+                    logger.info("PageElementDetectionActor: backend=TRT engine=%s", resolved_engine)
+                except ImportError:
+                    logger.warning(
+                        "PageElementDetectionActor: tensorrt not available, falling back to HUGGINGFACE "
+                        "(path=%s)", trt_engine_path,
+                    )
+                    from nemo_retriever.model.local import NemotronPageElementsV3
+
+                    self._model = NemotronPageElementsV3()
+                    self._nim_client = None
+            else:
+                from nemo_retriever.model.local import NemotronPageElementsV3
+
+                logger.info(
+                    "PageElementDetectionActor: no engine file at %s, using HUGGINGFACE",
+                    trt_engine_path,
+                )
+                self._model = NemotronPageElementsV3()
+                self._nim_client = None
         else:
             from nemo_retriever.model.local import NemotronPageElementsV3
 

@@ -72,6 +72,30 @@ def _find_engine_file(directory: Path, filename: Optional[str] = None) -> Option
     return candidates[0]
 
 
+def _find_largest_blob(blobs_dir: Path, min_size_bytes: int = 1_000_000) -> Optional[Path]:
+    """Return the largest regular file in *blobs_dir* that exceeds *min_size_bytes*.
+
+    NGC hub cache directories store model weights as content-addressed
+    blobs with hash-only filenames (no extension).  The engine / model
+    file is almost always the largest blob; small files are typically
+    config or metadata.
+    """
+    if not blobs_dir.is_dir():
+        return None
+    best: Optional[Path] = None
+    best_size = 0
+    for f in blobs_dir.iterdir():
+        if not f.is_file():
+            continue
+        sz = f.stat().st_size
+        if sz > best_size:
+            best = f
+            best_size = sz
+    if best is not None and best_size >= min_size_bytes:
+        return best
+    return None
+
+
 def resolve_engine_path(
     path: str,
     *,
@@ -80,20 +104,26 @@ def resolve_engine_path(
 ) -> str:
     """Resolve a user-supplied engine path that may be a file or a directory.
 
-    Handles three layouts:
+    Handles four layouts:
 
-    1. **Direct file** — returned as-is.
-    2. **HF/NGC hub repo directory** — contains ``snapshots/<rev>/…``; the
+    1. **Direct file** — returned as-is (any extension or none).
+    2. **HF hub repo directory** — contains ``snapshots/<rev>/…``; the
        latest snapshot revision is searched for an engine file.
-    3. **Flat directory** — scanned directly for engine files.
+    3. **NGC blob-only directory** — contains ``blobs/`` with
+       content-addressed hash filenames; the largest blob (>1 MB) is
+       assumed to be the engine.
+    4. **Flat directory** — scanned directly for engine files by
+       extension.
 
     Parameters
     ----------
     path
-        A file path *or* directory path (may be an HF hub cache repo dir).
+        A file path *or* directory path (may be an HF/NGC hub cache
+        repo dir).
     filename
         Optional logical filename to look for inside a directory
-        (e.g. ``"model.engine"``).  When ``None`` any engine file is matched.
+        (e.g. ``"model.engine"``).  When ``None`` any engine file is
+        matched.
     model_type
         Label used in error messages (e.g. ``"page_elements"``).
 
@@ -119,6 +149,7 @@ def resolve_engine_path(
             f"directory (model_type={model_type})"
         )
 
+    # 1. HF hub layout: snapshots/<rev>/ with named files or symlinks
     snapshot = _latest_snapshot_dir(p)
     if snapshot is not None:
         engine = _find_engine_file(snapshot, filename=filename)
@@ -128,16 +159,43 @@ def resolve_engine_path(
                 path, snapshot.name, engine,
             )
             return str(engine)
+        blob = _find_largest_blob(snapshot)
+        if blob is not None:
+            logger.info(
+                "resolve_engine_path(%s): resolved via largest file in snapshot %s -> %s",
+                path, snapshot.name, blob,
+            )
+            return str(blob)
 
+    # 2. NGC blob-only layout: blobs/<hash> with no snapshots/
+    blobs_dir = p / "blobs"
+    blob = _find_largest_blob(blobs_dir)
+    if blob is not None:
+        logger.info(
+            "resolve_engine_path(%s): resolved via largest blob -> %s",
+            path, blob,
+        )
+        return str(blob)
+
+    # 3. Flat directory with extension-based engine files
     engine = _find_engine_file(p, filename=filename)
     if engine is not None:
         logger.info("resolve_engine_path(%s): resolved in flat directory -> %s", path, engine)
         return str(engine)
 
+    # 4. Last resort: largest file in the directory itself
+    largest = _find_largest_blob(p)
+    if largest is not None:
+        logger.info(
+            "resolve_engine_path(%s): resolved via largest file in directory -> %s",
+            path, largest,
+        )
+        return str(largest)
+
     raise FileNotFoundError(
         f"resolve_engine_path: no engine file found in '{path}' "
-        f"(looked for {filename or 'any *' + '/'.join(_ENGINE_EXTENSIONS)} "
-        f"in snapshots/ and top-level; model_type={model_type})"
+        f"(looked in snapshots/, blobs/, and top-level; "
+        f"model_type={model_type})"
     )
 
 

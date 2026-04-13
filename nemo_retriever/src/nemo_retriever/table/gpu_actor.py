@@ -59,12 +59,35 @@ class TableStructureActor(AbstractOperator, GPUOperator):
             self._table_structure_model = None
             logger.info("TableStructureActor: table-structure backend=REMOTE endpoint=%s", self._table_structure_invoke_url)
         elif _ts_trt:
-            from nemo_retriever.model.local.trt_engine import TRTYoloxEngine
+            from nemo_retriever.utils.hf_cache import resolve_engine_path
 
-            self._table_structure_model = TRTYoloxEngine(
-                _ts_trt, labels=["cell", "row", "column"],
-            )
-            logger.info("TableStructureActor: table-structure backend=TRT engine=%s", _ts_trt)
+            resolved_engine: str | None = None
+            try:
+                resolved_engine = resolve_engine_path(_ts_trt, model_type="table_structure")
+            except FileNotFoundError:
+                pass
+
+            if resolved_engine is not None:
+                try:
+                    from nemo_retriever.model.local.trt_engine import TRTYoloxEngine
+
+                    self._table_structure_model = TRTYoloxEngine(
+                        resolved_engine, labels=["cell", "row", "column"],
+                    )
+                    logger.info("TableStructureActor: table-structure backend=TRT engine=%s", resolved_engine)
+                except ImportError:
+                    logger.warning(
+                        "TableStructureActor: tensorrt not available, falling back to HUGGINGFACE "
+                        "(path=%s)", _ts_trt,
+                    )
+                    from nemo_retriever.model.local import NemotronTableStructureV1
+
+                    self._table_structure_model = NemotronTableStructureV1()
+            else:
+                from nemo_retriever.model.local import NemotronTableStructureV1
+
+                self._table_structure_model = NemotronTableStructureV1()
+                logger.info("TableStructureActor: table-structure backend=HUGGINGFACE (path=%s)", _ts_trt)
         else:
             from nemo_retriever.model.local import NemotronTableStructureV1
 

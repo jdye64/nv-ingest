@@ -78,9 +78,6 @@ class TRTYoloxEngine:
         import pycuda.driver as cuda
         import pycuda.autoinit  # noqa: F401 – initializes CUDA context
 
-        from nemo_retriever.utils.hf_cache import resolve_engine_path
-
-        engine_path = resolve_engine_path(engine_path, model_type="yolox_detection")
         self._engine_path = engine_path
         self._input_shape = input_shape
         self._labels = labels
@@ -309,10 +306,9 @@ class TRTEmbedEngine:
         import pycuda.autoinit  # noqa: F401
 
         from transformers import AutoTokenizer
-        from nemo_retriever.utils.hf_cache import configure_global_hf_cache_base, resolve_engine_path
+        from nemo_retriever.utils.hf_cache import configure_global_hf_cache_base
         from nemo_retriever.utils.hf_model_registry import get_hf_revision
 
-        engine_path = resolve_engine_path(engine_path, model_type="embedding")
         self._engine_path = engine_path
         self._max_length = max_length
         self._normalize = normalize

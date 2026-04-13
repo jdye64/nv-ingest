@@ -42,17 +42,34 @@ class _BatchEmbedActor(AbstractOperator, GPUOperator):
 
         trt_path = getattr(params, "embed_trt_engine_path", None)
         if trt_path:
-            from nemo_retriever.model.local.trt_engine import TRTEmbedEngine
+            from nemo_retriever.utils.hf_cache import resolve_engine_path
 
-            logger.info("EmbedActor: using TRT engine: %s", trt_path)
-            self._model = TRTEmbedEngine(
-                trt_path,
-                tokenizer_name=self._kwargs.get("model_name") or "nvidia/llama-nemotron-embed-1b-v2",
-                max_length=int(self._kwargs.get("max_length", 8192)),
-                normalize=bool(self._kwargs.get("normalize", True)),
-                hf_cache_dir=str(self._kwargs["hf_cache_dir"]) if self._kwargs.get("hf_cache_dir") else None,
-            )
-            return
+            resolved_engine: str | None = None
+            try:
+                resolved_engine = resolve_engine_path(trt_path, model_type="embedding")
+            except FileNotFoundError:
+                pass
+
+            if resolved_engine is not None:
+                try:
+                    from nemo_retriever.model.local.trt_engine import TRTEmbedEngine
+
+                    logger.info("EmbedActor: using TRT engine: %s", resolved_engine)
+                    self._model = TRTEmbedEngine(
+                        resolved_engine,
+                        tokenizer_name=self._kwargs.get("model_name") or "nvidia/llama-nemotron-embed-1b-v2",
+                        max_length=int(self._kwargs.get("max_length", 8192)),
+                        normalize=bool(self._kwargs.get("normalize", True)),
+                        hf_cache_dir=str(self._kwargs["hf_cache_dir"]) if self._kwargs.get("hf_cache_dir") else None,
+                    )
+                    return
+                except ImportError:
+                    logger.warning(
+                        "EmbedActor: tensorrt not available, falling back to HUGGINGFACE (path=%s)", trt_path,
+                    )
+
+            else:
+                logger.info("EmbedActor: no engine file found at %s, falling back to HUGGINGFACE", trt_path)
 
         from nemo_retriever.model import create_local_embedder
 

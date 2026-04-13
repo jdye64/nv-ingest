@@ -9,16 +9,16 @@ NGC_MODELS = Path("/datasets/nv-ingest/models")
 
 extract = ExtractParams(
     method="pdfium",
-    page_elements_trt_engine_path=str(NGC_MODELS / "page-elements"),
-    table_structure_trt_engine_path=str(NGC_MODELS / "table-structure"),
-    graphic_elements_trt_engine_path=str(NGC_MODELS / "graphic-elements"),
+    page_elements_trt_engine_path=str(NGC_MODELS / "page-elements/ngc/hub/models--nim--nvidia--nemotron-page-elements-v3"),
+    table_structure_trt_engine_path=str(NGC_MODELS / "table-structure/ngc/hub/models--nim--nvidia--nemotron-table-structure-v1"),
+    graphic_elements_trt_engine_path=str(NGC_MODELS / "graphic-elements/ngc/hub/models--nim--nvidia--nemotron-graphic-elements-v1"),
     ocr_trt_engine_path=str(NGC_MODELS / "ocr"),
     use_table_structure=True,
     use_graphic_elements=True,
 )
 
 embed = EmbedParams(
-    embed_trt_engine_path=str(NGC_MODELS / "embed"),
+    embed_trt_engine_path=str(NGC_MODELS / "embedding/ngc/hub/models--nim--nvidia--llama-nemotron-embed-1b-v2"),
 )
 
 ing = GraphIngestor(

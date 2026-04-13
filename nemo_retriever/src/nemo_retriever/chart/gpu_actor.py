@@ -64,10 +64,33 @@ class GraphicElementsActor(AbstractOperator, GPUOperator):
             self._graphic_elements_model = None
             logger.info("GraphicElementsActor: graphic-elements backend=REMOTE endpoint=%s", self._graphic_elements_invoke_url)
         elif _ge_trt:
-            from nemo_retriever.model.local.trt_engine import TRTYoloxEngine
+            from nemo_retriever.utils.hf_cache import resolve_engine_path
 
-            self._graphic_elements_model = TRTYoloxEngine(_ge_trt, labels=self._GE_LABELS)
-            logger.info("GraphicElementsActor: graphic-elements backend=TRT engine=%s", _ge_trt)
+            resolved_engine: str | None = None
+            try:
+                resolved_engine = resolve_engine_path(_ge_trt, model_type="graphic_elements")
+            except FileNotFoundError:
+                pass
+
+            if resolved_engine is not None:
+                try:
+                    from nemo_retriever.model.local.trt_engine import TRTYoloxEngine
+
+                    self._graphic_elements_model = TRTYoloxEngine(resolved_engine, labels=self._GE_LABELS)
+                    logger.info("GraphicElementsActor: graphic-elements backend=TRT engine=%s", resolved_engine)
+                except ImportError:
+                    logger.warning(
+                        "GraphicElementsActor: tensorrt not available, falling back to HUGGINGFACE "
+                        "(path=%s)", _ge_trt,
+                    )
+                    from nemo_retriever.model.local import NemotronGraphicElementsV1
+
+                    self._graphic_elements_model = NemotronGraphicElementsV1()
+            else:
+                from nemo_retriever.model.local import NemotronGraphicElementsV1
+
+                self._graphic_elements_model = NemotronGraphicElementsV1()
+                logger.info("GraphicElementsActor: graphic-elements backend=HUGGINGFACE (path=%s)", _ge_trt)
         else:
             from nemo_retriever.model.local import NemotronGraphicElementsV1
 
