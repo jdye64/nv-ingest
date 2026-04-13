@@ -5,8 +5,10 @@
 """TensorRT engine wrappers for local GPU inference.
 
 Provides drop-in replacements for HuggingFace-based models that load
-pre-built ``.trt`` / ``.engine`` files and run inference via the TensorRT
-Python API with ``pycuda``.
+pre-built ``.trt`` / ``.engine`` / ``.plan`` files and run inference
+via the TensorRT Python API.  GPU memory is managed through PyTorch's
+CUDA allocator (no ``pycuda`` dependency), which integrates correctly
+with Ray's per-actor ``CUDA_VISIBLE_DEVICES`` assignment.
 
 **Detection models** (YOLOX family)::
 
@@ -33,6 +35,15 @@ import numpy as np
 import torch
 
 logger = logging.getLogger(__name__)
+
+_NP_TO_TORCH_DTYPE = {
+    np.dtype("float32"): torch.float32,
+    np.dtype("float16"): torch.float16,
+    np.dtype("int32"): torch.int32,
+    np.dtype("int64"): torch.int64,
+    np.dtype("int8"): torch.int8,
+    np.dtype("bool"): torch.bool,
+}
 
 
 def _load_engine(engine_path: str) -> Any:
@@ -71,7 +82,7 @@ class TRTYoloxEngine:
     Parameters
     ----------
     engine_path
-        Path to the serialized ``.trt`` / ``.engine`` file.
+        Path to the serialized ``.trt`` / ``.engine`` / ``.plan`` file.
     input_shape
         Spatial (H, W) the engine was built for.  Defaults to ``(1024, 1024)``.
     labels
@@ -87,8 +98,9 @@ class TRTYoloxEngine:
         labels: Optional[List[str]] = None,
     ) -> None:
         import tensorrt as trt
-        import pycuda.driver as cuda
-        import pycuda.autoinit  # noqa: F401 – initializes CUDA context
+
+        self._device = torch.device("cuda")
+        torch.cuda.init()
 
         self._engine_path = engine_path
         self._input_shape = input_shape
@@ -98,7 +110,7 @@ class TRTYoloxEngine:
         self._engine = engine
         self._context = engine.create_execution_context()
         self._trt = trt
-        self._cuda = cuda
+        self._stream = torch.cuda.Stream(self._device)
 
         self._input_name: Optional[str] = None
         self._output_names: List[str] = []
@@ -120,14 +132,13 @@ class TRTYoloxEngine:
         if self._input_name is None:
             raise RuntimeError(f"TRT engine {engine_path} has no input tensor")
 
-        self._stream = cuda.Stream()
-
         logger.info(
-            "TRTYoloxEngine loaded: path=%s, input=%s, outputs=%s, spatial=%s",
+            "TRTYoloxEngine loaded: path=%s, input=%s, outputs=%s, spatial=%s, device=%s",
             engine_path,
             self._input_name,
             self._output_names,
             input_shape,
+            self._device,
         )
 
     # ------------------------------------------------------------------
@@ -204,38 +215,25 @@ class TRTYoloxEngine:
 
     def _infer_single(self, input_nchw: torch.Tensor) -> List[np.ndarray]:
         """Execute inference for a single B=1 input."""
-        cuda = self._cuda
+        torch_dtype = _NP_TO_TORCH_DTYPE.get(np.dtype(self._input_dtype), torch.float32)
+        d_input = input_nchw.to(device=self._device, dtype=torch_dtype).contiguous()
+        self._context.set_tensor_address(self._input_name, d_input.data_ptr())
 
-        h_input = np.ascontiguousarray(input_nchw.cpu().numpy().astype(self._input_dtype))
-
-        d_input = cuda.mem_alloc(h_input.nbytes)
-        cuda.memcpy_htod_async(d_input, h_input, self._stream)
-        self._context.set_tensor_address(self._input_name, int(d_input))
-
-        h_outputs: List[np.ndarray] = []
-        d_outputs = []
-        for shape, dtype in zip(self._output_shapes, self._output_dtypes):
+        d_outputs: List[torch.Tensor] = []
+        for shape, np_dtype in zip(self._output_shapes, self._output_dtypes):
             effective_shape = (1, *shape[1:]) if shape[0] == -1 else shape
-            h_out = np.empty(effective_shape, dtype=dtype)
-            d_out = cuda.mem_alloc(h_out.nbytes)
-            h_outputs.append(h_out)
-            d_outputs.append(d_out)
+            t_dtype = _NP_TO_TORCH_DTYPE.get(np.dtype(np_dtype), torch.float32)
+            d_outputs.append(torch.empty(effective_shape, dtype=t_dtype, device=self._device))
 
         for name, d_out in zip(self._output_names, d_outputs):
-            self._context.set_tensor_address(name, int(d_out))
+            self._context.set_tensor_address(name, d_out.data_ptr())
 
-        self._context.execute_async_v3(stream_handle=self._stream.handle)
-
-        for h_out, d_out in zip(h_outputs, d_outputs):
-            cuda.memcpy_dtoh_async(h_out, d_out, self._stream)
+        with torch.cuda.stream(self._stream):
+            self._context.execute_async_v3(stream_handle=self._stream.cuda_stream)
 
         self._stream.synchronize()
 
-        d_input.free()
-        for d_out in d_outputs:
-            d_out.free()
-
-        return h_outputs
+        return [d_out.cpu().numpy() for d_out in d_outputs]
 
     def _raw_to_pred_dict(self, raw_outputs: List[np.ndarray]) -> Dict[str, Any]:
         """Convert raw TRT output arrays into the prediction dict format
@@ -314,12 +312,13 @@ class TRTEmbedEngine:
         hf_cache_dir: Optional[str] = None,
     ) -> None:
         import tensorrt as trt
-        import pycuda.driver as cuda
-        import pycuda.autoinit  # noqa: F401
 
         from transformers import AutoTokenizer
         from nemo_retriever.utils.hf_cache import configure_global_hf_cache_base
         from nemo_retriever.utils.hf_model_registry import get_hf_revision
+
+        self._device = torch.device("cuda")
+        torch.cuda.init()
 
         self._engine_path = engine_path
         self._max_length = max_length
@@ -338,7 +337,7 @@ class TRTEmbedEngine:
         self._engine = engine
         self._context = engine.create_execution_context()
         self._trt = trt
-        self._cuda = cuda
+        self._stream = torch.cuda.Stream(self._device)
 
         self._io_info: Dict[str, Dict[str, Any]] = {}
         for i in range(engine.num_io_tensors):
@@ -351,14 +350,13 @@ class TRTEmbedEngine:
                 "is_input": mode == trt.TensorIOMode.INPUT,
             }
 
-        self._stream = cuda.Stream()
-
         logger.info(
-            "TRTEmbedEngine loaded: path=%s, tensors=%s, max_length=%d, normalize=%s",
+            "TRTEmbedEngine loaded: path=%s, tensors=%s, max_length=%d, normalize=%s, device=%s",
             engine_path,
             list(self._io_info.keys()),
             max_length,
             normalize,
+            self._device,
         )
 
     @property
@@ -404,23 +402,19 @@ class TRTEmbedEngine:
 
     def _infer_batch(self, input_ids: np.ndarray, attention_mask: np.ndarray) -> torch.Tensor:
         """Run TRT inference and return the last-hidden-state as a float32 CPU tensor."""
-        cuda = self._cuda
-        trt = self._trt
-
-        B, S = input_ids.shape
-
         inputs_np = {
             "input_ids": np.ascontiguousarray(input_ids),
             "attention_mask": np.ascontiguousarray(attention_mask),
         }
 
-        d_inputs: Dict[str, Any] = {}
+        d_inputs: Dict[str, torch.Tensor] = {}
         for name, arr in inputs_np.items():
             if name in self._io_info:
                 self._context.set_input_shape(name, arr.shape)
-                d_buf = cuda.mem_alloc(arr.nbytes)
-                cuda.memcpy_htod_async(d_buf, arr, self._stream)
-                self._context.set_tensor_address(name, int(d_buf))
+                np_dtype = np.dtype(arr.dtype)
+                t_dtype = _NP_TO_TORCH_DTYPE.get(np_dtype, torch.int32)
+                d_buf = torch.from_numpy(arr).to(device=self._device, dtype=t_dtype).contiguous()
+                self._context.set_tensor_address(name, d_buf.data_ptr())
                 d_inputs[name] = d_buf
 
         output_name: Optional[str] = None
@@ -432,17 +426,14 @@ class TRTEmbedEngine:
             raise RuntimeError("TRT embed engine has no output tensor")
 
         out_shape = tuple(self._context.get_tensor_shape(output_name))
-        out_dtype = self._io_info[output_name]["dtype"]
-        h_output = np.empty(out_shape, dtype=out_dtype)
-        d_output = cuda.mem_alloc(h_output.nbytes)
-        self._context.set_tensor_address(output_name, int(d_output))
+        out_np_dtype = np.dtype(self._io_info[output_name]["dtype"])
+        out_t_dtype = _NP_TO_TORCH_DTYPE.get(out_np_dtype, torch.float32)
+        d_output = torch.empty(out_shape, dtype=out_t_dtype, device=self._device)
+        self._context.set_tensor_address(output_name, d_output.data_ptr())
 
-        self._context.execute_async_v3(stream_handle=self._stream.handle)
-        cuda.memcpy_dtoh_async(h_output, d_output, self._stream)
+        with torch.cuda.stream(self._stream):
+            self._context.execute_async_v3(stream_handle=self._stream.cuda_stream)
+
         self._stream.synchronize()
 
-        for d_buf in d_inputs.values():
-            d_buf.free()
-        d_output.free()
-
-        return torch.from_numpy(h_output.copy()).float()
+        return d_output.cpu().float()
