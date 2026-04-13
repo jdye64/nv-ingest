@@ -46,6 +46,18 @@ def _positive(value: Any) -> Any:
     return value if value not in (None, 0, 0.0, "", False) else None
 
 
+def _nim_remote_http_kwargs(extract_params: Any) -> dict[str, int]:
+    """Forward ExtractParams.remote_retry into stage kwargs for higher HTTP parallelism."""
+    rr = getattr(extract_params, "remote_retry", None)
+    if rr is None:
+        return {}
+    return {
+        "remote_max_pool_workers": int(rr.remote_max_pool_workers),
+        "remote_max_retries": int(rr.remote_max_retries),
+        "remote_max_429_retries": int(rr.remote_max_429_retries),
+    }
+
+
 def batch_tuning_to_node_overrides(
     extract_params: Any | None,
     embed_params: Any | None,
@@ -502,6 +514,7 @@ def build_graph(
                 parse_kwargs["api_key"] = extract_params.api_key
             if extract_params.nemotron_parse_model:
                 parse_kwargs["nemotron_parse_model"] = extract_params.nemotron_parse_model
+            parse_kwargs.update(_nim_remote_http_kwargs(extract_params))
             graph = graph >> NemotronParseActor(**parse_kwargs)
         else:
             detect_kwargs: dict[str, Any] = {}
@@ -549,6 +562,12 @@ def build_graph(
                 graphic_kwargs["ocr_invoke_url"] = extract_params.ocr_invoke_url
             if extract_params.api_key:
                 graphic_kwargs["api_key"] = extract_params.api_key
+
+            _rr = _nim_remote_http_kwargs(extract_params)
+            detect_kwargs.update(_rr)
+            ocr_kwargs.update(_rr)
+            table_kwargs.update(_rr)
+            graphic_kwargs.update(_rr)
 
             graph = graph >> PDFExtractionActor(**extract_kwargs) >> PageElementDetectionActor(**detect_kwargs)
             if extract_params.use_table_structure and extract_params.extract_tables:

@@ -26,6 +26,7 @@ def _embed_group(
     inference_batch_size: int,
     output_column: str,
     resolved_model_name: str,
+    nim_http_max_concurrent: int = 32,
 ) -> pd.DataFrame:
     """Embed a single modality group via ``create_text_embeddings_for_df``."""
     embedder = None
@@ -63,6 +64,7 @@ def _embed_group(
         embedding_nim_endpoint=endpoint or "http://localhost:8012/v1",
         embedding_model=resolved_model_name or "nvidia/llama-nemotron-embed-1b-v2",
         embed_modality=group_modality,
+        nim_http_max_concurrent=max(1, int(nim_http_max_concurrent)),
     )
 
     out_df, _ = create_text_embeddings_for_df(
@@ -73,6 +75,7 @@ def _embed_group(
             "multimodal_embedder": multimodal_embedder,
             "endpoint_url": endpoint,
             "local_batch_size": int(inference_batch_size),
+            "nim_http_max_concurrent": max(1, int(nim_http_max_concurrent)),
         },
         transform_config=cfg,
     )
@@ -93,6 +96,7 @@ def embed_text_main_text_embed(
     embedding_dim_column: str = "text_embeddings_1b_v2_dim",
     has_embedding_column: str = "text_embeddings_1b_v2_has_embedding",
     embed_modality: str = "text",
+    nim_http_max_concurrent: int = 32,
     **_: Any,
 ) -> Any:
     """Embed graph batches while preserving the legacy output columns."""
@@ -125,6 +129,7 @@ def embed_text_main_text_embed(
                 inference_batch_size=inference_batch_size,
                 output_column=output_column,
                 resolved_model_name=resolved_model_name,
+                nim_http_max_concurrent=nim_http_max_concurrent,
             )
         else:
             parts: List[pd.DataFrame] = []
@@ -143,6 +148,7 @@ def embed_text_main_text_embed(
                     inference_batch_size=inference_batch_size,
                     output_column=output_column,
                     resolved_model_name=resolved_model_name,
+                    nim_http_max_concurrent=nim_http_max_concurrent,
                 )
                 parts.append(part)
             out_df = pd.concat(parts).sort_index()

@@ -165,7 +165,7 @@ def invoke_image_inference_batches(
     api_key: Optional[str] = None,
     timeout_s: float = 60.0,
     max_batch_size: int = 8,
-    max_pool_workers: int = 8,
+    max_pool_workers: int = 24,
     max_retries: int = 5,
     max_429_retries: int = 3,
 ) -> List[Any]:
@@ -257,7 +257,7 @@ def invoke_page_elements_batches(
     api_key: Optional[str] = None,
     timeout_s: float = 60.0,
     max_batch_size: int = 8,
-    max_pool_workers: int = 8,
+    max_pool_workers: int = 24,
     max_retries: int = 5,
     max_429_retries: int = 3,
 ) -> List[Any]:
