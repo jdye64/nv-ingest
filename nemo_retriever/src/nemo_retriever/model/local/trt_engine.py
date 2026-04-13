@@ -809,12 +809,12 @@ class TRTEmbedEngine:
                 ctx.set_input_shape(name, arr.shape)
                 np_dtype = np.dtype(arr.dtype)
                 t_dtype = _NP_TO_TORCH_DTYPE.get(np_dtype, torch.int32)
-                cpu_buf = torch.from_numpy(arr).to(dtype=t_dtype).contiguous().pin_memory()
+                cpu_buf = torch.tensor(arr, dtype=t_dtype).contiguous().pin_memory()
                 with torch.cuda.stream(slot.stream):
                     d_buf = cpu_buf.to(device=self._device, non_blocking=True)
                 ctx.set_tensor_address(name, d_buf.data_ptr())
                 slot.d_inputs[name] = d_buf
-                slot.d_inputs[f"_pin_{name}"] = cpu_buf  # prevent GC of pinned source
+                slot.d_inputs[f"_pin_{name}"] = cpu_buf
 
         out_shape = tuple(ctx.get_tensor_shape(self._output_name))
         out_np_dtype = np.dtype(self._io_info[self._output_name]["dtype"])
