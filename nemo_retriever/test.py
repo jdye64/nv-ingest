@@ -1,19 +1,20 @@
 import time
 from pathlib import Path
 from nemo_retriever.graph_ingestor import GraphIngestor
-from nemo_retriever.params import ExtractParams, EmbedParams, RemoteRetryParams
+from nemo_retriever.params import ExtractParams, EmbedParams
 
 docs = [str(Path("/datasets/nv-ingest/bo767").resolve())]
 
+TRT_MODEL_DIR = Path("/models/trt")
+
 extract = ExtractParams(
     method="pdfium",
-    page_elements_invoke_url="http://localhost:8000/v1/infer",
-    ocr_invoke_url="http://localhost:8009/v1/infer",
-    table_structure_invoke_url="http://localhost:8006/v1/infer",
-    graphic_elements_invoke_url="http://localhost:8003/v1/infer",
+    page_elements_trt_engine_path=str(TRT_MODEL_DIR / "page_elements.engine"),
+    table_structure_trt_engine_path=str(TRT_MODEL_DIR / "table_structure.engine"),
+    graphic_elements_trt_engine_path=str(TRT_MODEL_DIR / "graphic_elements.engine"),
+    ocr_trt_engine_path=str(TRT_MODEL_DIR / "ocr_detector.engine"),
     use_table_structure=True,
     use_graphic_elements=True,
-    remote_retry=RemoteRetryParams(remote_max_pool_workers=16),
 )
 
 embed = EmbedParams(
@@ -24,10 +25,6 @@ embed = EmbedParams(
 ing = GraphIngestor(
     run_mode="batch",
     ray_address="auto",
-    node_overrides={
-        "PDFExtractionActor": {"concurrency": 48},
-        "TableStructureActor": {"concurrency": 4},
-    },
 )
 ing = ing.files(docs).extract(extract).embed(embed)
 t0 = time.perf_counter()
