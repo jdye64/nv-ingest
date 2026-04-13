@@ -235,32 +235,52 @@ class TRTYoloxEngine:
 
         return [d_out.cpu().numpy() for d_out in d_outputs]
 
+    @staticmethod
+    def _cxcywh_to_xyxy(boxes: np.ndarray) -> np.ndarray:
+        """Convert ``[cx, cy, w, h]`` to ``[x1, y1, x2, y2]``."""
+        cx, cy, w, h = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
+        x1 = cx - w / 2
+        y1 = cy - h / 2
+        x2 = cx + w / 2
+        y2 = cy + h / 2
+        return np.stack([x1, y1, x2, y2], axis=1)
+
     def _raw_to_pred_dict(self, raw_outputs: List[np.ndarray]) -> Dict[str, Any]:
         """Convert raw TRT output arrays into the prediction dict format
         expected by the shared post-processing code.
 
         The YOLOX detection head typically outputs either:
-        - A single tensor of shape ``(1, N, 5+C)`` (boxes + objectness + class scores), or
+        - A single tensor of shape ``(1, N, 5+C)`` with columns
+          ``[cx, cy, w, h, objectness, class_0, class_1, …]``, or
         - Multiple tensors for boxes, labels, scores separately.
 
-        This method handles both and returns a dict with ``boxes``, ``labels``,
-        ``scores`` keys as torch tensors.
+        Returns a dict with ``boxes`` in ``[x1, y1, x2, y2]`` format,
+        ``labels``, and ``scores`` as torch tensors.
         """
         if len(raw_outputs) == 1:
             out = raw_outputs[0]
             if out.ndim == 3:
                 out = out[0]
+            boxes_xyxy = self._cxcywh_to_xyxy(out[:, :4])
+            obj = out[:, 4:5]
+            cls_scores = out[:, 5:]
+            scores = (obj * cls_scores).max(axis=-1)
+            labels = cls_scores.argmax(axis=-1)
             return {
-                "boxes": torch.from_numpy(out[:, :4].copy()).float(),
-                "labels": torch.from_numpy(out[:, 5:].argmax(axis=-1).copy()).long(),
-                "scores": torch.from_numpy((out[:, 4:5] * out[:, 5:]).max(axis=-1).copy()).float(),
+                "boxes": torch.from_numpy(boxes_xyxy.copy()).float(),
+                "labels": torch.from_numpy(labels.copy()).long(),
+                "scores": torch.from_numpy(scores.copy()).float(),
             }
 
         if len(raw_outputs) >= 3:
-            boxes = torch.from_numpy(raw_outputs[0].squeeze(0).copy()).float()
-            labels = torch.from_numpy(raw_outputs[1].squeeze(0).copy()).long()
-            scores = torch.from_numpy(raw_outputs[2].squeeze(0).copy()).float()
-            return {"boxes": boxes, "labels": labels, "scores": scores}
+            boxes = raw_outputs[0].squeeze(0)
+            if boxes.shape[-1] == 4:
+                boxes = self._cxcywh_to_xyxy(boxes)
+            return {
+                "boxes": torch.from_numpy(boxes.copy()).float(),
+                "labels": torch.from_numpy(raw_outputs[1].squeeze(0).copy()).long(),
+                "scores": torch.from_numpy(raw_outputs[2].squeeze(0).copy()).float(),
+            }
 
         return {
             "boxes": torch.empty((0, 4), dtype=torch.float32),
