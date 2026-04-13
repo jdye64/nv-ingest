@@ -12,7 +12,7 @@ import time
 import traceback
 
 import pandas as pd
-from nemo_retriever.nim.nim import invoke_image_inference_batches
+from nemo_retriever.nim.nim import NIMClient, invoke_image_inference_batches
 from nemo_retriever.params import RemoteRetryParams
 
 try:
@@ -341,6 +341,7 @@ def graphic_elements_ocr_page_elements(
     api_key: str = "",
     request_timeout_s: float = 120.0,
     remote_retry: RemoteRetryParams | None = None,
+    nim_client: NIMClient | None = None,
     **kwargs: Any,
 ) -> Any:
     """
@@ -437,16 +438,22 @@ def graphic_elements_ocr_page_elements(
             # --- Run graphic-elements on all crops ---
             ge_results: List[List[Dict[str, Any]]] = []
             if use_remote_ge:
-                response_items = invoke_image_inference_batches(
+                _ge_kw = dict(
                     invoke_url=ge_url,
                     image_b64_list=crop_b64s,
                     api_key=api_key or None,
                     timeout_s=float(request_timeout_s),
                     max_batch_size=inference_batch_size,
-                    max_pool_workers=int(retry.remote_max_pool_workers),
                     max_retries=int(retry.remote_max_retries),
                     max_429_retries=int(retry.remote_max_429_retries),
                 )
+                if nim_client is not None:
+                    response_items = nim_client.invoke_image_inference_batches(**_ge_kw)
+                else:
+                    response_items = invoke_image_inference_batches(
+                        **_ge_kw,
+                        max_pool_workers=int(retry.remote_max_pool_workers),
+                    )
                 if len(response_items) != len(crops):
                     raise RuntimeError(f"Expected {len(crops)} GE responses, got {len(response_items)}")
                 for resp in response_items:
@@ -476,16 +483,22 @@ def graphic_elements_ocr_page_elements(
             # --- Run OCR on all crops ---
             ocr_results: List[Any] = []
             if use_remote_ocr:
-                ocr_response_items = invoke_image_inference_batches(
+                _ocr_kw = dict(
                     invoke_url=ocr_url,
                     image_b64_list=crop_b64s,
                     api_key=api_key or None,
                     timeout_s=float(request_timeout_s),
                     max_batch_size=inference_batch_size,
-                    max_pool_workers=int(retry.remote_max_pool_workers),
                     max_retries=int(retry.remote_max_retries),
                     max_429_retries=int(retry.remote_max_429_retries),
                 )
+                if nim_client is not None:
+                    ocr_response_items = nim_client.invoke_image_inference_batches(**_ocr_kw)
+                else:
+                    ocr_response_items = invoke_image_inference_batches(
+                        **_ocr_kw,
+                        max_pool_workers=int(retry.remote_max_pool_workers),
+                    )
                 if len(ocr_response_items) != len(crops):
                     raise RuntimeError(f"Expected {len(crops)} OCR responses, got {len(ocr_response_items)}")
                 for resp in ocr_response_items:

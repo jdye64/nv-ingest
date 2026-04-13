@@ -10,6 +10,7 @@ import pandas as pd
 
 from nemo_retriever.graph.abstract_operator import AbstractOperator
 from nemo_retriever.graph.cpu_operator import CPUOperator
+from nemo_retriever.nim.nim import NIMClient
 from nemo_retriever.params import RemoteRetryParams
 from nemo_retriever.table.shared import table_structure_ocr_page_elements
 
@@ -52,6 +53,9 @@ class TableStructureCPUActor(AbstractOperator, CPUOperator):
         )
         self._table_structure_model = None
         self._ocr_model = None
+        self._nim_client = NIMClient(
+            max_pool_workers=int(remote_max_pool_workers),
+        )
 
     def preprocess(self, data: Any, **kwargs: Any) -> Any:
         return data
@@ -67,6 +71,7 @@ class TableStructureCPUActor(AbstractOperator, CPUOperator):
             table_output_format=self._table_output_format,
             request_timeout_s=self._request_timeout_s,
             remote_retry=self._remote_retry,
+            nim_client=self._nim_client,
             **kwargs,
         )
 
