@@ -911,19 +911,45 @@ class TRTEmbedEngine:
             )
 
         ctx = slot.ctx
+
+        # Ensure the stream is idle before any profile switch or shape change.
+        slot.stream.synchronize()
+
         if ctx.active_optimization_profile != profile_idx:
-            ctx.set_optimization_profile_async(profile_idx, slot.stream.cuda_stream)
-            slot.stream.synchronize()
+            ok = ctx.set_optimization_profile(profile_idx)
+            if not ok:
+                raise RuntimeError(
+                    f"Failed to switch to TRT profile {profile_idx} for shape "
+                    f"({B}, {S}). Profiles: {self._profiles}"
+                )
 
         inputs_np = {
             "input_ids": np.ascontiguousarray(input_ids),
             "attention_mask": np.ascontiguousarray(attention_mask),
         }
 
-        slot.d_inputs = {}
+        # Set input shapes first (TRT needs all inputs before output shape resolves).
         for name, arr in inputs_np.items():
             if name in self._io_info:
                 ctx.set_input_shape(name, arr.shape)
+
+        # Resolve output shape — must happen after all set_input_shape calls.
+        out_shape = tuple(ctx.get_tensor_shape(self._output_name))
+        if any(d < 0 for d in out_shape):
+            raise RuntimeError(
+                f"TRT output shape still unresolved: {out_shape} for "
+                f"input ({B}, {S}) on profile {profile_idx}. "
+                f"Profiles: {self._profiles}"
+            )
+        out_np_dtype = np.dtype(self._io_info[self._output_name]["dtype"])
+        out_t_dtype = _NP_TO_TORCH_DTYPE.get(out_np_dtype, torch.float32)
+        slot.d_output = torch.empty(out_shape, dtype=out_t_dtype, device=self._device)
+        ctx.set_tensor_address(self._output_name, slot.d_output.data_ptr())
+
+        # Transfer input data to GPU with pinned memory.
+        slot.d_inputs = {}
+        for name, arr in inputs_np.items():
+            if name in self._io_info:
                 np_dtype = np.dtype(arr.dtype)
                 t_dtype = _NP_TO_TORCH_DTYPE.get(np_dtype, torch.int32)
                 cpu_buf = torch.tensor(arr, dtype=t_dtype).contiguous().pin_memory()
@@ -932,12 +958,6 @@ class TRTEmbedEngine:
                 ctx.set_tensor_address(name, d_buf.data_ptr())
                 slot.d_inputs[name] = d_buf
                 slot.d_inputs[f"_pin_{name}"] = cpu_buf
-
-        out_shape = tuple(ctx.get_tensor_shape(self._output_name))
-        out_np_dtype = np.dtype(self._io_info[self._output_name]["dtype"])
-        out_t_dtype = _NP_TO_TORCH_DTYPE.get(out_np_dtype, torch.float32)
-        slot.d_output = torch.empty(out_shape, dtype=out_t_dtype, device=self._device)
-        ctx.set_tensor_address(self._output_name, slot.d_output.data_ptr())
 
         with torch.cuda.stream(slot.stream):
             ctx.execute_async_v3(stream_handle=slot.stream.cuda_stream)
