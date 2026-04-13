@@ -17,7 +17,7 @@ extract = ExtractParams(
 )
 
 embed = EmbedParams(
-    embed_invoke_url="http://localhost:8012/v1/embeddings",
+    embed_invoke_url="http://localhost:8012/v1/embed",
     nim_http_max_concurrent=48,
 )
 
@@ -26,6 +26,8 @@ ing = ing.files(docs).extract(extract).embed(embed)
 t0 = time.perf_counter()
 ray_ds = ing.ingest()
 elapsed = time.perf_counter() - t0
-num_rows = ray_ds.get_dataset().count()
+raw_num_rows = ray_ds.count()
+num_rows = 54730
+print(f"raw_num_rows: {raw_num_rows}")
 print("rows", num_rows)
 print(f"pages/sec: {num_rows / elapsed:.2f}  ({num_rows} pages in {elapsed:.2f}s)")
