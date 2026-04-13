@@ -425,7 +425,6 @@ class TRTEmbedEngine:
         torch.cuda.init()
 
         self._engine_path = engine_path
-        self._max_length = max_length
         self._normalize = normalize
 
         cache_dir = configure_global_hf_cache_base(hf_cache_dir)
@@ -454,12 +453,35 @@ class TRTEmbedEngine:
                 "is_input": mode == trt.TensorIOMode.INPUT,
             }
 
+        # Parse optimization profiles: list of (profile_idx, max_batch, max_seq)
+        # sorted by max_seq ascending so we pick the tightest fit first.
+        self._profiles: List[Tuple[int, int, int]] = []
+        input_tensor_name = next(
+            (n for n, info in self._io_info.items() if info["is_input"]),
+            "input_ids",
+        )
+        num_profiles = engine.num_optimization_profiles
+        for p_idx in range(num_profiles):
+            _min_shape, _opt_shape, max_shape = engine.get_tensor_profile_shape(
+                input_tensor_name, p_idx
+            )
+            max_b, max_s = int(max_shape[0]), int(max_shape[1])
+            self._profiles.append((p_idx, max_b, max_s))
+
+        self._profiles.sort(key=lambda t: (t[2], t[1]))
+
+        # Clamp max_length to the absolute max sequence any profile supports.
+        abs_max_seq = max(p[2] for p in self._profiles) if self._profiles else max_length
+        self._max_length = min(max_length, abs_max_seq)
+
         logger.info(
-            "TRTEmbedEngine loaded: path=%s, tensors=%s, max_length=%d, normalize=%s, device=%s",
+            "TRTEmbedEngine loaded: path=%s, tensors=%s, max_length=%d, "
+            "normalize=%s, profiles=%s, device=%s",
             engine_path,
             list(self._io_info.keys()),
-            max_length,
+            self._max_length,
             normalize,
+            self._profiles,
             self._device,
         )
 
@@ -472,23 +494,40 @@ class TRTEmbedEngine:
         return f"TRT:{self._engine_path}"
 
     def embed(self, texts: "Sequence[str]", *, batch_size: int = 64) -> torch.Tensor:
-        """Return a CPU tensor of shape ``[N, D]``, matching the HF embedder API."""
-        from typing import Sequence as _Seq  # noqa: F811
+        """Return a CPU tensor of shape ``[N, D]``, matching the HF embedder API.
 
+        Tokenised inputs are automatically split into sub-batches that
+        respect the engine's optimisation profile limits on
+        ``(batch, seq_len)``.
+        """
         texts_list = [str(t) for t in texts if str(t).strip()]
         if not texts_list:
             return torch.empty((0, 0), dtype=torch.float32)
 
-        bs = max(1, int(batch_size))
-        all_vecs: List[torch.Tensor] = []
+        # Tokenize without padding to get per-text lengths, then form
+        # sub-batches that fit within the engine's optimization profiles.
+        tokens_per_text = self._tokenizer(
+            texts_list,
+            padding=False,
+            truncation=True,
+            max_length=max(1, self._max_length),
+        )
+        lengths = [len(ids) for ids in tokens_per_text["input_ids"]]
 
-        for start in range(0, len(texts_list), bs):
-            chunk = texts_list[start : start + bs]
+        sub_batches = self._plan_sub_batches(lengths, max_batch=max(1, int(batch_size)))
+
+        # Process sub-batches and scatter results back to original order.
+        result_vecs: List[Optional[torch.Tensor]] = [None] * len(texts_list)
+        embed_dim: Optional[int] = None
+
+        for indices in sub_batches:
+            chunk = [texts_list[i] for i in indices]
+            max_seq = max(lengths[i] for i in indices)
             tokens = self._tokenizer(
                 chunk,
                 padding=True,
                 truncation=True,
-                max_length=max(1, self._max_length),
+                max_length=max_seq,
                 return_tensors="np",
             )
             input_ids = tokens["input_ids"].astype(np.int32)
@@ -496,16 +535,111 @@ class TRTEmbedEngine:
 
             hidden = self._infer_batch(input_ids, attention_mask)
 
-            mask_f = torch.from_numpy(attention_mask.astype(np.float32)).unsqueeze(-1)  # [B, S, 1]
-            pooled = (hidden * mask_f).sum(dim=1) / mask_f.sum(dim=1)  # [B, D]
+            mask_f = torch.from_numpy(attention_mask.astype(np.float32)).unsqueeze(-1)
+            pooled = (hidden * mask_f).sum(dim=1) / mask_f.sum(dim=1)
             if self._normalize:
                 pooled = _l2_normalize(pooled)
-            all_vecs.append(pooled)
 
-        return torch.cat(all_vecs, dim=0) if all_vecs else torch.empty((0, 0), dtype=torch.float32)
+            if embed_dim is None:
+                embed_dim = int(pooled.shape[-1])
+
+            for local_i, orig_i in enumerate(indices):
+                result_vecs[orig_i] = pooled[local_i]
+
+        filled = [v for v in result_vecs if v is not None]
+        return torch.stack(filled, dim=0) if filled else torch.empty((0, 0), dtype=torch.float32)
+
+    # ------------------------------------------------------------------
+    # Profile-aware batching helpers
+    # ------------------------------------------------------------------
+
+    def _best_profile(self, batch: int, seq_len: int) -> Optional[int]:
+        """Return the profile index whose limits fit ``(batch, seq_len)``.
+
+        Prefers the tightest ``max_seq`` that still fits, breaking ties
+        by tightest ``max_batch``.  Returns ``None`` if nothing fits.
+        """
+        for p_idx, max_b, max_s in self._profiles:
+            if batch <= max_b and seq_len <= max_s:
+                return p_idx
+        return None
+
+    def _max_batch_for_seq(self, seq_len: int) -> int:
+        """Largest batch size any profile can handle for *seq_len*."""
+        best = 0
+        for _, max_b, max_s in self._profiles:
+            if seq_len <= max_s and max_b > best:
+                best = max_b
+        return best
+
+    def _plan_sub_batches(
+        self,
+        lengths: List[int],
+        *,
+        max_batch: int,
+    ) -> List[List[int]]:
+        """Partition text indices into sub-batches that each fit within an
+        optimisation profile.
+
+        Texts are sorted by token length so that texts within a sub-batch
+        are similarly sized, minimising padding waste and maximising the
+        batch size allowed by the profile.
+        """
+        order = sorted(range(len(lengths)), key=lambda i: lengths[i])
+
+        sub_batches: List[List[int]] = []
+        pos = 0
+        while pos < len(order):
+            # The longest text in this candidate sub-batch determines
+            # the required seq_len.  Start with one text and grow.
+            end = pos + 1
+            while end < len(order):
+                candidate_seq = lengths[order[end]]
+                candidate_batch = end - pos + 1
+                if candidate_batch > max_batch:
+                    break
+                if self._best_profile(candidate_batch, candidate_seq) is None:
+                    break
+                end += 1
+
+            # Validate the sub-batch we formed.
+            sub = order[pos:end]
+            max_seq = max(lengths[i] for i in sub)
+            if self._best_profile(len(sub), max_seq) is None:
+                # Even a single text doesn't fit (shouldn't happen if
+                # max_length was clamped, but be defensive).
+                sub_batches.append([sub[0]])
+                pos += 1
+            else:
+                sub_batches.append(sub)
+                pos = end
+
+        return sub_batches
+
+    # ------------------------------------------------------------------
+    # TRT inference
+    # ------------------------------------------------------------------
 
     def _infer_batch(self, input_ids: np.ndarray, attention_mask: np.ndarray) -> torch.Tensor:
-        """Run TRT inference and return the last-hidden-state as a float32 CPU tensor."""
+        """Run TRT inference and return the last-hidden-state as a float32 CPU tensor.
+
+        Automatically selects the best optimisation profile for the
+        input shape ``(B, S)``.
+        """
+        B, S = input_ids.shape
+        profile_idx = self._best_profile(B, S)
+        if profile_idx is None:
+            raise RuntimeError(
+                f"No TRT optimization profile supports shape ({B}, {S}). "
+                f"Available profiles: {self._profiles}"
+            )
+
+        if self._context.active_optimization_profile != profile_idx:
+            self._context.set_optimization_profile_async(
+                profile_idx, self._stream.cuda_stream
+            )
+            self._stream.synchronize()
+
         inputs_np = {
             "input_ids": np.ascontiguousarray(input_ids),
             "attention_mask": np.ascontiguousarray(attention_mask),
