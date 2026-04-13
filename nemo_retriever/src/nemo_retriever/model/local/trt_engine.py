@@ -36,15 +36,27 @@ logger = logging.getLogger(__name__)
 
 
 def _load_engine(engine_path: str) -> Any:
-    """Deserialize a TensorRT engine from disk."""
+    """Deserialize a TensorRT engine from disk.
+
+    Enables ``engine_host_code_allowed`` on the runtime so that engines
+    built with the ``VERSION_COMPATIBLE`` flag can be loaded across
+    compatible TRT versions.
+    """
     import tensorrt as trt
 
     trt_logger = trt.Logger(trt.Logger.WARNING)
     with open(engine_path, "rb") as f:
         runtime = trt.Runtime(trt_logger)
+        if hasattr(runtime, "engine_host_code_allowed"):
+            runtime.engine_host_code_allowed = True
         engine = runtime.deserialize_cuda_engine(f.read())
     if engine is None:
-        raise RuntimeError(f"Failed to deserialize TensorRT engine from {engine_path}")
+        raise RuntimeError(
+            f"Failed to deserialize TensorRT engine from {engine_path}. "
+            f"This usually means the .plan was compiled with a different "
+            f"TensorRT version (installed: {trt.__version__}). Rebuild the "
+            f"engine with your current TRT version or install the matching one."
+        )
     return engine
 
 
