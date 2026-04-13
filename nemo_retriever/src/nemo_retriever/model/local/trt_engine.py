@@ -76,8 +76,14 @@ class TRTYoloxEngine:
     used by ``NemotronPageElementsV3``, ``NemotronTableStructureV1``, and
     ``NemotronGraphicElementsV1``.
 
-    The engine is expected to accept a single NCHW ``float32`` input and produce
-    one or more output tensors matching the YOLOX detection head format.
+    Performance characteristics
+    --------------------------
+    * **Batched inference** – the entire BCHW batch is executed in a single
+      ``execute_async_v3`` call instead of per-image.
+    * **GPU-resident pipeline** – TRT output stays on GPU through NMS and
+      box normalisation; only the final prediction dicts are copied to CPU.
+    * **Buffer reuse** – output device buffers are allocated once and reused
+      across calls of the same batch size, eliminating per-call ``cudaMalloc``.
 
     Parameters
     ----------
@@ -138,12 +144,27 @@ class TRTYoloxEngine:
         if self._input_name is None:
             raise RuntimeError(f"TRT engine {engine_path} has no input tensor")
 
+        # Detect dynamic batch dimension.
+        self._has_dynamic_batch = (
+            tuple(engine.get_tensor_shape(self._input_name))[0] == -1
+        )
+
+        # Cache for reusable GPU output buffers keyed by resolved output shapes.
+        self._cached_out_shapes: Optional[List[Tuple[int, ...]]] = None
+        self._cached_out_bufs: List[torch.Tensor] = []
+
+        # Pre-import the upstream NMS function once to avoid per-call overhead.
+        from nemotron_page_elements_v3.yolox.boxes import postprocess as _yolox_nms
+        self._yolox_nms = _yolox_nms
+
         logger.info(
-            "TRTYoloxEngine loaded: path=%s, input=%s, outputs=%s, spatial=%s, device=%s",
+            "TRTYoloxEngine loaded: path=%s, input=%s, outputs=%s, "
+            "spatial=%s, dynamic_batch=%s, device=%s",
             engine_path,
             self._input_name,
             self._output_names,
             input_shape,
+            self._has_dynamic_batch,
             self._device,
         )
 
@@ -199,8 +220,9 @@ class TRTYoloxEngine:
         """Run TRT inference and return results in the same dict format as
         the HuggingFace model wrappers.
 
-        Boxes are returned **normalised to [0, 1]** relative to
-        ``orig_shape``, matching the HuggingFace ``YoloXWrapper``.
+        The full batch is executed in **one** TRT call.  NMS and box
+        normalisation run on GPU; only the final prediction dicts are
+        moved to CPU.
         """
         if input_tensor.ndim == 3:
             input_tensor = input_tensor.unsqueeze(0)
@@ -212,14 +234,8 @@ class TRTYoloxEngine:
         else:
             shapes = [orig_shape] * batch_size
 
-        results: List[Dict[str, Any]] = []
-
-        for b in range(batch_size):
-            single = input_tensor[b : b + 1]
-            raw_outputs = self._infer_single(single)
-            sh = shapes[b] if b < len(shapes) else shapes[-1]
-            pred = self._raw_to_pred_dict(raw_outputs, orig_shape=sh)
-            results.append(pred)
+        gpu_outputs = self._infer_batched(input_tensor)
+        results = self._postprocess_batch(gpu_outputs, shapes)
 
         if batch_size == 1:
             return results[0]
@@ -247,130 +263,158 @@ class TRTYoloxEngine:
         return {}
 
     # ------------------------------------------------------------------
-    # Internal helpers
+    # Batched GPU inference
     # ------------------------------------------------------------------
 
-    def _infer_single(self, input_nchw: torch.Tensor) -> List[np.ndarray]:
-        """Execute inference for a single B=1 input."""
+    def _infer_batched(self, input_nchw: torch.Tensor) -> List[torch.Tensor]:
+        """Execute batched TRT inference.  Returns **GPU-resident** tensors.
+
+        Output buffers are cached and reused across calls of the same
+        effective shape, eliminating per-call ``cudaMalloc`` overhead.
+        """
         torch_dtype = _NP_TO_TORCH_DTYPE.get(np.dtype(self._input_dtype), torch.float32)
         d_input = input_nchw.to(device=self._device, dtype=torch_dtype).contiguous()
+
+        if self._has_dynamic_batch:
+            self._context.set_input_shape(self._input_name, tuple(d_input.shape))
+
         self._context.set_tensor_address(self._input_name, d_input.data_ptr())
 
-        d_outputs: List[torch.Tensor] = []
-        for shape, np_dtype in zip(self._output_shapes, self._output_dtypes):
-            effective_shape = (1, *shape[1:]) if shape[0] == -1 else shape
-            t_dtype = _NP_TO_TORCH_DTYPE.get(np.dtype(np_dtype), torch.float32)
-            d_outputs.append(torch.empty(effective_shape, dtype=t_dtype, device=self._device))
+        # Resolve actual output shapes (batch dim may be dynamic).
+        needed_shapes: List[Tuple[int, ...]] = [
+            tuple(self._context.get_tensor_shape(name))
+            for name in self._output_names
+        ]
 
-        for name, d_out in zip(self._output_names, d_outputs):
+        # Allocate or reuse output buffers.
+        if needed_shapes != self._cached_out_shapes:
+            self._cached_out_bufs = []
+            for shape, np_dtype in zip(needed_shapes, self._output_dtypes):
+                t_dtype = _NP_TO_TORCH_DTYPE.get(np.dtype(np_dtype), torch.float32)
+                self._cached_out_bufs.append(
+                    torch.empty(shape, dtype=t_dtype, device=self._device)
+                )
+            self._cached_out_shapes = needed_shapes
+
+        for name, d_out in zip(self._output_names, self._cached_out_bufs):
             self._context.set_tensor_address(name, d_out.data_ptr())
 
         with torch.cuda.stream(self._stream):
             self._context.execute_async_v3(stream_handle=self._stream.cuda_stream)
-
         self._stream.synchronize()
 
-        return [d_out.cpu().numpy() for d_out in d_outputs]
+        return self._cached_out_bufs
 
-    def _raw_to_pred_dict(
-        self,
-        raw_outputs: List[np.ndarray],
-        *,
-        orig_shape: Tuple[int, int],
-    ) -> Dict[str, Any]:
-        """Convert raw TRT output arrays into the prediction dict expected by
-        the shared post-processing code.
+    # ------------------------------------------------------------------
+    # GPU-resident post-processing (NMS + normalisation)
+    # ------------------------------------------------------------------
 
-        Replicates the full ``YoloXWrapper.forward()`` pipeline from
-        ``nemotron_page_elements_v3``:
-          1. NMS (conf threshold + torchvision NMS)
-          2. Scale boxes from model input space → original image pixel space
-          3. Clip to original image bounds & remove tiny boxes
-          4. Normalise to ``[0, 1]``
-
-        Returns a dict with normalised ``boxes``, ``labels``, ``scores``.
-        """
-        empty = {
+    @staticmethod
+    def _empty_pred() -> Dict[str, Any]:
+        return {
             "boxes": torch.empty((0, 4), dtype=torch.float32),
             "labels": torch.empty((0,), dtype=torch.int64),
             "scores": torch.empty((0,), dtype=torch.float32),
         }
 
-        if len(raw_outputs) == 1:
-            out = raw_outputs[0]
-            if out.ndim == 2:
-                out = out[np.newaxis]  # (N, 5+C) → (1, N, 5+C)
+    def _postprocess_batch(
+        self,
+        gpu_outputs: List[torch.Tensor],
+        shapes: List[Tuple[int, int]],
+    ) -> List[Dict[str, Any]]:
+        """NMS + box scaling + normalisation, all on GPU.
 
-            prediction = torch.from_numpy(out).float()
-            num_classes = prediction.shape[-1] - 5
+        Replicates ``YoloXWrapper.forward()`` post-processing from
+        ``nemotron_page_elements_v3`` but operates on the full batch
+        at once.  Results are moved to CPU only at the end.
+        """
+        B = len(shapes)
 
-            from nemotron_page_elements_v3.yolox.boxes import postprocess as yolox_nms
+        if len(gpu_outputs) == 1:
+            raw = gpu_outputs[0]  # (B, N, 5+C) on GPU
+            if raw.ndim == 2:
+                raw = raw.unsqueeze(0)
 
-            nms_results = yolox_nms(
-                prediction,
+            num_classes = raw.shape[-1] - 5
+
+            # NMS runs on GPU tensors (torchvision.ops.nms supports CUDA).
+            # The upstream postprocess modifies the tensor in-place
+            # (cxcywh → xyxy), which is fine because TRT overwrites
+            # the buffer on the next call.
+            nms_results = self._yolox_nms(
+                raw,
                 num_classes,
                 conf_thre=self._conf_thresh,
                 nms_thre=self._iou_thresh,
                 class_agnostic=True,
             )
 
-            p = nms_results[0]  # single image
-            if p is None or p.numel() == 0:
-                return empty
+            results: List[Dict[str, Any]] = []
+            for b in range(B):
+                p = nms_results[b]
+                if p is None or p.numel() == 0:
+                    results.append(self._empty_pred())
+                    continue
 
-            p = p.view(-1, p.size(-1))
+                p = p.view(-1, p.size(-1))
 
-            orig_h, orig_w = orig_shape
-            ratio = min(
-                self._input_shape[0] / orig_h,
-                self._input_shape[1] / orig_w,
-            )
-            boxes = p[:, :4] / ratio
+                orig_h, orig_w = shapes[b]
+                ratio = min(
+                    self._input_shape[0] / orig_h,
+                    self._input_shape[1] / orig_w,
+                )
+                boxes = p[:, :4] / ratio
 
-            boxes[:, [0, 2]] = torch.clamp(boxes[:, [0, 2]], 0, orig_w)
-            boxes[:, [1, 3]] = torch.clamp(boxes[:, [1, 3]], 0, orig_h)
+                boxes[:, [0, 2]].clamp_(0, orig_w)
+                boxes[:, [1, 3]].clamp_(0, orig_h)
 
-            kept = (
-                (boxes[:, 2] - boxes[:, 0] > self._min_bbox_size)
-                & (boxes[:, 3] - boxes[:, 1] > self._min_bbox_size)
-            )
-            boxes = boxes[kept]
-            p = p[kept]
+                kept = (
+                    (boxes[:, 2] - boxes[:, 0] > self._min_bbox_size)
+                    & (boxes[:, 3] - boxes[:, 1] > self._min_bbox_size)
+                )
+                boxes = boxes[kept]
+                p = p[kept]
 
-            boxes[:, [0, 2]] /= orig_w
-            boxes[:, [1, 3]] /= orig_h
+                boxes[:, [0, 2]] /= orig_w
+                boxes[:, [1, 3]] /= orig_h
 
-            scores = p[:, 4] * p[:, 5]
-            labels = p[:, 6]
+                scores = p[:, 4] * p[:, 5]
+                labels = p[:, 6]
 
-            return {
-                "boxes": boxes.float(),
-                "labels": labels.long(),
-                "scores": scores.float(),
-            }
+                results.append({
+                    "boxes": boxes.cpu().float(),
+                    "labels": labels.cpu().long(),
+                    "scores": scores.cpu().float(),
+                })
+            return results
 
-        if len(raw_outputs) >= 3:
-            boxes_np = raw_outputs[0].squeeze(0)
-            boxes = torch.from_numpy(boxes_np.copy()).float()
+        if len(gpu_outputs) >= 3:
+            all_boxes = gpu_outputs[0]   # (B, N, 4) on GPU
+            all_labels = gpu_outputs[1]  # (B, N) on GPU
+            all_scores = gpu_outputs[2]  # (B, N) on GPU
 
-            orig_h, orig_w = orig_shape
-            ratio = min(
-                self._input_shape[0] / orig_h,
-                self._input_shape[1] / orig_w,
-            )
-            boxes /= ratio
-            boxes[:, [0, 2]] = torch.clamp(boxes[:, [0, 2]], 0, orig_w)
-            boxes[:, [1, 3]] = torch.clamp(boxes[:, [1, 3]], 0, orig_h)
-            boxes[:, [0, 2]] /= orig_w
-            boxes[:, [1, 3]] /= orig_h
+            results = []
+            for b in range(B):
+                boxes = all_boxes[b].clone()
+                orig_h, orig_w = shapes[b]
+                ratio = min(
+                    self._input_shape[0] / orig_h,
+                    self._input_shape[1] / orig_w,
+                )
+                boxes /= ratio
+                boxes[:, [0, 2]].clamp_(0, orig_w)
+                boxes[:, [1, 3]].clamp_(0, orig_h)
+                boxes[:, [0, 2]] /= orig_w
+                boxes[:, [1, 3]] /= orig_h
 
-            return {
-                "boxes": boxes,
-                "labels": torch.from_numpy(raw_outputs[1].squeeze(0).copy()).long(),
-                "scores": torch.from_numpy(raw_outputs[2].squeeze(0).copy()).float(),
-            }
+                results.append({
+                    "boxes": boxes.cpu().float(),
+                    "labels": all_labels[b].cpu().long(),
+                    "scores": all_scores[b].cpu().float(),
+                })
+            return results
 
-        return empty
+        return [self._empty_pred() for _ in range(B)]
 
 
 # ======================================================================
@@ -498,14 +542,13 @@ class TRTEmbedEngine:
 
         Tokenised inputs are automatically split into sub-batches that
         respect the engine's optimisation profile limits on
-        ``(batch, seq_len)``.
+        ``(batch, seq_len)``.  Mean-pooling and L2 normalisation run on
+        GPU; only the final vectors are copied to CPU.
         """
         texts_list = [str(t) for t in texts if str(t).strip()]
         if not texts_list:
             return torch.empty((0, 0), dtype=torch.float32)
 
-        # Tokenize without padding to get per-text lengths, then form
-        # sub-batches that fit within the engine's optimization profiles.
         tokens_per_text = self._tokenizer(
             texts_list,
             padding=False,
@@ -516,9 +559,7 @@ class TRTEmbedEngine:
 
         sub_batches = self._plan_sub_batches(lengths, max_batch=max(1, int(batch_size)))
 
-        # Process sub-batches and scatter results back to original order.
         result_vecs: List[Optional[torch.Tensor]] = [None] * len(texts_list)
-        embed_dim: Optional[int] = None
 
         for indices in sub_batches:
             chunk = [texts_list[i] for i in indices]
@@ -533,18 +574,23 @@ class TRTEmbedEngine:
             input_ids = tokens["input_ids"].astype(np.int32)
             attention_mask = tokens["attention_mask"].astype(np.int32)
 
+            # hidden stays on GPU
             hidden = self._infer_batch(input_ids, attention_mask)
 
-            mask_f = torch.from_numpy(attention_mask.astype(np.float32)).unsqueeze(-1)
-            pooled = (hidden * mask_f).sum(dim=1) / mask_f.sum(dim=1)
+            # Pooling and normalisation on GPU
+            mask_gpu = (
+                torch.from_numpy(attention_mask.astype(np.float32))
+                .to(device=self._device)
+                .unsqueeze(-1)
+            )
+            pooled = (hidden * mask_gpu).sum(dim=1) / mask_gpu.sum(dim=1)
             if self._normalize:
                 pooled = _l2_normalize(pooled)
 
-            if embed_dim is None:
-                embed_dim = int(pooled.shape[-1])
-
+            # Single CPU transfer for the whole sub-batch
+            pooled_cpu = pooled.cpu()
             for local_i, orig_i in enumerate(indices):
-                result_vecs[orig_i] = pooled[local_i]
+                result_vecs[orig_i] = pooled_cpu[local_i]
 
         filled = [v for v in result_vecs if v is not None]
         return torch.stack(filled, dim=0) if filled else torch.empty((0, 0), dtype=torch.float32)
@@ -621,7 +667,8 @@ class TRTEmbedEngine:
     # ------------------------------------------------------------------
 
     def _infer_batch(self, input_ids: np.ndarray, attention_mask: np.ndarray) -> torch.Tensor:
-        """Run TRT inference and return the last-hidden-state as a float32 CPU tensor.
+        """Run TRT inference and return the last-hidden-state as a **GPU-resident**
+        float32 tensor.
 
         Automatically selects the best optimisation profile for the
         input shape ``(B, S)``.
@@ -674,4 +721,4 @@ class TRTEmbedEngine:
 
         self._stream.synchronize()
 
-        return d_output.cpu().float()
+        return d_output.float()
