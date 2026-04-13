@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import pandas as pd
@@ -12,6 +13,8 @@ from nemo_retriever.graph.abstract_operator import AbstractOperator
 from nemo_retriever.graph.gpu_operator import GPUOperator
 from nemo_retriever.nim.nim import NIMClient
 from nemo_retriever.page_elements.shared import _error_payload, detect_page_elements_v3
+
+logger = logging.getLogger(__name__)
 
 
 class PageElementDetectionActor(AbstractOperator, GPUOperator):
@@ -28,6 +31,7 @@ class PageElementDetectionActor(AbstractOperator, GPUOperator):
         invoke_url = str(
             self.detect_kwargs.get("page_elements_invoke_url") or self.detect_kwargs.get("invoke_url") or ""
         ).strip()
+        trt_engine_path = str(self.detect_kwargs.pop("page_elements_trt_engine_path", "") or "").strip()
         if invoke_url and "invoke_url" not in self.detect_kwargs:
             self.detect_kwargs["invoke_url"] = invoke_url
         if invoke_url:
@@ -35,11 +39,22 @@ class PageElementDetectionActor(AbstractOperator, GPUOperator):
             self._nim_client = NIMClient(
                 max_pool_workers=int(self.detect_kwargs.get("remote_max_pool_workers", 24)),
             )
+            logger.info("PageElementDetectionActor: backend=REMOTE endpoint=%s", invoke_url)
+        elif trt_engine_path:
+            from nemo_retriever.model.local.trt_engine import TRTYoloxEngine
+
+            self._model = TRTYoloxEngine(
+                trt_engine_path,
+                labels=["table", "chart", "title", "infographic", "text", "header_footer"],
+            )
+            self._nim_client = None
+            logger.info("PageElementDetectionActor: backend=TRT engine=%s", trt_engine_path)
         else:
             from nemo_retriever.model.local import NemotronPageElementsV3
 
             self._model = NemotronPageElementsV3()
             self._nim_client = None
+            logger.info("PageElementDetectionActor: backend=HUGGINGFACE model=NemotronPageElementsV3")
 
     def preprocess(self, data: Any, **kwargs: Any) -> Any:
         return data

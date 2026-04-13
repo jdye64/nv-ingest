@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
 
 import pandas as pd
@@ -14,12 +15,19 @@ from nemo_retriever.nim.nim import NIMClient
 from nemo_retriever.params import RemoteRetryParams
 from nemo_retriever.chart.shared import graphic_elements_ocr_page_elements
 
+logger = logging.getLogger(__name__)
+
 
 class GraphicElementsActor(AbstractOperator, GPUOperator):
     """
     Ray-friendly callable that initializes both graphic-elements and OCR
     models once per actor and runs the combined stage.
     """
+
+    _GE_LABELS = [
+        "chart_title", "x_title", "y_title", "xlabel", "ylabel",
+        "legend_title", "legend_label", "mark_label", "value_label", "other",
+    ]
 
     def __init__(
         self,
@@ -29,6 +37,8 @@ class GraphicElementsActor(AbstractOperator, GPUOperator):
         invoke_url: Optional[str] = None,
         api_key: Optional[str] = None,
         request_timeout_s: float = 120.0,
+        graphic_elements_trt_engine_path: Optional[str] = None,
+        ocr_trt_engine_path: Optional[str] = None,
         remote_max_pool_workers: int = 16,
         remote_max_retries: int = 10,
         remote_max_429_retries: int = 5,
@@ -46,19 +56,36 @@ class GraphicElementsActor(AbstractOperator, GPUOperator):
         )
         self._inference_batch_size = int(inference_batch_size)
 
+        _ge_trt = (graphic_elements_trt_engine_path or "").strip()
+        _ocr_trt = (ocr_trt_engine_path or "").strip()
+
         if self._graphic_elements_invoke_url:
             self._graphic_elements_model = None
+            logger.info("GraphicElementsActor: graphic-elements backend=REMOTE endpoint=%s", self._graphic_elements_invoke_url)
+        elif _ge_trt:
+            from nemo_retriever.model.local.trt_engine import TRTYoloxEngine
+
+            self._graphic_elements_model = TRTYoloxEngine(_ge_trt, labels=self._GE_LABELS)
+            logger.info("GraphicElementsActor: graphic-elements backend=TRT engine=%s", _ge_trt)
         else:
             from nemo_retriever.model.local import NemotronGraphicElementsV1
 
             self._graphic_elements_model = NemotronGraphicElementsV1()
+            logger.info("GraphicElementsActor: graphic-elements backend=HUGGINGFACE model=NemotronGraphicElementsV1")
 
         if self._ocr_invoke_url:
             self._ocr_model = None
+            logger.info("GraphicElementsActor: ocr backend=REMOTE endpoint=%s", self._ocr_invoke_url)
+        elif _ocr_trt:
+            from nemo_retriever.model.local import NemotronOCRV1
+
+            self._ocr_model = NemotronOCRV1()
+            logger.info("GraphicElementsActor: ocr backend=HUGGINGFACE model=NemotronOCRV1 (TRT N/A for OCR pipeline)")
         else:
             from nemo_retriever.model.local import NemotronOCRV1
 
             self._ocr_model = NemotronOCRV1()
+            logger.info("GraphicElementsActor: ocr backend=HUGGINGFACE model=NemotronOCRV1")
 
         if self._graphic_elements_invoke_url or self._ocr_invoke_url:
             self._nim_client = NIMClient(

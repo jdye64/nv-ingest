@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import logging
+import os
 from typing import Any
 
 import pandas as pd
@@ -13,6 +15,8 @@ from nemo_retriever.graph.gpu_operator import GPUOperator
 from nemo_retriever.nim.nim import NIMClient
 from nemo_retriever.params import RemoteRetryParams
 from nemo_retriever.ocr.shared import Image, _error_payload, ocr_page_elements
+
+logger = logging.getLogger(__name__)
 
 
 class OCRActor(AbstractOperator, GPUOperator):
@@ -27,6 +31,7 @@ class OCRActor(AbstractOperator, GPUOperator):
 
         self.ocr_kwargs = dict(ocr_kwargs)
         invoke_url = str(self.ocr_kwargs.get("ocr_invoke_url") or self.ocr_kwargs.get("invoke_url") or "").strip()
+        ocr_trt_engine_path = str(self.ocr_kwargs.pop("ocr_trt_engine_path", "") or "").strip()
         if invoke_url and "invoke_url" not in self.ocr_kwargs:
             self.ocr_kwargs["invoke_url"] = invoke_url
 
@@ -48,11 +53,23 @@ class OCRActor(AbstractOperator, GPUOperator):
             self._nim_client = NIMClient(
                 max_pool_workers=int(self._remote_retry.remote_max_pool_workers),
             )
+            logger.info("OCRActor: backend=REMOTE endpoint=%s", invoke_url)
+        elif ocr_trt_engine_path:
+            os.environ["RETRIEVER_ENABLE_TORCH_TRT"] = "1"
+            from nemo_retriever.model.local import NemotronOCRV1
+
+            self._model = NemotronOCRV1()
+            self._nim_client = None
+            logger.info(
+                "OCRActor: backend=HUGGINGFACE+TRT (detector compiled via torch_tensorrt, "
+                "engine hint=%s)", ocr_trt_engine_path,
+            )
         else:
             from nemo_retriever.model.local import NemotronOCRV1
 
             self._model = NemotronOCRV1()
             self._nim_client = None
+            logger.info("OCRActor: backend=HUGGINGFACE model=NemotronOCRV1")
 
     def preprocess(self, data: Any, **kwargs: Any) -> Any:
         return data

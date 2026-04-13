@@ -176,6 +176,13 @@ class ExtractParams(_ParamsModel):
     inference_batch_size: int = 8
     ocr_model_dir: Optional[str] = None
 
+    # TensorRT engine paths — when set, the actor loads a pre-built .trt
+    # engine instead of the default HuggingFace model weights.
+    page_elements_trt_engine_path: Optional[str] = None
+    table_structure_trt_engine_path: Optional[str] = None
+    graphic_elements_trt_engine_path: Optional[str] = None
+    ocr_trt_engine_path: Optional[str] = None
+
     # Service endpoints
     invoke_url: Optional[str] = None
     api_key: Optional[str] = None

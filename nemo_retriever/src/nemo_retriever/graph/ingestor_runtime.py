@@ -571,6 +571,8 @@ def build_graph(
                 detect_kwargs["api_key"] = extract_params.api_key
             if extract_params.inference_batch_size:
                 detect_kwargs["inference_batch_size"] = int(extract_params.inference_batch_size)
+            if _positive(getattr(extract_params, "page_elements_trt_engine_path", None)):
+                detect_kwargs["page_elements_trt_engine_path"] = extract_params.page_elements_trt_engine_path
 
             ocr_kwargs: dict[str, Any] = {}
             if extract_params.method in ("pdfium_hybrid", "ocr") and extract_params.extract_text:
@@ -591,6 +593,8 @@ def build_graph(
             )
             if detect_batch_size:
                 ocr_kwargs["inference_batch_size"] = int(detect_batch_size)
+            if _positive(getattr(extract_params, "ocr_trt_engine_path", None)):
+                ocr_kwargs["ocr_trt_engine_path"] = extract_params.ocr_trt_engine_path
 
             table_kwargs: dict[str, Any] = {}
             if extract_params.table_structure_invoke_url:
@@ -601,6 +605,10 @@ def build_graph(
                 table_kwargs["api_key"] = extract_params.api_key
             if extract_params.table_output_format:
                 table_kwargs["table_output_format"] = extract_params.table_output_format
+            if _positive(getattr(extract_params, "table_structure_trt_engine_path", None)):
+                table_kwargs["table_structure_trt_engine_path"] = extract_params.table_structure_trt_engine_path
+            if _positive(getattr(extract_params, "ocr_trt_engine_path", None)):
+                table_kwargs["ocr_trt_engine_path"] = extract_params.ocr_trt_engine_path
 
             graphic_kwargs: dict[str, Any] = {}
             if extract_params.graphic_elements_invoke_url:
@@ -609,6 +617,10 @@ def build_graph(
                 graphic_kwargs["ocr_invoke_url"] = extract_params.ocr_invoke_url
             if extract_params.api_key:
                 graphic_kwargs["api_key"] = extract_params.api_key
+            if _positive(getattr(extract_params, "graphic_elements_trt_engine_path", None)):
+                graphic_kwargs["graphic_elements_trt_engine_path"] = extract_params.graphic_elements_trt_engine_path
+            if _positive(getattr(extract_params, "ocr_trt_engine_path", None)):
+                graphic_kwargs["ocr_trt_engine_path"] = extract_params.ocr_trt_engine_path
 
             _rr = _nim_remote_http_kwargs(extract_params)
             detect_kwargs.update(_rr)

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
 
 import pandas as pd
@@ -13,6 +14,8 @@ from nemo_retriever.graph.gpu_operator import GPUOperator
 from nemo_retriever.nim.nim import NIMClient
 from nemo_retriever.params import RemoteRetryParams
 from nemo_retriever.table.shared import table_structure_ocr_page_elements
+
+logger = logging.getLogger(__name__)
 
 
 class TableStructureActor(AbstractOperator, GPUOperator):
@@ -30,6 +33,8 @@ class TableStructureActor(AbstractOperator, GPUOperator):
         api_key: Optional[str] = None,
         table_output_format: Optional[str] = None,
         request_timeout_s: float = 120.0,
+        table_structure_trt_engine_path: Optional[str] = None,
+        ocr_trt_engine_path: Optional[str] = None,
         remote_max_pool_workers: int = 16,
         remote_max_retries: int = 10,
         remote_max_429_retries: int = 5,
@@ -46,19 +51,38 @@ class TableStructureActor(AbstractOperator, GPUOperator):
             remote_max_429_retries=int(remote_max_429_retries),
         )
 
+        _ts_trt = (table_structure_trt_engine_path or "").strip()
+        _ocr_trt = (ocr_trt_engine_path or "").strip()
+
         if self._table_structure_invoke_url:
             self._table_structure_model = None
+            logger.info("TableStructureActor: table-structure backend=REMOTE endpoint=%s", self._table_structure_invoke_url)
+        elif _ts_trt:
+            from nemo_retriever.model.local.trt_engine import TRTYoloxEngine
+
+            self._table_structure_model = TRTYoloxEngine(
+                _ts_trt, labels=["cell", "row", "column"],
+            )
+            logger.info("TableStructureActor: table-structure backend=TRT engine=%s", _ts_trt)
         else:
             from nemo_retriever.model.local import NemotronTableStructureV1
 
             self._table_structure_model = NemotronTableStructureV1()
+            logger.info("TableStructureActor: table-structure backend=HUGGINGFACE model=NemotronTableStructureV1")
 
         if self._ocr_invoke_url:
             self._ocr_model = None
+            logger.info("TableStructureActor: ocr backend=REMOTE endpoint=%s", self._ocr_invoke_url)
+        elif _ocr_trt:
+            from nemo_retriever.model.local import NemotronOCRV1
+
+            self._ocr_model = NemotronOCRV1()
+            logger.info("TableStructureActor: ocr backend=HUGGINGFACE model=NemotronOCRV1 (TRT N/A for OCR pipeline)")
         else:
             from nemo_retriever.model.local import NemotronOCRV1
 
             self._ocr_model = NemotronOCRV1()
+            logger.info("TableStructureActor: ocr backend=HUGGINGFACE model=NemotronOCRV1")
 
         if self._table_structure_invoke_url or self._ocr_invoke_url:
             self._nim_client = NIMClient(
