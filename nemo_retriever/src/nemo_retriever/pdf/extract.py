@@ -77,7 +77,12 @@ def _render_page_to_base64(
     jpeg_quality: int = 100,
     render_mode: RenderMode = "fit_to_model",
 ) -> Dict[str, Any]:
-    """Render a page and encode as JPEG or PNG.
+    """Render a pdfium page to a raw numpy array (BGR, uint8).
+
+    Skips JPEG/PNG compression and base64 encoding entirely — the raw
+    pixel buffer is passed through the pipeline, eliminating ~5-10ms of
+    CPU encode + decode overhead per image and avoiding lossy JPEG
+    quality loss.
 
     Parameters
     ----------
@@ -88,8 +93,7 @@ def _render_page_to_base64(
         avoiding a large bilinear down-scale in ``resize_pad``.
 
     Returns dict with:
-    - image_b64: str
-    - encoding: str ("jpeg" or "png")
+    - pixels: np.ndarray (H, W, 3) BGR uint8 — raw pixel buffer
     - orig_shape_hw: tuple[int,int] (H,W) of the rendered raster
     """
     if render_mode == "fit_to_model":
@@ -102,30 +106,15 @@ def _render_page_to_base64(
 
     orig_h, orig_w = int(arr.shape[0]), int(arr.shape[1])
 
-    # Strip alpha channel (RGBA→RGB) for JPEG compatibility.
     if arr.ndim == 3 and arr.shape[2] == 4:
         arr = arr[:, :, :3]
 
-    # Encode.
-    fmt = image_format.lower()
-    if fmt == "jpeg":
-        # convert_bitmap_to_corrected_numpy returns RGB; OpenCV needs BGR.
-        bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-        ok, buf = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, int(jpeg_quality)])
-        if not ok:
-            raise RuntimeError("cv2.imencode failed for JPEG")
-        encoded_bytes = buf.tobytes()
-    else:
-        # PNG with fast compression.
-        bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-        ok, buf = cv2.imencode(".png", bgr, [cv2.IMWRITE_PNG_COMPRESSION, 3])
-        if not ok:
-            raise RuntimeError("cv2.imencode failed for PNG")
-        encoded_bytes = buf.tobytes()
+    # Store as BGR (matches downstream model expectations and avoids
+    # a redundant colour conversion).
+    bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
 
     return {
-        "image_b64": base64.b64encode(encoded_bytes).decode("ascii"),
-        "encoding": fmt,
+        "pixels": np.ascontiguousarray(bgr),
         "orig_shape_hw": (orig_h, orig_w),
     }
 

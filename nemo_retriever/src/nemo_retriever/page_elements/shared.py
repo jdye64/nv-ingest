@@ -94,36 +94,39 @@ def _error_payload(*, stage: str, exc: BaseException) -> Dict[str, Any]:
     }
 
 
-def _decode_b64_image_to_chw_tensor(image_b64: str) -> Tuple["torch.Tensor", Tuple[int, int]]:
-    if torch is None or Image is None or np is None:  # pragma: no cover
-        raise ImportError("page element detection requires torch, pillow, and numpy.")
+def _extract_page_pixels(page_image: Dict[str, Any]) -> Tuple["np.ndarray", Tuple[int, int]]:
+    """Extract raw pixel array from a page_image dict.
 
-    raw = base64.b64decode(image_b64)
-    with Image.open(io.BytesIO(raw)) as im0:
-        im = im0.convert("RGB")
-        w, h = im.size
-        arr = np.array(im)  # (H,W,3)
+    Supports two formats:
+    - **Raw pixels** (``"pixels"`` key): zero-copy, no decode needed.
+    - **Base64 legacy** (``"image_b64"`` key): base64 decode → PIL → numpy.
 
-    t = torch.from_numpy(arr).permute(2, 0, 1).contiguous()  # (3,H,W) uint8
-    t = t.to(dtype=torch.float32) / 255.0
-    return t, (int(h), int(w))
+    Returns ``(BGR_HWC_uint8_array, (H, W))``.
+    """
+    if np is None:  # pragma: no cover
+        raise ImportError("page element detection requires numpy.")
 
+    # Fast path: raw numpy pixels from extract.py (no encode/decode overhead).
+    pixels = page_image.get("pixels")
+    if pixels is not None:
+        arr = np.ascontiguousarray(pixels)
+        h, w = int(arr.shape[0]), int(arr.shape[1])
+        return arr, (h, w)
 
-def _decode_b64_image_to_np_array(image_b64: str) -> Tuple["np.array", Tuple[int, int]]:
-    if torch is None or Image is None or np is None:  # pragma: no cover
-        raise ImportError("page element detection requires torch, pillow, and numpy.")
+    # Legacy path: base64-encoded JPEG/PNG.
+    image_b64 = page_image.get("image_b64")
+    if image_b64:
+        if Image is None:  # pragma: no cover
+            raise ImportError("page element detection requires pillow for base64 images.")
+        raw = base64.b64decode(image_b64)
+        with Image.open(io.BytesIO(raw)) as im0:
+            im = im0.convert("RGB")
+            w, h = im.size
+            arr = np.array(im)
+            arr = arr[:, :, ::-1].copy()  # RGB → BGR
+        return arr, (int(h), int(w))
 
-    raw = base64.b64decode(image_b64)
-    with Image.open(io.BytesIO(raw)) as im0:
-        im = im0.convert("RGB")
-        w, h = im.size
-        arr = np.array(im)
-        # The NIM container receives BGR images (PNG encoded from BGR numpy
-        # arrays) and decodes the raw channels as-is, so the model effectively
-        # runs on BGR input.  Match that here by reversing the channel order.
-        arr = arr[:, :, ::-1].copy()
-
-    return arr, (int(h), int(w))
+    raise ValueError("page_image has neither 'pixels' nor 'image_b64' key.")
 
 
 def _labels_from_model(_model: Any) -> List[str]:
@@ -520,43 +523,54 @@ def detect_page_elements_v3(
             YOLOX_PAGE_V3_FINAL_SCORE.get(_RETRIEVER_TO_API.get(name, name), 0.0) for name in label_names
         ]
 
-    # ---- Extract b64 strings first (fast column access) ----
-    raw_b64_list: List[Optional[str]] = []
+    # ---- Extract page_image dicts and decode in parallel ----
+    page_image_dicts: List[Optional[Dict[str, Any]]] = []
     for _, row in pages_df.iterrows():
         try:
-            b64 = row.get("page_image")["image_b64"]
-            if not b64:
-                raise ValueError("No usable image_b64 found in row.")
-            raw_b64_list.append(b64)
+            pi = row.get("page_image")
+            if pi is None or not isinstance(pi, dict):
+                raise ValueError("No usable page_image found in row.")
+            if "pixels" not in pi and "image_b64" not in pi:
+                raise ValueError("page_image has neither 'pixels' nor 'image_b64'.")
+            page_image_dicts.append(pi)
         except BaseException:
-            raw_b64_list.append(None)
+            page_image_dicts.append(None)
 
-    # ---- Parallel decode (PIL / numpy release GIL) ----
-    _DECODE_WORKERS = min(16, max(1, len(raw_b64_list)))
-
-    def _safe_decode(b64: Optional[str]) -> Tuple[Optional[TensorOrArray], Optional[Tuple[int, int]], Optional[BaseException]]:
-        if b64 is None:
-            return None, None, ValueError("No usable image_b64 found in row.")
+    def _safe_extract(pi: Optional[Dict[str, Any]]) -> Tuple[Optional[TensorOrArray], Optional[Tuple[int, int]], Optional[BaseException]]:
+        if pi is None:
+            return None, None, ValueError("No usable page_image found in row.")
         try:
-            t, orig_shape = _decode_b64_image_to_np_array(b64)
-            return t, orig_shape, None
+            arr, orig_shape = _extract_page_pixels(pi)
+            return arr, orig_shape, None
         except BaseException as e:
             return None, None, e
 
-    if not use_remote and raw_b64_list:
-        with ThreadPoolExecutor(max_workers=_DECODE_WORKERS) as pool:
-            decode_results = list(pool.map(_safe_decode, raw_b64_list))
-    else:
-        decode_results = [(None, None, None)] * len(raw_b64_list)
+    _DECODE_WORKERS = min(16, max(1, len(page_image_dicts)))
 
-    for idx, b64 in enumerate(raw_b64_list):
-        if b64 is None:
+    if not use_remote and page_image_dicts:
+        # Raw-pixels path is fast enough to not need threading, but
+        # the legacy base64 path benefits from parallel PIL decode.
+        has_raw = any(pi is not None and "pixels" in pi for pi in page_image_dicts)
+        if has_raw:
+            decode_results = [_safe_extract(pi) for pi in page_image_dicts]
+        else:
+            with ThreadPoolExecutor(max_workers=_DECODE_WORKERS) as pool:
+                decode_results = list(pool.map(_safe_extract, page_image_dicts))
+    else:
+        decode_results = [(None, None, None)] * len(page_image_dicts)
+
+    for idx, pi in enumerate(page_image_dicts):
+        if pi is None:
             row_b64.append(None)
             row_tensors.append(None)
             row_shapes.append(None)
-            row_payloads.append(_error_payload(stage="decode_image", exc=ValueError("No image_b64")))
+            row_payloads.append(_error_payload(stage="decode_image", exc=ValueError("No page_image")))
             continue
-        row_b64.append(b64)
+        b64_val = pi.get("image_b64")
+        if b64_val is None and use_remote and "pixels" in pi:
+            from nemo_retriever.ocr.ocr import _np_rgb_to_b64_png
+            b64_val = _np_rgb_to_b64_png(pi["pixels"])
+        row_b64.append(b64_val)
         if use_remote:
             row_tensors.append(None)
             row_shapes.append(None)

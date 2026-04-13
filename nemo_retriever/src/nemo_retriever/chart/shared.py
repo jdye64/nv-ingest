@@ -417,12 +417,15 @@ def graphic_elements_ocr_page_elements(
                 dets = []
 
             page_image = getattr(row, "page_image", None) or {}
-            page_image_b64 = page_image.get("image_b64") if isinstance(page_image, dict) else None
-
-            if not isinstance(page_image_b64, str) or not page_image_b64:
+            if not isinstance(page_image, dict):
+                continue
+            page_img_source = page_image.get("pixels")
+            if page_img_source is None:
+                page_img_source = page_image.get("image_b64")
+            if page_img_source is None:
                 continue
 
-            crops = _crop_all_from_page(page_image_b64, dets, {"chart"})
+            crops = _crop_all_from_page(page_img_source, dets, {"chart"})
             if not crops:
                 continue
 

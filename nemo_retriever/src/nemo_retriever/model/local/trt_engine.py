@@ -37,6 +37,84 @@ import torch.nn.functional as F
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Optional DALI accelerated preprocessing
+# ---------------------------------------------------------------------------
+
+_DALI_AVAILABLE = False
+try:
+    import nvidia.dali.fn as _dali_fn
+    import nvidia.dali.types as _dali_types
+    from nvidia.dali import pipeline_def as _dali_pipeline_def
+
+    _DALI_AVAILABLE = True
+except ImportError:
+    pass
+
+
+class _DaliLetterboxPipeline:
+    """DALI pipeline that letterbox-resizes a variable-size image batch on GPU.
+
+    The pipeline mirrors ``_gpu_letterbox`` but executes entirely inside
+    DALI's GPU kernels — no per-image Python loops, no intermediate copies.
+
+    After ``build()``, call ``run(images)`` with a list of HWC uint8 numpy
+    arrays and get back a ``(BCHW_float32_torch_tensor, orig_shapes)`` tuple,
+    both on GPU.
+    """
+
+    def __init__(self, target_h: int, target_w: int, device_id: int = 0, max_batch_size: int = 64) -> None:
+        if not _DALI_AVAILABLE:
+            raise ImportError("nvidia-dali is required for DaliLetterboxPipeline.")
+
+        self._target_h = target_h
+        self._target_w = target_w
+        self._device_id = device_id
+        self._max_batch_size = max_batch_size
+        self._pipe = self._build_pipeline()
+        self._pipe.build()
+
+    def _build_pipeline(self) -> Any:
+        @_dali_pipeline_def(
+            batch_size=self._max_batch_size,
+            num_threads=4,
+            device_id=self._device_id,
+        )
+        def _pipe():
+            images = _dali_fn.external_source(device="cpu", name="images")
+            images = images.gpu()
+            images = _dali_fn.cast(images, dtype=_dali_types.FLOAT)
+            images = _dali_fn.resize(
+                images,
+                resize_x=self._target_w,
+                resize_y=self._target_h,
+                mode="not_larger",
+                interp_type=_dali_types.INTERP_LINEAR,
+            )
+            images = _dali_fn.crop(
+                images,
+                crop=(self._target_h, self._target_w),
+                out_of_bounds_policy="pad",
+                fill_values=114.0,
+            )
+            images = _dali_fn.transpose(images, perm=[2, 0, 1])
+            return images
+
+        return _pipe()
+
+    def run(self, images: "list[np.ndarray]") -> Tuple[torch.Tensor, "list[Tuple[int, int]]"]:
+        """Feed a batch of HWC uint8 numpy arrays, return (BCHW float32 GPU tensor, orig_shapes)."""
+        orig_shapes = [(int(img.shape[0]), int(img.shape[1])) for img in images]
+
+        self._pipe.feed_input("images", images)
+        (output,) = self._pipe.run()
+
+        # Zero-copy DALI → PyTorch via DLPack.
+        t = torch.from_dlpack(output.as_tensor()).contiguous()
+
+        return t, orig_shapes
+
+
 _NP_TO_TORCH_DTYPE = {
     np.dtype("float32"): torch.float32,
     np.dtype("float16"): torch.float16,
@@ -201,14 +279,30 @@ class TRTYoloxEngine:
         from nemotron_page_elements_v3.yolox.boxes import postprocess as _yolox_nms
         self._yolox_nms = _yolox_nms
 
+        # DALI-accelerated letterbox preprocessing (optional).
+        self._dali_pipe: Optional[_DaliLetterboxPipeline] = None
+        if _DALI_AVAILABLE:
+            try:
+                self._dali_pipe = _DaliLetterboxPipeline(
+                    target_h=input_shape[0],
+                    target_w=input_shape[1],
+                    device_id=self._device.index or 0,
+                    max_batch_size=64,
+                )
+                logger.info("DALI letterbox pipeline initialized for TRTYoloxEngine.")
+            except Exception:
+                logger.warning("DALI pipeline init failed; falling back to torch letterbox.", exc_info=True)
+                self._dali_pipe = None
+
         logger.info(
             "TRTYoloxEngine loaded: path=%s, input=%s, outputs=%s, "
-            "spatial=%s, dynamic_batch=%s, double_buffer=True, device=%s",
+            "spatial=%s, dynamic_batch=%s, double_buffer=True, dali=%s, device=%s",
             engine_path,
             self._input_name,
             self._output_names,
             input_shape,
             self._has_dynamic_batch,
+            self._dali_pipe is not None,
             self._device,
         )
 
@@ -261,7 +355,31 @@ class TRTYoloxEngine:
         Returns ``(batch_BCHW_on_GPU, orig_shapes)``.  The output batch
         is pre-allocated on GPU and filled with the pad value, so images
         of different sizes are handled without CPU resize.
+
+        Uses DALI when available for fully GPU-accelerated preprocessing;
+        falls back to per-image torch ops otherwise.
         """
+        # ---- DALI fast path: whole batch in one GPU kernel launch ----
+        if self._dali_pipe is not None:
+            hwc_arrays: list[np.ndarray] = []
+            for img in images:
+                if isinstance(img, torch.Tensor):
+                    arr = img.cpu().numpy()
+                    if arr.ndim == 4:
+                        arr = arr[0]
+                    if arr.shape[0] == 3 and arr.ndim == 3:
+                        arr = np.ascontiguousarray(arr.transpose(1, 2, 0))
+                else:
+                    arr = np.ascontiguousarray(img)
+                    if arr.ndim == 4:
+                        arr = arr[0]
+                hwc_arrays.append(arr)
+            try:
+                return self._dali_pipe.run(hwc_arrays)
+            except Exception:
+                logger.warning("DALI preprocess failed; falling back to torch.", exc_info=True)
+
+        # ---- Torch fallback: per-image letterbox on GPU ----
         tgt_h, tgt_w = self._input_shape
         B = len(images)
 
@@ -290,7 +408,6 @@ class TRTYoloxEngine:
             C, H, W = int(t.shape[0]), int(t.shape[1]), int(t.shape[2])
             orig_shapes.append((H, W))
 
-            # Pin → async DMA → GPU resize (all on the default stream scope).
             d_img = t.float().contiguous().pin_memory().to(
                 device=self._device, non_blocking=True
             )
@@ -300,7 +417,7 @@ class TRTYoloxEngine:
             d_resized = F.interpolate(
                 d_img.unsqueeze(0), size=(new_h, new_w),
                 mode="bilinear", align_corners=False,
-            )[0]  # (C, new_h, new_w)
+            )[0]
             d_batch[i, :C, :new_h, :new_w] = d_resized
 
         d_batch = torch.clamp(d_batch, 0, 255).to(torch.uint8).float()

@@ -292,6 +292,9 @@ def caption_images(
             if isinstance(infographics, list):
                 page_image = row.get("page_image")
                 page_b64 = page_image.get("image_b64") if isinstance(page_image, dict) else None
+                if page_b64 is None and isinstance(page_image, dict) and "pixels" in page_image:
+                    from nemo_retriever.ocr.ocr import _np_rgb_to_b64_png
+                    page_b64 = _np_rgb_to_b64_png(page_image["pixels"])
                 if page_b64:
                     for item_idx, item in enumerate(infographics):
                         if not isinstance(item, dict):

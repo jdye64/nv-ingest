@@ -306,15 +306,23 @@ def detect_infographic_elements_v1(
     payloads: List[Dict[str, Any]] = []
     for _, row in batch_df.iterrows():
         try:
-            b64 = row.get("page_image", {}).get("image_b64", None)
-            if not b64:
-                raise ValueError("No usable image_b64 found in row.")
+            pi = row.get("page_image") or {}
+            pixels = pi.get("pixels") if isinstance(pi, dict) else None
+            b64 = pi.get("image_b64") if isinstance(pi, dict) else None
+            if pixels is None and not b64:
+                raise ValueError("No usable page_image found in row.")
             image_b64_list.append(b64)
             if use_remote:
                 tensors.append(None)
                 shapes.append(None)
             else:
-                t, orig_shape = _decode_b64_image_to_chw_tensor(b64)
+                if pixels is not None:
+                    arr = np.ascontiguousarray(pixels)
+                    h, w = int(arr.shape[0]), int(arr.shape[1])
+                    t = torch.from_numpy(arr).permute(2, 0, 1).contiguous().to(dtype=torch.float32) / 255.0
+                    orig_shape = (h, w)
+                else:
+                    t, orig_shape = _decode_b64_image_to_chw_tensor(b64)
                 tensors.append(t)
                 shapes.append(orig_shape)
             payloads.append({"detections": []})
@@ -528,12 +536,26 @@ def detect_infographic_elements_v1_from_page_elements_v3(
             continue
 
         page_image = row.get(page_image_column) or {}
-        page_image_b64 = page_image.get("image_b64") if isinstance(page_image, dict) else None
+        if not isinstance(page_image, dict):
+            page_payload["error"] = {
+                "stage": "crop",
+                "type": "ValueError",
+                "message": "page_image missing; cannot crop infographics for infographic_elements_v1.",
+                "traceback": "",
+            }
+            out_payloads.append(page_payload)
+            out_total_dets.append(0)
+            out_counts.append({})
+            continue
+        page_image_b64 = page_image.get("image_b64")
+        if page_image_b64 is None and "pixels" in page_image:
+            from nemo_retriever.ocr.ocr import _np_rgb_to_b64_png
+            page_image_b64 = _np_rgb_to_b64_png(page_image["pixels"])
         if not isinstance(page_image_b64, str) or not page_image_b64:
             page_payload["error"] = {
                 "stage": "crop",
                 "type": "ValueError",
-                "message": "page_image.image_b64 missing; cannot crop infographics for infographic_elements_v1.",
+                "message": "page_image has no usable image; cannot crop infographics.",
                 "traceback": "",
             }
             out_payloads.append(page_payload)

@@ -286,14 +286,23 @@ def nemotron_parse_pages(
 
     for idx, row in enumerate(batch_df.itertuples(index=False)):
         page_image = getattr(row, "page_image", None) or {}
-        page_image_b64 = page_image.get("image_b64") if isinstance(page_image, dict) else None
-        if not isinstance(page_image_b64, str) or not page_image_b64:
+        if not isinstance(page_image, dict):
+            continue
+        pixels = page_image.get("pixels")
+        page_image_b64 = page_image.get("image_b64")
+        if pixels is None and not isinstance(page_image_b64, str):
             continue
         try:
             if use_remote:
+                if page_image_b64 is None and pixels is not None:
+                    from nemo_retriever.ocr.ocr import _np_rgb_to_b64_png
+                    page_image_b64 = _np_rgb_to_b64_png(pixels)
                 batch_images.append(page_image_b64)
             else:
-                batch_images.append(_decode_page_image(page_image_b64))
+                if pixels is not None:
+                    batch_images.append(np.ascontiguousarray(pixels))
+                else:
+                    batch_images.append(_decode_page_image(page_image_b64))
             batch_indices.append(idx)
         except Exception as e:
             all_meta[idx] = {
