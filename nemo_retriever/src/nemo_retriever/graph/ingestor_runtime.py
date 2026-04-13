@@ -207,7 +207,12 @@ def batch_tuning_to_node_overrides(
         table_structure_invoke_url = _positive(getattr(extract_params, "table_structure_invoke_url", None))
         ts_bs = plan.table_structure_batch_size if plan else None
         _set(TableStructureActor.__name__, "batch_size", ts_bs)
-        ts_concurrency = (plan.table_structure_initial_actors if plan else None) or 0
+        ts_concurrency: int = 0
+        if table_structure_invoke_url:
+            # Remote NIM — don't scale by GPU count; use a modest fixed pool.
+            ts_concurrency = min(plan.table_structure_initial_actors, 4) if plan else 2
+        else:
+            ts_concurrency = (plan.table_structure_initial_actors if plan else None) or 0
         _set(TableStructureActor.__name__, "concurrency", ts_concurrency or None)
         _set(TableStructureActor.__name__, "num_cpus", 1)
         if effective_allow_no_gpu:
@@ -223,7 +228,12 @@ def batch_tuning_to_node_overrides(
         graphic_elements_invoke_url = _positive(getattr(extract_params, "graphic_elements_invoke_url", None))
         ge_bs = plan.graphic_elements_batch_size if plan else None
         _set(GraphicElementsActor.__name__, "batch_size", ge_bs)
-        ge_concurrency = (plan.graphic_elements_initial_actors if plan else None) or 0
+        ge_concurrency: int = 0
+        if graphic_elements_invoke_url:
+            # Remote NIM — don't scale by GPU count; use a modest fixed pool.
+            ge_concurrency = min(plan.graphic_elements_initial_actors, 4) if plan else 2
+        else:
+            ge_concurrency = (plan.graphic_elements_initial_actors if plan else None) or 0
         _set(GraphicElementsActor.__name__, "concurrency", ge_concurrency or None)
         _set(GraphicElementsActor.__name__, "num_cpus", 1)
         if effective_allow_no_gpu:
@@ -271,14 +281,17 @@ def batch_tuning_to_node_overrides(
         )
 
         # Cap PDF extract concurrency so persistent actors for page-elements,
-        # OCR, and embed plus 4 fixed pipeline tasks (DocToPdf, PDFSplit,
-        # UDFOperator, ReadBinary) cannot exhaust the cluster CPU budget.
+        # OCR, table-structure, graphic-elements, and embed plus 4 fixed
+        # pipeline tasks (DocToPdf, PDFSplit, UDFOperator, ReadBinary) cannot
+        # exhaust the cluster CPU budget.
         if pdf_extract_tasks is not None and cluster_resources is not None:
             non_pdf_cpu_overhead = (
                 4
                 + page_elements_concurrency * page_elements_cpus
                 + ocr_concurrency * ocr_cpus
                 + embed_concurrency * embed_cpus
+                + ts_concurrency * 1
+                + ge_concurrency * 1
             )
             pdf_extract_tasks = min(
                 pdf_extract_tasks,

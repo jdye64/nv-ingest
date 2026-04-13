@@ -4,15 +4,63 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from typing import Any, Optional
 
 import pandas as pd
+import requests
 
 from nemo_retriever.graph.abstract_operator import AbstractOperator
 from nemo_retriever.graph.cpu_operator import CPUOperator
 from nemo_retriever.nim.nim import NIMClient
 from nemo_retriever.params import RemoteRetryParams
 from nemo_retriever.table.shared import table_structure_ocr_page_elements
+
+logger = logging.getLogger(__name__)
+
+
+def _probe_endpoint(url: str, *, name: str, timeout: float = 5.0) -> None:
+    """Fire a lightweight request to verify the endpoint is reachable.
+
+    Tries a GET against the base URL (strips trailing ``/infer`` etc.) first,
+    falling back to a HEAD against the full URL.  Logs success or failure but
+    never raises — this is a best-effort diagnostic.
+    """
+    import urllib.parse
+
+    parsed = urllib.parse.urlparse(url)
+    health_url = f"{parsed.scheme}://{parsed.netloc}/v1/health/ready"
+
+    for probe_url, method in [(health_url, "GET"), (url, "HEAD")]:
+        try:
+            t0 = time.perf_counter()
+            resp = requests.request(method, probe_url, timeout=timeout)
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            logger.info(
+                "TableStructureCPUActor: %s endpoint %s responded %d in %.0fms",
+                name, probe_url, resp.status_code, elapsed_ms,
+            )
+            return
+        except requests.ConnectionError:
+            logger.warning(
+                "TableStructureCPUActor: %s endpoint %s is UNREACHABLE (connection refused). "
+                "Processing will stall until this endpoint becomes available.",
+                name, probe_url,
+            )
+            return
+        except requests.Timeout:
+            logger.warning(
+                "TableStructureCPUActor: %s endpoint %s timed out after %.1fs. "
+                "The endpoint may be overloaded or not ready.",
+                name, probe_url, timeout,
+            )
+            return
+        except Exception as exc:
+            logger.debug(
+                "TableStructureCPUActor: %s endpoint probe %s failed: %s",
+                name, probe_url, exc,
+            )
 
 
 class TableStructureCPUActor(AbstractOperator, CPUOperator):
@@ -57,11 +105,22 @@ class TableStructureCPUActor(AbstractOperator, CPUOperator):
             max_pool_workers=int(remote_max_pool_workers),
         )
 
+        logger.info(
+            "TableStructureCPUActor initialized: table_structure_url=%s, ocr_url=%s",
+            self._table_structure_invoke_url,
+            self._ocr_invoke_url,
+        )
+        _probe_endpoint(self._table_structure_invoke_url, name="table-structure")
+        _probe_endpoint(self._ocr_invoke_url, name="ocr")
+
     def preprocess(self, data: Any, **kwargs: Any) -> Any:
         return data
 
     def process(self, data: Any, **kwargs: Any) -> Any:
-        return table_structure_ocr_page_elements(
+        n_rows = len(data) if hasattr(data, "__len__") else "?"
+        logger.info("TableStructureCPUActor.process: received batch of %s rows", n_rows)
+        t0 = time.perf_counter()
+        result = table_structure_ocr_page_elements(
             data,
             table_structure_model=self._table_structure_model,
             ocr_model=self._ocr_model,
@@ -74,6 +133,9 @@ class TableStructureCPUActor(AbstractOperator, CPUOperator):
             nim_client=self._nim_client,
             **kwargs,
         )
+        elapsed = time.perf_counter() - t0
+        logger.info("TableStructureCPUActor.process: finished batch of %s rows in %.2fs", n_rows, elapsed)
+        return result
 
     def postprocess(self, data: Any, **kwargs: Any) -> Any:
         return data
