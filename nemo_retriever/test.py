@@ -1,6 +1,6 @@
 import time
 from pathlib import Path
-from nemo_retriever import create_ingestor
+from nemo_retriever.graph_ingestor import GraphIngestor
 from nemo_retriever.params import ExtractParams, EmbedParams, RemoteRetryParams
 
 docs = [str(Path("/datasets/nv-ingest/bo767").resolve())]
@@ -21,7 +21,14 @@ embed = EmbedParams(
     nim_http_max_concurrent=16,
 )
 
-ing = create_ingestor(run_mode="batch", ray_address="auto")
+ing = GraphIngestor(
+    run_mode="batch",
+    ray_address="auto",
+    node_overrides={
+        "PDFExtractionActor": {"concurrency": 48},
+        "TableStructureActor": {"concurrency": 4},
+    },
+)
 ing = ing.files(docs).extract(extract).embed(embed)
 t0 = time.perf_counter()
 ray_ds = ing.ingest()
