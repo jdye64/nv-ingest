@@ -17,7 +17,7 @@ extract = ExtractParams(
 )
 
 embed = EmbedParams(
-    embed_invoke_url="http://localhost:8012/v1/embed",
+    embed_invoke_url="http://localhost:8012/v1/embeddings",
     nim_http_max_concurrent=48,
 )
 
