@@ -10,6 +10,7 @@ import base64
 import io
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
 from nemo_retriever.nim.nim import NIMClient, invoke_page_elements_batches
@@ -519,25 +520,57 @@ def detect_page_elements_v3(
             YOLOX_PAGE_V3_FINAL_SCORE.get(_RETRIEVER_TO_API.get(name, name), 0.0) for name in label_names
         ]
 
+    # ---- Extract b64 strings first (fast column access) ----
+    raw_b64_list: List[Optional[str]] = []
     for _, row in pages_df.iterrows():
         try:
             b64 = row.get("page_image")["image_b64"]
             if not b64:
                 raise ValueError("No usable image_b64 found in row.")
-            row_b64.append(b64)
-            if use_remote:
-                row_tensors.append(None)
-                row_shapes.append(None)
-            else:
-                t, orig_shape = _decode_b64_image_to_np_array(b64)
-                row_tensors.append(t)
-                row_shapes.append(orig_shape)
-            row_payloads.append({"detections": []})
+            raw_b64_list.append(b64)
+        except BaseException:
+            raw_b64_list.append(None)
+
+    # ---- Parallel decode (PIL / numpy release GIL) ----
+    _DECODE_WORKERS = min(16, max(1, len(raw_b64_list)))
+
+    def _safe_decode(b64: Optional[str]) -> Tuple[Optional[TensorOrArray], Optional[Tuple[int, int]], Optional[BaseException]]:
+        if b64 is None:
+            return None, None, ValueError("No usable image_b64 found in row.")
+        try:
+            t, orig_shape = _decode_b64_image_to_np_array(b64)
+            return t, orig_shape, None
         except BaseException as e:
+            return None, None, e
+
+    if not use_remote and raw_b64_list:
+        with ThreadPoolExecutor(max_workers=_DECODE_WORKERS) as pool:
+            decode_results = list(pool.map(_safe_decode, raw_b64_list))
+    else:
+        decode_results = [(None, None, None)] * len(raw_b64_list)
+
+    for idx, b64 in enumerate(raw_b64_list):
+        if b64 is None:
+            row_b64.append(None)
             row_tensors.append(None)
             row_shapes.append(None)
-            row_b64.append(None)
-            row_payloads.append(_error_payload(stage="decode_image", exc=e))
+            row_payloads.append(_error_payload(stage="decode_image", exc=ValueError("No image_b64")))
+            continue
+        row_b64.append(b64)
+        if use_remote:
+            row_tensors.append(None)
+            row_shapes.append(None)
+            row_payloads.append({"detections": []})
+        else:
+            t, orig_shape, err = decode_results[idx]
+            if err is not None:
+                row_tensors.append(None)
+                row_shapes.append(None)
+                row_payloads.append(_error_payload(stage="decode_image", exc=err))
+            else:
+                row_tensors.append(t)
+                row_shapes.append(orig_shape)
+                row_payloads.append({"detections": []})
 
     # Run inference over only valid rows, but write results back in original order.
     if use_remote:
@@ -658,40 +691,78 @@ def detect_page_elements_v3(
                     "timing": {"seconds": float(elapsed)}
                 }
 
+    _has_gpu_preprocess = hasattr(model, "preprocess_batch_gpu") if model is not None else False
+
+    def _preprocess_one(i: int) -> Optional[Tuple[Tuple[int, int], TensorOrArray]]:
+        """Preprocess a single image (safe to call from a thread)."""
+        t = row_tensors[i]
+        sh = row_shapes[i]
+        if t is None or sh is None:
+            return None
+        try:
+            pre = model.preprocess(t)  # type: ignore[arg-type]
+            if isinstance(pre, torch.Tensor):
+                if pre.ndim == 4 and int(pre.shape[0]) == 1:
+                    pre = pre[0]
+            elif isinstance(pre, np.ndarray):
+                if pre.ndim == 4 and int(pre.shape[0]) == 1:
+                    pre = pre[0]
+            else:
+                pre = t
+            return sh, pre
+        except Exception:
+            return sh, t
+
     def _preprocess_chunk(chunk_idx: List[int]) -> Optional[Tuple[List[TensorOrArray], List[Tuple[int, int]], "torch.Tensor"]]:
-        """Decode, preprocess, and stack a chunk of images. Returns None if empty."""
-        pre_list: List[TensorOrArray] = []
-        orig_shapes: List[Tuple[int, int]] = []
+        """Preprocess and stack a chunk of images.
+
+        When the model exposes ``preprocess_batch_gpu``, raw decoded
+        images are transferred to GPU and letterboxed there — much
+        faster than per-image CPU resize.  Otherwise preprocessing
+        runs in parallel threads on CPU.
+        """
+        valid_images: List[TensorOrArray] = []
+        valid_shapes: List[Tuple[int, int]] = []
         for i in chunk_idx:
             t = row_tensors[i]
             sh = row_shapes[i]
             if t is None or sh is None:
                 continue
-            orig_shapes.append(sh)
-            try:
-                pre = model.preprocess(t)  # type: ignore[arg-type]
-                if isinstance(pre, torch.Tensor):
-                    if pre.ndim == 4 and int(pre.shape[0]) == 1:
-                        pre_list.append(pre[0])
-                    elif pre.ndim == 3:
-                        pre_list.append(pre)
-                    else:
-                        pre_list.append(pre)
-                elif isinstance(pre, np.ndarray):
-                    if pre.ndim == 4 and int(pre.shape[0]) == 1:
-                        pre_list.append(pre[0])
-                    else:
-                        pre_list.append(pre)
-                else:
-                    pre_list.append(t)
-            except Exception:
-                pre_list.append(t)
+            valid_images.append(t)
+            valid_shapes.append(sh)
 
-        if not pre_list:
+        if not valid_images:
             return None
 
+        # Fast path: GPU letterbox (avoids per-image CPU resize_pad).
+        if _has_gpu_preprocess:
+            try:
+                batch, orig_shapes = model.preprocess_batch_gpu(valid_images)  # type: ignore[union-attr]
+                return valid_images, orig_shapes, batch
+            except Exception:
+                pass  # fall through to CPU path
+
+        # CPU path: per-image preprocess in parallel threads.
+        def _do_preprocess(img: TensorOrArray) -> TensorOrArray:
+            try:
+                pre = model.preprocess(img)  # type: ignore[union-attr]
+                if isinstance(pre, torch.Tensor) and pre.ndim == 4 and int(pre.shape[0]) == 1:
+                    return pre[0]
+                if isinstance(pre, np.ndarray) and pre.ndim == 4 and int(pre.shape[0]) == 1:
+                    return pre[0]
+                return pre
+            except Exception:
+                return img
+
+        n_workers = min(8, max(1, len(valid_images)))
+        if n_workers > 1:
+            with ThreadPoolExecutor(max_workers=n_workers) as pool:
+                pre_list = list(pool.map(_do_preprocess, valid_images))
+        else:
+            pre_list = [_do_preprocess(img) for img in valid_images]
+
         batch = torch.stack([_ensure_chw_float_tensor(x) for x in pre_list], dim=0)
-        return pre_list, orig_shapes, batch
+        return pre_list, valid_shapes, batch
 
     _use_async = (
         not use_remote

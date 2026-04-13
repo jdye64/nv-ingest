@@ -33,6 +33,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,35 @@ def _load_engine(engine_path: str) -> Any:
             f"engine with your current TRT version or install the matching one."
         )
     return engine
+
+
+def _gpu_letterbox(
+    img: torch.Tensor,
+    target_hw: Tuple[int, int],
+    pad_value: float = 114.0,
+) -> torch.Tensor:
+    """Aspect-preserving resize + pad for a CHW or BCHW tensor (any device).
+
+    Equivalent to ``nemotron_page_elements_v3.model.resize_pad`` but
+    implemented with pure ``torch`` ops so it works on CUDA tensors.
+    """
+    if img.ndim == 3:
+        img = img.unsqueeze(0)
+    B, C, H, W = img.shape
+    tgt_h, tgt_w = target_hw
+    ratio = min(tgt_h / H, tgt_w / W)
+    new_h, new_w = int(round(H * ratio)), int(round(W * ratio))
+
+    resized = F.interpolate(
+        img.float(), size=(new_h, new_w), mode="bilinear", align_corners=False,
+    )
+
+    pad_bottom = tgt_h - new_h
+    pad_right = tgt_w - new_w
+    if pad_bottom > 0 or pad_right > 0:
+        resized = F.pad(resized, (0, pad_right, 0, pad_bottom), value=pad_value)
+
+    return resized
 
 
 class _InferSlot:
@@ -193,8 +223,6 @@ class TRTYoloxEngine:
         Accepts CHW or BCHW torch tensors, or HWC / CHW numpy arrays.
         Returns BCHW ``float32`` on CPU ready for ``invoke``.
         """
-        from nemotron_page_elements_v3.model import resize_pad as resize_pad_page_elements
-
         if isinstance(tensor, np.ndarray):
             arr = tensor
             if arr.ndim == 4 and int(arr.shape[0]) == 1:
@@ -212,19 +240,71 @@ class TRTYoloxEngine:
             raise TypeError(f"Expected torch.Tensor or np.ndarray, got {type(tensor)!r}")
 
         if x.ndim == 4:
-            outs = []
-            for i in range(int(x.shape[0])):
-                y = resize_pad_page_elements(x[i], self._input_shape)
-                y = torch.clamp(y, 0, 255).to(torch.uint8).float()
-                outs.append(y)
-            return torch.stack(outs, dim=0).contiguous()
+            y = _gpu_letterbox(x, self._input_shape)
+            y = torch.clamp(y, 0, 255).to(torch.uint8).float()
+            return y.contiguous()
 
         if x.ndim == 3:
-            y = resize_pad_page_elements(x, self._input_shape)
+            y = _gpu_letterbox(x.unsqueeze(0), self._input_shape)
             y = torch.clamp(y, 0, 255).to(torch.uint8).float()
-            return y.unsqueeze(0).contiguous()
+            return y.contiguous()
 
         raise ValueError(f"Expected CHW or BCHW tensor, got shape {tuple(x.shape)}")
+
+    def preprocess_batch_gpu(
+        self,
+        images: List[Any],
+    ) -> Tuple[torch.Tensor, List[Tuple[int, int]]]:
+        """Letterbox a list of variable-sized raw images on GPU.
+
+        Each element can be a HWC numpy array or a CHW torch tensor.
+        Returns ``(batch_BCHW_on_GPU, orig_shapes)``.  The output batch
+        is pre-allocated on GPU and filled with the pad value, so images
+        of different sizes are handled without CPU resize.
+        """
+        tgt_h, tgt_w = self._input_shape
+        B = len(images)
+
+        d_batch = torch.full(
+            (B, 3, tgt_h, tgt_w), 114.0,
+            dtype=torch.float32, device=self._device,
+        )
+
+        orig_shapes: List[Tuple[int, int]] = []
+        for i, img in enumerate(images):
+            if isinstance(img, np.ndarray):
+                arr = img
+                if arr.ndim == 4 and int(arr.shape[0]) == 1:
+                    arr = arr[0]
+                if int(arr.shape[-1]) == 3 and int(arr.shape[0]) != 3:
+                    t = torch.from_numpy(np.ascontiguousarray(arr)).permute(2, 0, 1)
+                else:
+                    t = torch.from_numpy(np.ascontiguousarray(arr))
+            elif isinstance(img, torch.Tensor):
+                t = img
+                if t.ndim == 4 and int(t.shape[0]) == 1:
+                    t = t[0]
+            else:
+                raise TypeError(f"Expected np.ndarray or torch.Tensor, got {type(img)!r}")
+
+            C, H, W = int(t.shape[0]), int(t.shape[1]), int(t.shape[2])
+            orig_shapes.append((H, W))
+
+            # Pin → async DMA → GPU resize (all on the default stream scope).
+            d_img = t.float().contiguous().pin_memory().to(
+                device=self._device, non_blocking=True
+            )
+            ratio = min(tgt_h / H, tgt_w / W)
+            new_h, new_w = int(round(H * ratio)), int(round(W * ratio))
+
+            d_resized = F.interpolate(
+                d_img.unsqueeze(0), size=(new_h, new_w),
+                mode="bilinear", align_corners=False,
+            )[0]  # (C, new_h, new_w)
+            d_batch[i, :C, :new_h, :new_w] = d_resized
+
+        d_batch = torch.clamp(d_batch, 0, 255).to(torch.uint8).float()
+        return d_batch.contiguous(), orig_shapes
 
     def invoke(
         self,
@@ -327,7 +407,14 @@ class TRTYoloxEngine:
         ``slot.stream.synchronize()`` before reading from ``slot.bufs``.
         """
         torch_dtype = _NP_TO_TORCH_DTYPE.get(np.dtype(self._input_dtype), torch.float32)
-        d_input = input_nchw.to(device=self._device, dtype=torch_dtype).contiguous()
+
+        pinned_ref: Optional[torch.Tensor] = None
+        if input_nchw.is_cuda:
+            d_input = input_nchw.to(dtype=torch_dtype).contiguous()
+        else:
+            pinned_ref = input_nchw.to(dtype=torch_dtype).contiguous().pin_memory()
+            with torch.cuda.stream(slot.stream):
+                d_input = pinned_ref.to(device=self._device, non_blocking=True)
 
         ctx = slot.ctx
         if self._has_dynamic_batch:
@@ -352,9 +439,9 @@ class TRTYoloxEngine:
         for name, d_out in zip(self._output_names, slot.bufs):
             ctx.set_tensor_address(name, d_out.data_ptr())
 
-        # Keep d_input alive until execution completes by recording an event.
-        # We stash it on the slot so GC doesn't free the memory early.
+        # Keep d_input and pinned source alive until execution completes.
         slot._d_input_ref = d_input  # type: ignore[attr-defined]
+        slot._d_input_pinned_ref = pinned_ref  # type: ignore[attr-defined]
 
         with torch.cuda.stream(slot.stream):
             ctx.execute_async_v3(stream_handle=slot.stream.cuda_stream)
@@ -722,11 +809,12 @@ class TRTEmbedEngine:
                 ctx.set_input_shape(name, arr.shape)
                 np_dtype = np.dtype(arr.dtype)
                 t_dtype = _NP_TO_TORCH_DTYPE.get(np_dtype, torch.int32)
-                d_buf = torch.from_numpy(arr).to(
-                    device=self._device, dtype=t_dtype
-                ).contiguous()
+                cpu_buf = torch.from_numpy(arr).to(dtype=t_dtype).contiguous().pin_memory()
+                with torch.cuda.stream(slot.stream):
+                    d_buf = cpu_buf.to(device=self._device, non_blocking=True)
                 ctx.set_tensor_address(name, d_buf.data_ptr())
                 slot.d_inputs[name] = d_buf
+                slot.d_inputs[f"_pin_{name}"] = cpu_buf  # prevent GC of pinned source
 
         out_shape = tuple(ctx.get_tensor_shape(self._output_name))
         out_np_dtype = np.dtype(self._io_info[self._output_name]["dtype"])
