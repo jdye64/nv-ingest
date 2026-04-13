@@ -25,8 +25,8 @@ ing = create_ingestor(run_mode="batch", ray_address="auto")
 ing = ing.files(docs).extract(extract).embed(embed)
 t0 = time.perf_counter()
 ray_ds = ing.ingest()
-elapsed = time.perf_counter() - t0
 raw_num_rows = ray_ds.count()
+elapsed = time.perf_counter() - t0
 num_rows = 54730
 print(f"raw_num_rows: {raw_num_rows}")
 print("rows", num_rows)
