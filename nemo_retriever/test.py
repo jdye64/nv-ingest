@@ -9,7 +9,7 @@ NGC_MODELS = Path("/datasets/nv-ingest/models")
 
 extract = ExtractParams(
     method="pdfium",
-    use_fused_vision=False,
+    use_fused_vision=True,
     page_elements_trt_engine_path=str(NGC_MODELS / "page-elements/ngc/hub/models--nim--nvidia--nemotron-page-elements-v3"),
     table_structure_trt_engine_path=str(NGC_MODELS / "table-structure/ngc/hub/models--nim--nvidia--nemotron-table-structure-v1"),
     graphic_elements_trt_engine_path=str(NGC_MODELS / "graphic-elements/ngc/hub/models--nim--nvidia--nemotron-graphic-elements-v1"),
@@ -17,8 +17,6 @@ extract = ExtractParams(
     use_table_structure=True,
     use_graphic_elements=True,
     inference_batch_size=32,
-    extract_text=False,
-    extract_infographics=False,
 )
 
 embed = EmbedParams(
@@ -27,14 +25,11 @@ embed = EmbedParams(
 
 ing = GraphIngestor(
     run_mode="batch",
-    ray_address="auto",
+    ray_address="local",
     node_overrides={
         "PDFExtractionActor": {"concurrency": 48, "batch_size": 16},
-        "PageElementDetectionActor": {"concurrency": 4, "num_gpus": 0.25, "num_cpus": 0, "batch_size": 32},
-        "TableStructureActor": {"concurrency": 4, "num_gpus": 0.25, "num_cpus": 0, "batch_size": 32},
-        "GraphicElementsActor": {"concurrency": 4, "num_gpus": 0.25, "num_cpus": 0, "batch_size": 32},
-        "OCRActor": {"concurrency": 4, "num_gpus": 0.15, "num_cpus": 0, "batch_size": 32},
-        "_BatchEmbedActor": {"concurrency": 4, "num_gpus": 0.10, "batch_size": 256},
+        "FusedVisionActor": {"concurrency": 18, "num_gpus": 0.12, "num_cpus": 2, "batch_size": 32},
+        "_BatchEmbedActor": {"concurrency": 6, "num_gpus": 0.10, "batch_size": 256},
     },
 )
 ing = ing.files(docs).extract(extract).embed(embed)
