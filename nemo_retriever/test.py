@@ -64,6 +64,14 @@ print(f"  → {len(df)} rows in {time.perf_counter() - t1:.2f}s")
 
 import json
 
+DUMP_DIR = Path("/tmp/nemo_retriever_debug")
+DUMP_DIR.mkdir(parents=True, exist_ok=True)
+
+# Dump first 5 rows for manual inspection
+df_sample = df.head(5)
+df_sample.to_json(DUMP_DIR / "df_sample.json", orient="records", indent=2, default_handler=str)
+print(f"  → wrote {DUMP_DIR / 'df_sample.json'}")
+
 # Check for embeddings in first 3 rows
 for i, row in df.head(3).iterrows():
     meta = row.get("metadata")
@@ -82,6 +90,12 @@ print(f"  → {len(lance_rows)} rows with embeddings (from {len(df)} total rows)
 if lance_rows:
     sample_vec = lance_rows[0].get("vector", [])
     print(f"  → first vector: len={len(sample_vec)}, first_5={sample_vec[:5]}")
+    with open(DUMP_DIR / "lance_rows_sample.json", "w") as f:
+        json.dump(lance_rows[:3], f, indent=2, default=str)
+    print(f"  → wrote {DUMP_DIR / 'lance_rows_sample.json'}")
+    # Show pdf_page values (used for recall matching)
+    pages = set(r.get("pdf_page", "") for r in lance_rows[:20])
+    print(f"  → sample pdf_page values: {sorted(pages)[:5]}")
 
 if not lance_rows:
     print("ERROR: No embeddings found in the output. Skipping LanceDB + recall.")
@@ -105,7 +119,7 @@ else:
     print(f"  → done in {time.perf_counter() - t2:.2f}s")
 
     # ── Recall evaluation ────────────────────────────────────────────
-    from nemo_retriever.recall.core import RecallConfig, evaluate_recall
+    from nemo_retriever.recall.core import RecallConfig, retrieve_and_score
 
     QUERY_CSV = Path(__file__).resolve().parent.parent / "data" / "bo767_query_gt.csv"
 
@@ -120,15 +134,40 @@ else:
         match_mode="pdf_page",
     )
 
+    # Show ground truth pdf_page values for comparison
+    import csv
+    with open(QUERY_CSV) as f:
+        gt_rows = list(csv.DictReader(f))
+    gt_pages = sorted(set(r.get("pdf_page", "") for r in gt_rows[:20]))
+    print(f"  Ground truth sample pdf_page values: {gt_pages[:5]}")
+
     print(f"\nRunning recall evaluation on {QUERY_CSV} …")
     t3 = time.perf_counter()
-    result = evaluate_recall(QUERY_CSV, cfg=recall_cfg)
+    df_query, gold, raw_hits, retrieved_keys, metrics = retrieve_and_score(
+        QUERY_CSV, cfg=recall_cfg,
+    )
     recall_elapsed = time.perf_counter() - t3
 
+    # Print per-query results
     print(f"\n{'='*60}")
-    print(f"Recall Results  ({result['n_queries']} queries, top_k={result['top_k']})")
+    print("Per-query results (first 20):")
     print(f"{'='*60}")
-    for metric, value in result["metrics"].items():
+    for i, (q, g, rk) in enumerate(zip(
+        df_query["query"].astype(str).tolist(),
+        gold,
+        retrieved_keys,
+    )):
+        if i >= 20:
+            break
+        hit = "HIT" if g in rk[:10] else "MISS"
+        print(f"\n  [{i}] {hit} | query: {q[:80]}…" if len(q) > 80 else f"\n  [{i}] {hit} | query: {q}")
+        print(f"       expected: {g}")
+        print(f"       top-10:   {rk[:10]}")
+
+    print(f"\n{'='*60}")
+    print(f"Recall Results  ({len(df_query)} queries, top_k={recall_cfg.top_k})")
+    print(f"{'='*60}")
+    for metric, value in metrics.items():
         print(f"  {metric}: {value:.4f}")
     print(f"\nRecall evaluation took {recall_elapsed:.2f}s")
     print(f"Total pipeline time: {time.perf_counter() - t0:.2f}s")
