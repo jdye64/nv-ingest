@@ -26,6 +26,7 @@ ing = GraphIngestor(
     run_mode="batch",
     ray_address="auto",
     node_overrides={
+        "PDFExtractionActor": {"concurrency": 32},
         # Single-GPU budget: total = 1.0 GPU so all stages coexist.
         #   5×0.05 + 2×0.05 + 2×0.05 + 5×0.05 + 6×0.05 = 1.0 GPU
         "PageElementDetectionActor": {"concurrency": 3, "num_gpus": 0.05},
