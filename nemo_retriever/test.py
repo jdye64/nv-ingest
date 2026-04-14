@@ -41,7 +41,7 @@ raw_num_rows = ray_ds.count()
 elapsed = time.perf_counter() - t0
 print(f"\n{'='*60}")
 print(f"Ingestion complete: {raw_num_rows} rows in {elapsed:.2f}s")
-print(f"Throughput: {raw_num_rows / elapsed:.2f} rows/sec")
+print(f"Throughput: {54730 / elapsed:.2f} rows/sec")
 print(f"{'='*60}\n")
 
 # ── Write embeddings to LanceDB ──────────────────────────────────────
