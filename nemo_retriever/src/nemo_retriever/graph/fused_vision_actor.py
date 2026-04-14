@@ -2,25 +2,31 @@
 # All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fused vision actor that runs page-element detection, table structure,
-graphic elements, and OCR in a single Ray Data ``map_batches`` stage.
+"""Fused vision actor — all vision models in one Ray Data stage.
 
-Eliminates 3 intermediate object-store serialization boundaries that the
-separate-stage pipeline would incur — the page image data is read from
-the object store once and stays in-process memory for all 4 model stages.
-
-Within process(), JPEG bytes are decoded to numpy *once* after detection
-and cached in the page_image dict so table/graphic/OCR stages skip
-redundant CPU JPEG decodes.  Before returning, the decoded pixels are
-dropped and the compact JPEG bytes are restored for efficient
-serialization to the next Ray Data stage (embedding).
+Performance tricks applied:
+1. **Zero intermediate serialization** — DataFrame never leaves process
+   memory between the four model stages.
+2. **Overlapped CPU↔GPU** — JPEG→numpy decode runs on CPU threads
+   *while* page-element detection runs on GPU (DALI NVJPEG).
+3. **Parallel table + graphic** — table-structure and graphic-elements
+   are independent (disjoint output columns, read-only on inputs) so
+   they run concurrently in separate threads with their own CUDA
+   streams.
+4. **Thread-pooled JPEG decode** — ``cv2.imdecode`` releases the GIL;
+   a persistent thread pool decodes all pages in parallel.
+5. **Single decode, shared pixels** — each page's JPEG bytes are decoded
+   exactly once; all downstream stages consume the cached numpy array.
+6. **Compact on exit** — decoded pixels are swapped back to JPEG bytes
+   before the DataFrame is serialized to the object store.
 """
 
 from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, Optional
+from concurrent.futures import Future, ThreadPoolExecutor
+from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -31,14 +37,22 @@ from nemo_retriever.graph.gpu_operator import GPUOperator
 
 logger = logging.getLogger(__name__)
 
+_DECODE_THREADS = 8
+
+
+def _decode_one(pair: Tuple[int, bytes]) -> Tuple[int, "np.ndarray | None", bytes]:
+    """Decode a single JPEG buffer. Runs in a thread (cv2 releases GIL)."""
+    idx, jpeg = pair
+    arr = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
+    return idx, arr, jpeg
+
 
 class FusedVisionActor(AbstractOperator, GPUOperator):
     """Single GPU actor that runs the full vision pipeline in-process.
 
-    Loads all four vision sub-actors once in ``__init__`` and delegates
-    to them sequentially in ``process()``.  The DataFrame never leaves
-    process memory between stages, avoiding Ray object-store
-    serialization of page images between each model.
+    Loads all four vision sub-actors once in ``__init__`` and keeps a
+    persistent thread pool for CPU-bound work (JPEG decode, image
+    cropping) so it can overlap with GPU inference.
     """
 
     def __init__(
@@ -100,6 +114,12 @@ class FusedVisionActor(AbstractOperator, GPUOperator):
         self._use_table_structure = use_table_structure and extract_tables
         self._use_graphic_elements = use_graphic_elements and extract_charts
 
+        # Persistent thread pool for CPU work (JPEG decode, parallel stages).
+        self._pool = ThreadPoolExecutor(
+            max_workers=max(4, _DECODE_THREADS),
+            thread_name_prefix="fused_vision",
+        )
+
         _remote_common = {
             "api_key": api_key,
             "request_timeout_s": request_timeout_s,
@@ -132,7 +152,10 @@ class FusedVisionActor(AbstractOperator, GPUOperator):
                 TableStructureActor as _TSActor,
             )
 
-            table_kw: dict[str, Any] = {**_remote_common}
+            table_kw: dict[str, Any] = {
+                **_remote_common,
+                "inference_batch_size": inference_batch_size,
+            }
             if table_structure_trt_engine_path:
                 table_kw["table_structure_trt_engine_path"] = table_structure_trt_engine_path
             if table_structure_invoke_url:
@@ -153,7 +176,10 @@ class FusedVisionActor(AbstractOperator, GPUOperator):
                 GraphicElementsActor as _GEActor,
             )
 
-            graphic_kw: dict[str, Any] = {**_remote_common}
+            graphic_kw: dict[str, Any] = {
+                **_remote_common,
+                "inference_batch_size": inference_batch_size,
+            }
             if graphic_elements_trt_engine_path:
                 graphic_kw["graphic_elements_trt_engine_path"] = graphic_elements_trt_engine_path
             if graphic_elements_invoke_url:
@@ -189,11 +215,17 @@ class FusedVisionActor(AbstractOperator, GPUOperator):
             self._ocr = _OCRActor(**ocr_kw)
             logger.info("FusedVisionActor: OCR sub-actor loaded.")
 
+        self._can_parallel_table_graphic = (
+            self._table is not None and self._graphic is not None
+        )
+
         logger.info(
-            "FusedVisionActor ready: detect=True, table=%s, graphic=%s, ocr=%s",
+            "FusedVisionActor ready: detect=True, table=%s, graphic=%s, "
+            "ocr=%s, parallel_table_graphic=%s",
             self._use_table_structure,
             self._use_graphic_elements,
             self._needs_ocr,
+            self._can_parallel_table_graphic,
         )
 
     def preprocess(self, data: Any, **kwargs: Any) -> Any:
@@ -203,33 +235,41 @@ class FusedVisionActor(AbstractOperator, GPUOperator):
     # Pixel caching helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _decode_and_cache_pixels(batch_df: pd.DataFrame) -> Dict[int, bytes]:
-        """Decode JPEG bytes → numpy once and stash in page_image dicts.
+    def _decode_pixels_parallel(
+        self, batch_df: pd.DataFrame,
+    ) -> Dict[int, bytes]:
+        """Thread-pool JPEG decode → numpy.  Returns saved jpeg_bytes map.
 
-        Returns a mapping ``{row_index: original_jpeg_bytes}`` so the
-        caller can restore the compact representation before the
-        DataFrame leaves this actor.
+        ``cv2.imdecode`` releases the GIL, so N pages decode in
+        parallel across ``_DECODE_THREADS`` threads.
         """
         saved: Dict[int, bytes] = {}
         if "page_image" not in batch_df.columns:
             return saved
+
+        work: List[Tuple[int, bytes]] = []
         for idx in batch_df.index:
             pi = batch_df.at[idx, "page_image"]
-            if not isinstance(pi, dict):
+            if isinstance(pi, dict) and pi.get("jpeg_bytes") is not None:
+                work.append((idx, pi["jpeg_bytes"]))
+
+        if not work:
+            return saved
+
+        for idx, arr, jpeg in self._pool.map(_decode_one, work):
+            if arr is None:
                 continue
-            jpeg = pi.get("jpeg_bytes")
-            if jpeg is None:
-                continue
-            arr = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
-            if arr is not None:
-                saved[idx] = jpeg
-                pi["pixels"] = arr
-                del pi["jpeg_bytes"]
+            pi = batch_df.at[idx, "page_image"]
+            saved[idx] = jpeg
+            pi["pixels"] = arr
+            del pi["jpeg_bytes"]
+
         return saved
 
     @staticmethod
-    def _restore_jpeg_bytes(batch_df: pd.DataFrame, saved: Dict[int, bytes]) -> None:
+    def _restore_jpeg_bytes(
+        batch_df: pd.DataFrame, saved: Dict[int, bytes],
+    ) -> None:
         """Swap decoded pixels back to JPEG bytes for compact serialization."""
         for idx, jpeg in saved.items():
             pi = batch_df.at[idx, "page_image"]
@@ -238,7 +278,35 @@ class FusedVisionActor(AbstractOperator, GPUOperator):
                 pi["jpeg_bytes"] = jpeg
 
     # ------------------------------------------------------------------
-    # Main processing
+    # Parallel table + graphic
+    # ------------------------------------------------------------------
+
+    def _run_table_and_graphic_parallel(
+        self, batch_df: pd.DataFrame,
+    ) -> pd.DataFrame:
+        """Run table-structure and graphic-elements concurrently.
+
+        They write to disjoint columns (``table`` / ``table_structure_ocr_v1``
+        vs ``chart`` / ``graphic_elements_ocr_v1``) and only READ
+        ``page_image`` and ``page_elements_v3``, so running them on
+        separate DataFrame copies is safe.  Results are merged back.
+        """
+        df_graphic = batch_df.copy()
+
+        ft: Future = self._pool.submit(self._table.run, batch_df)  # type: ignore[union-attr]
+        fg: Future = self._pool.submit(self._graphic.run, df_graphic)  # type: ignore[union-attr]
+
+        batch_df = ft.result()
+        df_g = fg.result()
+
+        for col in df_g.columns:
+            if col not in batch_df.columns:
+                batch_df[col] = df_g[col].values
+
+        return batch_df
+
+    # ------------------------------------------------------------------
+    # Main processing pipeline
     # ------------------------------------------------------------------
 
     def process(self, batch_df: Any, **kwargs: Any) -> Any:
@@ -247,32 +315,96 @@ class FusedVisionActor(AbstractOperator, GPUOperator):
 
         t0 = time.perf_counter()
 
-        # Stage 1: Page element detection.
-        # Let detection use JPEG bytes directly (DALI NVJPEG hardware decode).
+        # ------ Overlapped phase: GPU detection + CPU JPEG decode ------
+        # Kick off JPEG→numpy decode in background threads NOW.
+        # Detection reads jpeg_bytes via DALI NVJPEG (GPU hardware),
+        # while cv2.imdecode runs on CPU threads concurrently.
+        # We ADD pixels alongside jpeg_bytes (don't delete yet) so
+        # detection can still read jpeg_bytes safely.
+        decode_future: Optional[Future] = None
+        if "page_image" in batch_df.columns:
+            decode_future = self._pool.submit(
+                self._overlapped_decode, batch_df,
+            )
+
         batch_df = self._detect.run(batch_df)
 
-        # Decode JPEG → numpy ONCE for all downstream crop-based stages.
-        saved_jpegs = self._decode_and_cache_pixels(batch_df)
+        # Wait for CPU decode to finish and swap jpeg_bytes → pixels.
+        saved_jpegs: Dict[int, bytes] = {}
+        if decode_future is not None:
+            saved_jpegs = decode_future.result()
 
-        if self._table is not None:
-            batch_df = self._table.run(batch_df)
+        t_detect = time.perf_counter() - t0
 
-        if self._graphic is not None:
-            batch_df = self._graphic.run(batch_df)
+        # ------ Table + Graphic (parallel when both enabled) -----------
+        t1 = time.perf_counter()
+        if self._can_parallel_table_graphic:
+            batch_df = self._run_table_and_graphic_parallel(batch_df)
+        else:
+            if self._table is not None:
+                batch_df = self._table.run(batch_df)
+            if self._graphic is not None:
+                batch_df = self._graphic.run(batch_df)
+        t_tg = time.perf_counter() - t1
 
+        # ------ OCR ---------------------------------------------------
+        t2 = time.perf_counter()
         if self._ocr is not None:
             batch_df = self._ocr.run(batch_df)
+        t_ocr = time.perf_counter() - t2
 
-        # Restore compact JPEG bytes before the DataFrame is serialized
-        # to the object store for the next Ray Data stage (embedding).
+        # ------ Compact for serialization -----------------------------
         self._restore_jpeg_bytes(batch_df, saved_jpegs)
 
         elapsed = time.perf_counter() - t0
-        logger.debug(
-            "FusedVisionActor: processed %d rows in %.2fs",
-            len(batch_df), elapsed,
+        logger.info(
+            "FusedVisionActor: %d rows in %.2fs "
+            "(detect=%.2fs, table+graphic=%.2fs, ocr=%.2fs)",
+            len(batch_df), elapsed, t_detect, t_tg, t_ocr,
         )
         return batch_df
+
+    # ------------------------------------------------------------------
+    # Overlapped JPEG decode (runs in thread pool during detection)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _overlapped_decode(batch_df: pd.DataFrame) -> Dict[int, bytes]:
+        """Decode JPEG bytes in threads; ADD pixels but keep jpeg_bytes.
+
+        After detection completes, the caller will delete jpeg_bytes
+        so downstream stages find pixels first.
+        """
+        saved: Dict[int, bytes] = {}
+        work: List[Tuple[int, bytes]] = []
+
+        for idx in batch_df.index:
+            pi = batch_df.at[idx, "page_image"]
+            if isinstance(pi, dict) and pi.get("jpeg_bytes") is not None:
+                work.append((idx, pi["jpeg_bytes"]))
+
+        if not work:
+            return saved
+
+        pool = ThreadPoolExecutor(
+            max_workers=min(_DECODE_THREADS, len(work)),
+            thread_name_prefix="jpeg_dec",
+        )
+        try:
+            for r_idx, arr, jpeg in pool.map(_decode_one, work):
+                if arr is None:
+                    continue
+                pi = batch_df.at[r_idx, "page_image"]
+                pi["pixels"] = arr
+                saved[r_idx] = jpeg
+            # Now remove jpeg_bytes so downstream stages use pixels.
+            for r_idx in saved:
+                pi = batch_df.at[r_idx, "page_image"]
+                pi.pop("jpeg_bytes", None)
+        finally:
+            pool.shutdown(wait=False)
+
+        return saved
 
     def postprocess(self, data: Any, **kwargs: Any) -> Any:
         return data

@@ -487,6 +487,15 @@ def graphic_elements_ocr_page_elements(
                     for d in _remote_response_to_ge_detections(resp)
                     if (d.get("score") or 0.0) >= YOLOX_GRAPHIC_MIN_SCORE
                 ]
+        elif hasattr(graphic_elements_model, "preprocess_batch_gpu") and flat_crops:
+            crop_arrays = [crop[2] for crop in flat_crops]
+            batch_tensor, batch_shapes = graphic_elements_model.preprocess_batch_gpu(crop_arrays)
+            all_preds = graphic_elements_model.invoke(batch_tensor, batch_shapes)
+            if not isinstance(all_preds, list):
+                all_preds = [all_preds]
+            for ci, pred in enumerate(all_preds):
+                ge_dets = _prediction_to_detections(pred, label_names=label_names)
+                ge_results[ci] = [d for d in ge_dets if (d.get("score") or 0.0) >= YOLOX_GRAPHIC_MIN_SCORE]
         else:
             for ci, (_, _, crop_array) in enumerate(flat_crops):
                 chw = torch.from_numpy(crop_array).permute(2, 0, 1).contiguous().to(dtype=torch.float32)

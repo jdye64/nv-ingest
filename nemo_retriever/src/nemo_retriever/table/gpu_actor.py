@@ -40,6 +40,7 @@ class TableStructureActor(AbstractOperator, GPUOperator):
         remote_max_pool_workers: int = 16,
         remote_max_retries: int = 10,
         remote_max_429_retries: int = 5,
+        inference_batch_size: int = 8,
     ) -> None:
         super().__init__()
         self._table_structure_invoke_url = (table_structure_invoke_url or "").strip()
@@ -47,6 +48,7 @@ class TableStructureActor(AbstractOperator, GPUOperator):
         self._api_key = api_key
         self._request_timeout_s = float(request_timeout_s)
         self._table_output_format = table_output_format
+        self._inference_batch_size = int(inference_batch_size)
         self._remote_retry = RemoteRetryParams(
             remote_max_pool_workers=int(remote_max_pool_workers),
             remote_max_retries=int(remote_max_retries),
@@ -136,6 +138,7 @@ class TableStructureActor(AbstractOperator, GPUOperator):
             api_key=self._api_key,
             table_output_format=self._table_output_format,
             request_timeout_s=self._request_timeout_s,
+            inference_batch_size=self._inference_batch_size,
             remote_retry=self._remote_retry,
             nim_client=self._nim_client,
             **kwargs,

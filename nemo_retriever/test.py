@@ -28,8 +28,8 @@ ing = GraphIngestor(
     ray_address="auto",
     node_overrides={
         "PDFExtractionActor": {"concurrency": 48, "batch_size": 16},
-        "FusedVisionActor": {"concurrency": 5, "num_gpus": 0.15, "num_cpus": 2, "batch_size": 32},
-        "_BatchEmbedActor": {"concurrency": 1, "num_gpus": 0.10, "batch_size": 256},
+        "FusedVisionActor": {"concurrency": 6, "num_gpus": 0.12, "num_cpus": 2, "batch_size": 32},
+        "_BatchEmbedActor": {"concurrency": 2, "num_gpus": 0.10, "batch_size": 256},
     },
 )
 ing = ing.files(docs).extract(extract).embed(embed)

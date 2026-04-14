@@ -467,6 +467,15 @@ def table_structure_ocr_page_elements(
                         pred_item = _extract_remote_pred_item(resp)
                         parsed = _prediction_to_detections(pred_item, label_names=label_names)
                     structure_results[ci] = [d for d in parsed if (d.get("score") or 0.0) >= YOLOX_TABLE_MIN_SCORE]
+            elif hasattr(table_structure_model, "preprocess_batch_gpu") and flat_crops:
+                crop_arrays = [crop[2] for crop in flat_crops]
+                batch_tensor, batch_shapes = table_structure_model.preprocess_batch_gpu(crop_arrays)
+                all_preds = table_structure_model.invoke(batch_tensor, batch_shapes)
+                if not isinstance(all_preds, list):
+                    all_preds = [all_preds]
+                for ci, pred in enumerate(all_preds):
+                    dets_local = _prediction_to_detections(pred, label_names=label_names)
+                    structure_results[ci] = [d for d in dets_local if (d.get("score") or 0.0) >= YOLOX_TABLE_MIN_SCORE]
             else:
                 for ci, (_, _, crop_array) in enumerate(flat_crops):
                     chw = torch.from_numpy(crop_array).permute(2, 0, 1).contiguous().to(dtype=torch.float32)
