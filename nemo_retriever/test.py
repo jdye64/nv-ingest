@@ -244,6 +244,14 @@ else:
     _log(f"\nRecall evaluation took {recall_elapsed:.2f}s")
     _log(f"Total pipeline time: {time.perf_counter() - t0:.2f}s")
 
+_log(f"\n{'='*60}")
+_log("Detection Summary")
+_log(f"{'='*60}")
+_log(f"  page_elements: {df['n_page_element_detections'].sum()}")
+_log(f"  table crops:   {df['n_table_crops'].sum()}")
+_log(f"  chart crops:   {df['n_chart_crops'].sum()}")
+_log(f"  per-label:     {json.dumps(label_counts)}")
+
 # Wait for Ray worker logs to flush, then print everything
 _time.sleep(3)
 print("\n" * 5)
