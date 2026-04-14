@@ -27,15 +27,12 @@ ing = GraphIngestor(
     ray_address="auto",
     node_overrides={
         "PDFExtractionActor": {"concurrency": 48, "batch_size": 16},
-        # GPU actors: large batch_size feeds more rows per invocation,
-        # higher concurrency keeps multiple actors queued on the GPU.
-        #   6×0.05 + 4×0.05 + 4×0.05 + 8×0.05 + 8×0.05 = 1.5
-        #   B200 handles this easily with fractional scheduling.
-        "PageElementDetectionActor": {"concurrency": 6, "num_gpus": 0.05, "batch_size": 64},
-        "TableStructureActor": {"concurrency": 4, "num_gpus": 0.05, "batch_size": 32},
-        "GraphicElementsActor": {"concurrency": 4, "num_gpus": 0.05, "batch_size": 32},
-        "OCRActor": {"concurrency": 8, "num_gpus": 0.05, "batch_size": 64},
-        "_BatchEmbedActor": {"concurrency": 8, "num_gpus": 0.05, "batch_size": 512},
+        # GPU actors — total: 4×0.04 + 2×0.04 + 2×0.04 + 6×0.04 + 6×0.04 = 0.80 GPU
+        "PageElementDetectionActor": {"concurrency": 4, "num_gpus": 0.04, "batch_size": 64},
+        "TableStructureActor": {"concurrency": 2, "num_gpus": 0.04, "batch_size": 32},
+        "GraphicElementsActor": {"concurrency": 2, "num_gpus": 0.04, "batch_size": 32},
+        "OCRActor": {"concurrency": 6, "num_gpus": 0.04, "batch_size": 64},
+        "_BatchEmbedActor": {"concurrency": 6, "num_gpus": 0.04, "batch_size": 512},
     },
 )
 ing = ing.files(docs).extract(extract).embed(embed)
