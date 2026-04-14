@@ -841,21 +841,30 @@ class TRTEmbedEngine:
     def _bind_extra_inputs(self, ctx: Any, slot: Any, B: int) -> None:
         """Set shapes and addresses for all extra input tensors on *ctx*.
 
-        Uses the profile-derived shape for each tensor (queried at init)
-        rather than guessing from the batch dimension.
+        The shape is derived from the engine metadata ndim, with the first
+        (batch) dimension set to *B* so it matches the primary inputs.
         """
         for name in self._extra_input_names:
             info = self._io_info[name]
             np_dtype = np.dtype(info["dtype"])
             t_dtype = _NP_TO_TORCH_DTYPE.get(np_dtype, torch.int32)
-            shape = self._extra_input_shapes.get(name, (1,))
+            ndim = len(info["shape"])
 
             fill = 0
             if name == "dimensions":
                 fill = self._embed_dim if self._embed_dim is not None else 65536
 
-            d_extra = torch.full(shape, fill, dtype=t_dtype, device=self._device)
-            ctx.set_input_shape(name, shape)
+            if ndim == 0:
+                shape: Tuple[int, ...] = ()
+                d_extra = torch.full((), fill, dtype=t_dtype, device=self._device)
+            elif ndim == 1:
+                shape = (B,)
+                d_extra = torch.full((B,), fill, dtype=t_dtype, device=self._device)
+            else:
+                shape = (B, 1)
+                d_extra = torch.full((B, 1), fill, dtype=t_dtype, device=self._device)
+
+            ctx.set_input_shape(name, shape if len(shape) > 0 else (1,))
             ctx.set_tensor_address(name, d_extra.data_ptr())
             slot.d_inputs[f"_extra_{name}"] = d_extra
 
