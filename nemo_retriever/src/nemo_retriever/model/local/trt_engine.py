@@ -797,36 +797,27 @@ class TRTEmbedEngine:
         self._max_length = min(max_length, abs_max_seq)
 
         # Catalogue extra input tensors (beyond input_ids / attention_mask).
-        # For each, query the profile-0 max shape so we know the exact
-        # dimensions TRT expects (e.g. `dimensions` is always (1,)).
         _PRIMARY_INPUTS = {"input_ids", "attention_mask"}
         self._extra_input_names: List[str] = []
-        self._extra_input_shapes: Dict[str, Tuple[int, ...]] = {}
         for name, info in self._io_info.items():
             if info["is_input"] and name not in _PRIMARY_INPUTS:
                 self._extra_input_names.append(name)
-                try:
-                    _min_s, _opt_s, max_s = engine.get_tensor_profile_shape(name, 0)
-                    self._extra_input_shapes[name] = tuple(int(d) for d in max_s)
-                except Exception:
-                    self._extra_input_shapes[name] = (1,)
                 logger.info(
-                    "TRTEmbedEngine: extra input tensor '%s' engine_shape=%s "
-                    "profile_max_shape=%s dtype=%s",
-                    name, info["shape"], self._extra_input_shapes[name],
-                    info["dtype"],
+                    "TRTEmbedEngine: extra input tensor '%s' shape=%s dtype=%s",
+                    name, info["shape"], info["dtype"],
                 )
+
+        # llama-nemotron-embed-1b-v2 supports Matryoshka dims
+        # {384, 512, 768, 1024, 2048}; always request the full 2048.
+        self._embed_dim: int = 2048
 
         # Double-buffer: two slots with independent contexts / streams.
         self._slots = [_EmbedSlot(engine, self._device) for _ in range(2)]
         self._active_slot = 0
 
-        # Determine the static embedding dimension via a lightweight probe.
-        self._embed_dim: Optional[int] = self._probe_embed_dim()
-
         logger.info(
             "TRTEmbedEngine loaded: path=%s, tensors=%s, max_length=%d, "
-            "normalize=%s, profiles=%s, embed_dim=%s, extra_inputs=%s, "
+            "normalize=%s, profiles=%s, embed_dim=%d, extra_inputs=%s, "
             "double_buffer=True, device=%s",
             engine_path,
             list(self._io_info.keys()),
@@ -850,9 +841,7 @@ class TRTEmbedEngine:
             t_dtype = _NP_TO_TORCH_DTYPE.get(np_dtype, torch.int32)
             ndim = len(info["shape"])
 
-            fill = 0
-            if name == "dimensions":
-                fill = self._embed_dim if self._embed_dim is not None else 65536
+            fill = self._embed_dim if name == "dimensions" else 0
 
             if ndim == 0:
                 shape: Tuple[int, ...] = ()
@@ -867,93 +856,6 @@ class TRTEmbedEngine:
             ctx.set_input_shape(name, shape if len(shape) > 0 else (1,))
             ctx.set_tensor_address(name, d_extra.data_ptr())
             slot.d_inputs[f"_extra_{name}"] = d_extra
-
-    def _probe_embed_dim(self) -> Optional[int]:
-        """Discover the embedding dimension by running a real tiny inference.
-
-        Tries static metadata first; if all dims are dynamic, executes a
-        (1, 2) input through slot 0 and reads the output tensor shape.
-        """
-        static_shape = self._io_info[self._output_name]["shape"]
-        pos_dims = [d for d in static_shape if d > 0]
-        if pos_dims:
-            return pos_dims[-1]
-
-        slot = self._slots[0]
-        ctx = slot.ctx
-        try:
-            slot.stream.synchronize()
-            torch.cuda.current_stream(self._device).synchronize()
-
-            ctx.set_optimization_profile_async(0, slot.stream.cuda_stream)
-            slot.stream.synchronize()
-
-            probe_B = 1
-            probe_shape = (probe_B, 2)
-            d_probe = torch.ones(probe_shape, dtype=torch.int32, device=self._device)
-
-            for name in ("input_ids", "attention_mask"):
-                if name in self._io_info:
-                    ctx.set_input_shape(name, probe_shape)
-                    ctx.set_tensor_address(name, d_probe.data_ptr())
-
-            # Bind extra inputs with batch=probe_B and a large fill value
-            # for 'dimensions' so the model outputs full embeddings.
-            slot.d_inputs = {}
-            PROBE_DIM_FILL = 65536
-            for extra_name in self._extra_input_names:
-                info = self._io_info[extra_name]
-                extra_ndim = len(info["shape"])
-                extra_np_dtype = np.dtype(info["dtype"])
-                extra_t_dtype = _NP_TO_TORCH_DTYPE.get(extra_np_dtype, torch.int32)
-                if extra_ndim <= 1:
-                    d_extra = torch.full(
-                        (probe_B,), PROBE_DIM_FILL, dtype=extra_t_dtype, device=self._device,
-                    )
-                    ctx.set_input_shape(extra_name, (probe_B,))
-                else:
-                    d_extra = torch.full(
-                        (probe_B, 1), PROBE_DIM_FILL, dtype=extra_t_dtype, device=self._device,
-                    )
-                    ctx.set_input_shape(extra_name, (probe_B, 1))
-                ctx.set_tensor_address(extra_name, d_extra.data_ptr())
-                slot.d_inputs[f"_extra_{extra_name}"] = d_extra
-
-            try:
-                ctx.infer_shapes()
-            except Exception:
-                pass
-
-            out_shape = tuple(ctx.get_tensor_shape(self._output_name))
-            if all(d > 0 for d in out_shape):
-                logger.debug("Probed embed_dim=%d from infer_shapes %s", out_shape[-1], out_shape)
-                return out_shape[-1]
-
-            # Shape still unresolved — allocate a generous output buffer and
-            # run a real inference to discover the actual output.
-            out_np_dtype = np.dtype(self._io_info[self._output_name]["dtype"])
-            out_t_dtype = _NP_TO_TORCH_DTYPE.get(out_np_dtype, torch.float32)
-            max_dim_guess = 8192
-            n_out_dims = len(out_shape)
-            if n_out_dims == 2:
-                d_out = torch.empty((1, max_dim_guess), dtype=out_t_dtype, device=self._device)
-            else:
-                d_out = torch.empty((1, 2, max_dim_guess), dtype=out_t_dtype, device=self._device)
-            ctx.set_tensor_address(self._output_name, d_out.data_ptr())
-
-            ctx.execute_async_v3(stream_handle=slot.stream.cuda_stream)
-            slot.stream.synchronize()
-
-            real_shape = tuple(ctx.get_tensor_shape(self._output_name))
-            pos_dims = [d for d in real_shape if d > 0]
-            if pos_dims:
-                dim = pos_dims[-1]
-                logger.info("Probed embed_dim=%d via real inference, output shape %s", dim, real_shape)
-                return dim
-        except Exception as exc:
-            logger.error("embed dim probe failed (will use large default for 'dimensions'): %s", exc, exc_info=True)
-
-        return None
 
     @property
     def is_remote(self) -> bool:
@@ -1104,18 +1006,9 @@ class TRTEmbedEngine:
 
         if not shape_ok:
             D = self._embed_dim
-            if D is None:
-                raise RuntimeError(
-                    f"TRT output shape unresolved: {out_shape} for "
-                    f"input ({B}, {S}) on profile {profile_idx}. "
-                    f"Profiles: {self._profiles}"
-                )
             static_ndim = len(self._io_info[self._output_name]["shape"])
             out_shape = (B, S, D) if static_ndim >= 3 else (B, D)
-            logger.debug("Used cached embed_dim=%d → output shape %s", D, out_shape)
-        else:
-            if self._embed_dim is None:
-                self._embed_dim = out_shape[-1]
+            logger.debug("Used embed_dim=%d → output shape %s", D, out_shape)
         out_np_dtype = np.dtype(self._io_info[self._output_name]["dtype"])
         out_t_dtype = _NP_TO_TORCH_DTYPE.get(out_np_dtype, torch.float32)
         slot.d_output = torch.empty(out_shape, dtype=out_t_dtype, device=self._device)
