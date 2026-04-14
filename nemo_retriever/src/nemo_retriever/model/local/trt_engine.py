@@ -794,6 +794,17 @@ class TRTEmbedEngine:
         abs_max_seq = max(p[2] for p in self._profiles) if self._profiles else max_length
         self._max_length = min(max_length, abs_max_seq)
 
+        # Catalogue extra input tensors (beyond input_ids / attention_mask).
+        _PRIMARY_INPUTS = {"input_ids", "attention_mask"}
+        self._extra_input_names: List[str] = []
+        for name, info in self._io_info.items():
+            if info["is_input"] and name not in _PRIMARY_INPUTS:
+                self._extra_input_names.append(name)
+                logger.info(
+                    "TRTEmbedEngine: extra input tensor '%s' shape=%s dtype=%s",
+                    name, info["shape"], info["dtype"],
+                )
+
         # Double-buffer: two slots with independent contexts / streams.
         self._slots = [_EmbedSlot(engine, self._device) for _ in range(2)]
         self._active_slot = 0
@@ -803,15 +814,38 @@ class TRTEmbedEngine:
 
         logger.info(
             "TRTEmbedEngine loaded: path=%s, tensors=%s, max_length=%d, "
-            "normalize=%s, profiles=%s, embed_dim=%s, double_buffer=True, device=%s",
+            "normalize=%s, profiles=%s, embed_dim=%s, extra_inputs=%s, "
+            "double_buffer=True, device=%s",
             engine_path,
             list(self._io_info.keys()),
             self._max_length,
             normalize,
             self._profiles,
             self._embed_dim,
+            self._extra_input_names,
             self._device,
         )
+
+    def _make_extra_input(self, name: str, B: int) -> torch.Tensor:
+        """Create a GPU tensor for an extra input (e.g. ``dimensions``)."""
+        info = self._io_info[name]
+        ndim = len(info["shape"])
+        np_dtype = np.dtype(info["dtype"])
+        t_dtype = _NP_TO_TORCH_DTYPE.get(np_dtype, torch.int32)
+        if ndim == 0:
+            return torch.zeros((), dtype=t_dtype, device=self._device)
+        if ndim == 1:
+            return torch.zeros((B,), dtype=t_dtype, device=self._device)
+        return torch.zeros((B, 1), dtype=t_dtype, device=self._device)
+
+    def _bind_extra_inputs(self, ctx: Any, slot: Any, B: int) -> None:
+        """Set shapes and addresses for all extra input tensors on *ctx*."""
+        for name in self._extra_input_names:
+            d_extra = self._make_extra_input(name, B)
+            shape = tuple(d_extra.shape) if d_extra.ndim > 0 else (1,)
+            ctx.set_input_shape(name, shape)
+            ctx.set_tensor_address(name, d_extra.data_ptr())
+            slot.d_inputs[f"_extra_{name}"] = d_extra
 
     def _probe_embed_dim(self) -> Optional[int]:
         """Discover the embedding dimension by running a real tiny inference.
@@ -833,12 +867,17 @@ class TRTEmbedEngine:
             ctx.set_optimization_profile_async(0, slot.stream.cuda_stream)
             slot.stream.synchronize()
 
-            probe_shape = (1, 2)
+            probe_B = 1
+            probe_shape = (probe_B, 2)
             d_probe = torch.ones(probe_shape, dtype=torch.int32, device=self._device)
-            for name, info in self._io_info.items():
-                if info["is_input"]:
+
+            for name in ("input_ids", "attention_mask"):
+                if name in self._io_info:
                     ctx.set_input_shape(name, probe_shape)
                     ctx.set_tensor_address(name, d_probe.data_ptr())
+
+            slot.d_inputs = {}
+            self._bind_extra_inputs(ctx, slot, probe_B)
 
             try:
                 ctx.infer_shapes()
@@ -851,7 +890,7 @@ class TRTEmbedEngine:
                 return out_shape[-1]
 
             # Shape still unresolved — allocate a generous output buffer and
-            # run a real inference to measure the actual output.
+            # run a real inference to discover the actual output.
             out_np_dtype = np.dtype(self._io_info[self._output_name]["dtype"])
             out_t_dtype = _NP_TO_TORCH_DTYPE.get(out_np_dtype, torch.float32)
             max_dim_guess = 8192
@@ -1006,6 +1045,9 @@ class TRTEmbedEngine:
                 ctx.set_tensor_address(name, d_buf.data_ptr())
                 slot.d_inputs[name] = d_buf
                 slot.d_inputs[f"_pin_{name}"] = cpu_buf
+
+        # Bind any extra input tensors (e.g. 'dimensions' for Matryoshka).
+        self._bind_extra_inputs(ctx, slot, B)
 
         # Explicitly trigger shape inference now that all inputs are bound.
         try:
