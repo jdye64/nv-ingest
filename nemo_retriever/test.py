@@ -57,22 +57,30 @@ from nemo_retriever.vector_store.lancedb_store import LanceDBConfig, create_lanc
 LANCEDB_URI = "/tmp/nemo_retriever_lancedb"
 LANCEDB_TABLE = "bo767"
 
-print("Materialising Ray Dataset to pandas …")
+import json
+import numpy as _np
+import csv
+import shutil
+import time as _time
+
+# Collect all output lines, print them in one block at the very end
+# so they aren't lost in Ray worker logs.
+_out: list[str] = []
+def _log(msg: str = ""):
+    _out.append(msg)
+
+_log("Materialising Ray Dataset to pandas …")
 t1 = time.perf_counter()
 df = ray_ds.to_pandas()
-print(f"  → {len(df)} rows in {time.perf_counter() - t1:.2f}s")
-
-import json
+_log(f"  → {len(df)} rows in {time.perf_counter() - t1:.2f}s")
 
 DUMP_DIR = Path("/tmp/nemo_retriever_debug")
 DUMP_DIR.mkdir(parents=True, exist_ok=True)
 
-# Dump first 5 rows for manual inspection
 df_sample = df.head(5)
 df_sample.to_json(DUMP_DIR / "df_sample.json", orient="records", indent=2, default_handler=str)
-print(f"  → wrote {DUMP_DIR / 'df_sample.json'}")
+_log(f"  → wrote {DUMP_DIR / 'df_sample.json'}")
 
-# Check for embeddings in first 3 rows
 for i, row in df.head(3).iterrows():
     meta = row.get("metadata")
     embed_col = row.get("text_embeddings_1b_v2")
@@ -80,43 +88,39 @@ for i, row in df.head(3).iterrows():
     col_emb = embed_col.get("embedding") if isinstance(embed_col, dict) else None
     meta_len = len(meta_emb) if hasattr(meta_emb, '__len__') else "N/A"
     col_len = len(col_emb) if hasattr(col_emb, '__len__') else "N/A"
-    print(f"  row {i}: metadata.embedding len={meta_len} | "
-          f"text_embeddings_1b_v2.embedding len={col_len}")
+    _log(f"  row {i}: metadata.embedding len={meta_len} | "
+         f"text_embeddings_1b_v2.embedding len={col_len}")
 
-print("Building LanceDB rows …")
+_log("Building LanceDB rows …")
 lance_rows = build_lancedb_rows(df)
-print(f"  → {len(lance_rows)} rows with embeddings (from {len(df)} total rows)")
+_log(f"  → {len(lance_rows)} rows with embeddings (from {len(df)} total rows)")
 
 if lance_rows:
     sample_vec = lance_rows[0].get("vector", [])
-    print(f"  → first vector: len={len(sample_vec)}, first_5={sample_vec[:5]}")
-    # Check if vectors are diverse or all identical
-    import numpy as _np
+    _log(f"  → first vector: len={len(sample_vec)}, first_5={sample_vec[:5]}")
     vecs_sample = [r["vector"] for r in lance_rows[:10] if "vector" in r]
     if len(vecs_sample) >= 2:
         v0 = _np.array(vecs_sample[0])
         all_same = all(_np.allclose(v0, _np.array(v)) for v in vecs_sample[1:])
         all_zero = _np.allclose(v0, 0.0)
-        print(f"  → first 10 vectors all identical: {all_same}")
-        print(f"  → first vector all zeros: {all_zero}")
-        print(f"  → first vector norm: {_np.linalg.norm(v0):.6f}")
+        _log(f"  → first 10 vectors all identical: {all_same}")
+        _log(f"  → first vector all zeros: {all_zero}")
+        _log(f"  → first vector norm: {_np.linalg.norm(v0):.6f}")
     with open(DUMP_DIR / "lance_rows_sample.json", "w") as f:
         json.dump(lance_rows[:3], f, indent=2, default=str)
-    print(f"  → wrote {DUMP_DIR / 'lance_rows_sample.json'}")
-    # Show pdf_page values (used for recall matching)
+    _log(f"  → wrote {DUMP_DIR / 'lance_rows_sample.json'}")
     pages = set(r.get("pdf_page", "") for r in lance_rows[:20])
-    print(f"  → sample pdf_page values: {sorted(pages)[:5]}")
+    _log(f"  → sample pdf_page values: {sorted(pages)[:5]}")
 
 if not lance_rows:
-    print("ERROR: No embeddings found in the output. Skipping LanceDB + recall.")
+    _log("ERROR: No embeddings found in the output. Skipping LanceDB + recall.")
 else:
     dim = infer_vector_dim(lance_rows)
-    print(f"  → vector dim = {dim}")
+    _log(f"  → vector dim = {dim}")
     schema = lancedb_schema(vector_dim=dim)
-    import shutil
     shutil.rmtree(LANCEDB_URI, ignore_errors=True)
     db = lancedb.connect(uri=LANCEDB_URI)
-    print(f"Writing {len(lance_rows)} rows to LanceDB at {LANCEDB_URI}/{LANCEDB_TABLE} …")
+    _log(f"Writing {len(lance_rows)} rows to LanceDB at {LANCEDB_URI}/{LANCEDB_TABLE} …")
     t2 = time.perf_counter()
     table = create_or_append_lancedb_table(db, LANCEDB_TABLE, lance_rows, schema, overwrite=True)
     lance_cfg = LanceDBConfig(
@@ -126,9 +130,8 @@ else:
         create_index=True,
     )
     create_lancedb_index(table, cfg=lance_cfg)
-    print(f"  → done in {time.perf_counter() - t2:.2f}s")
+    _log(f"  → done in {time.perf_counter() - t2:.2f}s")
 
-    # ── Recall evaluation ────────────────────────────────────────────
     from nemo_retriever.recall.core import RecallConfig, retrieve_and_score
 
     QUERY_CSV = Path(__file__).resolve().parent.parent / "data" / "bo767_query_gt.csv"
@@ -144,24 +147,21 @@ else:
         match_mode="pdf_page",
     )
 
-    # Show ground truth pdf_page values for comparison
-    import csv
     with open(QUERY_CSV) as f:
         gt_rows = list(csv.DictReader(f))
     gt_pages = sorted(set(r.get("pdf_page", "") for r in gt_rows[:20]))
-    print(f"  Ground truth sample pdf_page values: {gt_pages[:5]}")
+    _log(f"  Ground truth sample pdf_page values: {gt_pages[:5]}")
 
-    print(f"\nRunning recall evaluation on {QUERY_CSV} …")
+    _log(f"\nRunning recall evaluation on {QUERY_CSV} …")
     t3 = time.perf_counter()
     df_query, gold, raw_hits, retrieved_keys, metrics = retrieve_and_score(
         QUERY_CSV, cfg=recall_cfg,
     )
     recall_elapsed = time.perf_counter() - t3
 
-    # Print per-query results
-    print(f"\n{'='*60}")
-    print("Per-query results (first 20):")
-    print(f"{'='*60}")
+    _log(f"\n{'='*60}")
+    _log("Per-query results (first 20):")
+    _log(f"{'='*60}")
     for i, (q, g, rk) in enumerate(zip(
         df_query["query"].astype(str).tolist(),
         gold,
@@ -170,14 +170,24 @@ else:
         if i >= 20:
             break
         hit = "HIT" if g in rk[:10] else "MISS"
-        print(f"\n  [{i}] {hit} | query: {q[:80]}…" if len(q) > 80 else f"\n  [{i}] {hit} | query: {q}")
-        print(f"       expected: {g}")
-        print(f"       top-10:   {rk[:10]}")
+        _log(f"\n  [{i}] {hit} | query: {q[:80]}…" if len(q) > 80 else f"\n  [{i}] {hit} | query: {q}")
+        _log(f"       expected: {g}")
+        _log(f"       top-10:   {rk[:10]}")
 
-    print(f"\n{'='*60}")
-    print(f"Recall Results  ({len(df_query)} queries, top_k={recall_cfg.top_k})")
-    print(f"{'='*60}")
+    _log(f"\n{'='*60}")
+    _log(f"Recall Results  ({len(df_query)} queries, top_k={recall_cfg.top_k})")
+    _log(f"{'='*60}")
     for metric, value in metrics.items():
-        print(f"  {metric}: {value:.4f}")
-    print(f"\nRecall evaluation took {recall_elapsed:.2f}s")
-    print(f"Total pipeline time: {time.perf_counter() - t0:.2f}s")
+        _log(f"  {metric}: {value:.4f}")
+    _log(f"\nRecall evaluation took {recall_elapsed:.2f}s")
+    _log(f"Total pipeline time: {time.perf_counter() - t0:.2f}s")
+
+# Wait for Ray worker logs to flush, then print everything
+_time.sleep(3)
+print("\n" * 5)
+print("#" * 80)
+print("#  FINAL RESULTS (delayed to appear after Ray worker logs)")
+print("#" * 80)
+for line in _out:
+    print(line)
+print("#" * 80)
