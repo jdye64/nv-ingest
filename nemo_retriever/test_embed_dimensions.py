@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Quick test: try different 'dimensions' values to find which ones
-the TRT embedding engine accepts without overflow."""
+"""Test: skip output shape resolution, allocate max buffer, and execute."""
 
 import sys
 from pathlib import Path
@@ -21,7 +20,9 @@ def find_engine(base: Path) -> Path:
 
 engine_path = find_engine(raw_path)
 print(f"Engine: {engine_path}")
-print(f"TRT: {trt.__version__}")
+print(f"TRT:    {trt.__version__}")
+print(f"Torch:  {torch.__version__}")
+print(f"CUDA:   {torch.version.cuda}")
 
 logger = trt.Logger(trt.Logger.WARNING)
 runtime = trt.Runtime(logger)
@@ -33,90 +34,78 @@ with open(engine_path, "rb") as f:
 device = torch.device("cuda")
 torch.cuda.init()
 
-# Use profile 0 (batch 1..32, seq 2..128) for a quick test
-ctx = engine.create_execution_context()
-stream = torch.cuda.Stream(device)
+# ── Check for IOutputAllocator support ──────────────────────────────
+has_output_allocator = hasattr(trt, "IOutputAllocator")
+print(f"Has IOutputAllocator: {has_output_allocator}")
 
-B, S = 2, 64  # small batch, short seq — fits profile 0 easily
+# ── Test matrix ─────────────────────────────────────────────────────
+test_cases = [
+    # (B, S, profile_idx, dim_val)
+    (1,  64, 0, 2048),
+    (1,  64, 0, 1024),
+    (1,  64, 0, 384),
+    (2,  64, 0, 2048),
+    (2,  64, 0, 1024),
+    (2,  64, 0, 384),
+    (2,  64, 0, 0),
+    (1, 128, 0, 2048),
+]
 
-# Create dummy inputs matching engine dtypes (all INT64)
-d_input_ids = torch.ones((B, S), dtype=torch.int64, device=device)
-d_attention_mask = torch.ones((B, S), dtype=torch.int64, device=device)
+MAX_DIM = 2048  # allocate output assuming this max
 
-ctx.set_input_shape("input_ids", (B, S))
-ctx.set_tensor_address("input_ids", d_input_ids.data_ptr())
-ctx.set_input_shape("attention_mask", (B, S))
-ctx.set_tensor_address("attention_mask", d_attention_mask.data_ptr())
+for B, S, profile_idx, dim_val in test_cases:
+    tag = f"B={B} S={S} profile={profile_idx} dim_val={dim_val}"
+    ctx = engine.create_execution_context()
+    stream = torch.cuda.Stream(device)
 
-# Test different dimension values
-test_values = [0, 1, 2, 128, 384, 512, 768, 1024, 2048, -1]
+    # Select profile
+    ctx.set_optimization_profile_async(profile_idx, stream.cuda_stream)
+    stream.synchronize()
 
-for dim_val in test_values:
-    d_dims = torch.full((B,), dim_val, dtype=torch.int64, device=device)
+    # Inputs
+    d_input_ids      = torch.ones((B, S), dtype=torch.int64, device=device)
+    d_attention_mask  = torch.ones((B, S), dtype=torch.int64, device=device)
+    d_dims            = torch.full((B,), dim_val, dtype=torch.int64, device=device)
+
+    ctx.set_input_shape("input_ids", (B, S))
+    ctx.set_tensor_address("input_ids", d_input_ids.data_ptr())
+    ctx.set_input_shape("attention_mask", (B, S))
+    ctx.set_tensor_address("attention_mask", d_attention_mask.data_ptr())
     ctx.set_input_shape("dimensions", (B,))
     ctx.set_tensor_address("dimensions", d_dims.data_ptr())
 
+    # Allocate MAX output buffer — ignore what TRT thinks the shape is
+    d_output = torch.zeros((B, MAX_DIM), dtype=torch.float32, device=device)
+    ctx.set_tensor_address("embeddings", d_output.data_ptr())
+
+    # Check reported shape (expect -1 for data-dependent dim)
     try:
-        ctx.infer_shapes()
-    except Exception:
-        pass
+        reported = tuple(ctx.get_tensor_shape("embeddings"))
+    except Exception as e:
+        reported = f"ERROR({e})"
 
-    try:
-        out_shape = tuple(ctx.get_tensor_shape("embeddings"))
-    except Exception:
-        out_shape = "FAILED"
+    # Execute
+    with torch.cuda.stream(stream):
+        ok = ctx.execute_async_v3(stream_handle=stream.cuda_stream)
+    stream.synchronize()
 
-    if isinstance(out_shape, tuple) and all(d > 0 for d in out_shape):
-        d_output = torch.zeros(out_shape, dtype=torch.float32, device=device)
-        ctx.set_tensor_address("embeddings", d_output.data_ptr())
-
-        with torch.cuda.stream(stream):
-            ok = ctx.execute_async_v3(stream_handle=stream.cuda_stream)
-        stream.synchronize()
-
-        if ok:
-            norm = torch.norm(d_output).item()
-            nonzero = (d_output.abs() > 1e-8).sum().item()
-            print(f"  dimensions={dim_val:6d}  output_shape={out_shape}  "
-                  f"exec=OK  norm={norm:.4f}  nonzero={nonzero}/{d_output.numel()}")
+    if ok:
+        # Figure out how many dims are actually populated
+        row = d_output[0].cpu().numpy()
+        # Find last non-zero index
+        nonzero_idx = np.nonzero(np.abs(row) > 1e-12)[0]
+        if len(nonzero_idx) > 0:
+            actual_dim = int(nonzero_idx[-1]) + 1
         else:
-            print(f"  dimensions={dim_val:6d}  output_shape={out_shape}  exec=FAILED")
+            actual_dim = 0
+        norm = torch.norm(d_output).item()
+        total_nz = (d_output.abs() > 1e-12).sum().item()
+        print(f"  {tag}  reported={reported}  exec=OK  "
+              f"norm={norm:.4f}  nonzero={total_nz}/{d_output.numel()}  "
+              f"actual_dim≈{actual_dim}  first_5={row[:5].tolist()}")
     else:
-        print(f"  dimensions={dim_val:6d}  output_shape={out_shape}  (shape invalid, skipped exec)")
+        print(f"  {tag}  reported={reported}  exec=FAILED")
 
-# Also test with dimensions shape (1,) instead of (B,)
-print("\n--- Testing with dimensions shape (1,) instead of (B,) ---")
-for dim_val in [0, 384, 1024, 2048]:
-    d_dims = torch.full((1,), dim_val, dtype=torch.int64, device=device)
-    ctx.set_input_shape("dimensions", (1,))
-    ctx.set_tensor_address("dimensions", d_dims.data_ptr())
-
-    try:
-        ctx.infer_shapes()
-    except Exception:
-        pass
-
-    try:
-        out_shape = tuple(ctx.get_tensor_shape("embeddings"))
-    except Exception:
-        out_shape = "FAILED"
-
-    if isinstance(out_shape, tuple) and all(d > 0 for d in out_shape):
-        d_output = torch.zeros(out_shape, dtype=torch.float32, device=device)
-        ctx.set_tensor_address("embeddings", d_output.data_ptr())
-
-        with torch.cuda.stream(stream):
-            ok = ctx.execute_async_v3(stream_handle=stream.cuda_stream)
-        stream.synchronize()
-
-        if ok:
-            norm = torch.norm(d_output).item()
-            nonzero = (d_output.abs() > 1e-8).sum().item()
-            print(f"  dimensions={dim_val:6d} shape=(1,)  output_shape={out_shape}  "
-                  f"exec=OK  norm={norm:.4f}  nonzero={nonzero}/{d_output.numel()}")
-        else:
-            print(f"  dimensions={dim_val:6d} shape=(1,)  output_shape={out_shape}  exec=FAILED")
-    else:
-        print(f"  dimensions={dim_val:6d} shape=(1,)  output_shape={out_shape}  (shape invalid)")
+    del ctx
 
 print("\nDone.")
