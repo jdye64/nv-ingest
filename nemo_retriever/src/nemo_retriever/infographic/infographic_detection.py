@@ -307,10 +307,14 @@ def detect_infographic_elements_v1(
     for _, row in batch_df.iterrows():
         try:
             pi = row.get("page_image") or {}
+            jpeg = pi.get("jpeg_bytes") if isinstance(pi, dict) else None
             pixels = pi.get("pixels") if isinstance(pi, dict) else None
             b64 = pi.get("image_b64") if isinstance(pi, dict) else None
-            if pixels is None and not b64:
+            if jpeg is None and pixels is None and not b64:
                 raise ValueError("No usable page_image found in row.")
+            if jpeg is not None and pixels is None:
+                import cv2 as _cv2
+                pixels = _cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), _cv2.IMREAD_COLOR)
             image_b64_list.append(b64)
             if use_remote:
                 tensors.append(None)
@@ -548,6 +552,8 @@ def detect_infographic_elements_v1_from_page_elements_v3(
             out_counts.append({})
             continue
         page_image_b64 = page_image.get("image_b64")
+        if page_image_b64 is None and "jpeg_bytes" in page_image:
+            page_image_b64 = base64.b64encode(page_image["jpeg_bytes"]).decode("ascii")
         if page_image_b64 is None and "pixels" in page_image:
             from nemo_retriever.ocr.ocr import _np_rgb_to_b64_png
             page_image_b64 = _np_rgb_to_b64_png(page_image["pixels"])

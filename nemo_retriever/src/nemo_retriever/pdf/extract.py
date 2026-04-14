@@ -74,15 +74,15 @@ def _render_page_to_base64(
     *,
     dpi: int = 200,
     image_format: str = "jpeg",
-    jpeg_quality: int = 100,
+    jpeg_quality: int = 95,
     render_mode: RenderMode = "fit_to_model",
 ) -> Dict[str, Any]:
-    """Render a pdfium page to a raw numpy array (BGR, uint8).
+    """Render a pdfium page to JPEG-compressed bytes.
 
-    Skips JPEG/PNG compression and base64 encoding entirely — the raw
-    pixel buffer is passed through the pipeline, eliminating ~5-10ms of
-    CPU encode + decode overhead per image and avoiding lossy JPEG
-    quality loss.
+    Stores ``jpeg_bytes`` (~200-500 KB per page) instead of raw pixel
+    arrays (~25 MB per page), reducing object-store memory by ~50-100×.
+    Downstream GPU stages decode the JPEG on the GPU via DALI's NVJPEG
+    hardware decoder, so there is no CPU decode overhead.
 
     Parameters
     ----------
@@ -93,7 +93,7 @@ def _render_page_to_base64(
         avoiding a large bilinear down-scale in ``resize_pad``.
 
     Returns dict with:
-    - pixels: np.ndarray (H, W, 3) BGR uint8 — raw pixel buffer
+    - jpeg_bytes: bytes — JPEG-compressed image (BGR encoded by cv2)
     - orig_shape_hw: tuple[int,int] (H,W) of the rendered raster
     """
     if render_mode == "fit_to_model":
@@ -109,12 +109,14 @@ def _render_page_to_base64(
     if arr.ndim == 3 and arr.shape[2] == 4:
         arr = arr[:, :, :3]
 
-    # Store as BGR (matches downstream model expectations and avoids
-    # a redundant colour conversion).
     bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
 
+    ok, encoded = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
+    if not ok:
+        raise RuntimeError("cv2.imencode failed for page image")
+
     return {
-        "pixels": np.ascontiguousarray(bgr),
+        "jpeg_bytes": bytes(encoded),
         "orig_shape_hw": (orig_h, orig_w),
     }
 

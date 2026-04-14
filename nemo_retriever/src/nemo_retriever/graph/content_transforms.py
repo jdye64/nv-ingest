@@ -18,18 +18,19 @@ _CONTENT_COLUMNS = ("table", "chart", "infographic")
 
 
 def _strip_heavy_image_data(df: pd.DataFrame) -> pd.DataFrame:
-    """Drop raw pixel arrays from page_image dicts to cut serialization cost.
+    """Drop heavy image data from page_image dicts to cut serialization cost.
 
     After the content transform, no downstream stage (embed, store, etc.)
-    needs the raw numpy array.  Keeping it would serialize ~2-3 MB per row
-    through every remaining Ray Data stage boundary.
+    needs the image data.  JPEG bytes are small (~200-500 KB) but still
+    unnecessary after this point; raw pixel arrays are ~25 MB each.
     """
     if "page_image" not in df.columns:
         return df
     for idx in df.index:
         pi = df.at[idx, "page_image"]
-        if isinstance(pi, dict) and "pixels" in pi:
+        if isinstance(pi, dict):
             pi.pop("pixels", None)
+            pi.pop("jpeg_bytes", None)
     return df
 
 

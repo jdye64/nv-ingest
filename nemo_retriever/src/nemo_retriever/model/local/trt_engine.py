@@ -31,6 +31,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -52,20 +53,96 @@ except ImportError:
     pass
 
 
+class _DaliJpegLetterboxPipeline:
+    """DALI pipeline that decodes JPEG bytes on GPU via NVJPEG hardware,
+    then letterbox-resizes in one fused pass.
+
+    Uses ``fn.decoders.image(device="mixed")`` so the JPEG decompression
+    runs on the GPU's dedicated NVJPEG cores — independent of the CUDA
+    compute units used for TRT inference.
+
+    The pipeline is synchronous (``exec_async=False``,
+    ``exec_pipelined=False``, ``prefetch_queue_depth=1``) so a single
+    ``feed_input`` → ``run`` cycle works reliably.
+    """
+
+    def __init__(self, target_h: int, target_w: int, device_id: int = 0, max_batch_size: int = 128) -> None:
+        if not _DALI_AVAILABLE:
+            raise ImportError("nvidia-dali is required for _DaliJpegLetterboxPipeline.")
+
+        self._target_h = target_h
+        self._target_w = target_w
+        self._device_id = device_id
+        self._max_batch_size = max_batch_size
+        self._pipe = self._build_pipeline()
+        self._pipe.build()
+
+    def _build_pipeline(self) -> Any:
+        @_dali_pipeline_def(
+            batch_size=self._max_batch_size,
+            num_threads=4,
+            device_id=self._device_id,
+            exec_async=False,
+            exec_pipelined=False,
+            prefetch_queue_depth=1,
+        )
+        def _pipe():
+            jpegs = _dali_fn.external_source(device="cpu", name="jpegs")
+            images = _dali_fn.decoders.image(
+                jpegs, device="mixed", output_type=_dali_types.BGR,
+            )
+            images = _dali_fn.cast(images, dtype=_dali_types.FLOAT)
+            images = _dali_fn.resize(
+                images,
+                resize_x=self._target_w,
+                resize_y=self._target_h,
+                mode="not_larger",
+                interp_type=_dali_types.INTERP_LINEAR,
+            )
+            images = _dali_fn.crop(
+                images,
+                crop=(self._target_h, self._target_w),
+                out_of_bounds_policy="pad",
+                fill_values=114.0,
+            )
+            images = _dali_fn.transpose(images, perm=[2, 0, 1])
+            return images
+
+        return _pipe()
+
+    def _run_chunk(self, jpeg_list: "list[np.ndarray]") -> torch.Tensor:
+        self._pipe.feed_input("jpegs", jpeg_list)
+        (output,) = self._pipe.run()
+        return torch.from_dlpack(output.as_tensor()).contiguous()
+
+    def run(
+        self,
+        jpeg_buffers: "list[bytes]",
+        orig_shapes: "list[Tuple[int, int]]",
+    ) -> Tuple[torch.Tensor, "list[Tuple[int, int]]"]:
+        """Decode + letterbox a batch of JPEG byte buffers on GPU."""
+        if not jpeg_buffers:
+            return torch.empty((0, 3, self._target_h, self._target_w),
+                               dtype=torch.float32, device=f"cuda:{self._device_id}"), []
+
+        # DALI external_source expects numpy byte arrays.
+        np_bufs = [np.frombuffer(b, dtype=np.uint8) for b in jpeg_buffers]
+
+        if len(np_bufs) > self._max_batch_size:
+            chunks: list[torch.Tensor] = []
+            for start in range(0, len(np_bufs), self._max_batch_size):
+                chunks.append(self._run_chunk(np_bufs[start:start + self._max_batch_size]))
+            return torch.cat(chunks, dim=0), orig_shapes
+
+        return self._run_chunk(np_bufs), orig_shapes
+
+
 class _DaliLetterboxPipeline:
-    """DALI pipeline that letterbox-resizes a variable-size image batch on GPU.
+    """DALI pipeline that letterbox-resizes raw HWC numpy arrays on GPU.
 
-    The pipeline mirrors ``_gpu_letterbox`` but executes entirely inside
-    DALI's GPU kernels — no per-image Python loops, no intermediate copies.
-
-    After ``build()``, call ``run(images)`` with a list of HWC uint8 numpy
-    arrays and get back a ``(BCHW_float32_torch_tensor, orig_shapes)`` tuple,
-    both on GPU.
-
-    The pipeline is configured with ``exec_async=False``,
-    ``exec_pipelined=False``, and ``prefetch_queue_depth=1`` so that a
-    single ``feed_input`` → ``run`` cycle works reliably without needing
-    to prime a multi-stage prefetch queue.
+    Fallback for when images arrive as decoded numpy arrays rather than
+    JPEG bytes.  Uses the same synchronous configuration as the JPEG
+    variant.
     """
 
     def __init__(self, target_h: int, target_w: int, device_id: int = 0, max_batch_size: int = 128) -> None:
@@ -118,23 +195,18 @@ class _DaliLetterboxPipeline:
 
         orig_shapes = [(int(img.shape[0]), int(img.shape[1])) for img in images]
 
-        # Sub-batch if the input exceeds the pipeline's max_batch_size.
         if len(images) > self._max_batch_size:
-            chunks_t: list[torch.Tensor] = []
+            chunks: list[torch.Tensor] = []
             for start in range(0, len(images), self._max_batch_size):
                 sub = images[start : start + self._max_batch_size]
                 self._pipe.feed_input("images", sub)
                 (output,) = self._pipe.run()
-                chunks_t.append(torch.from_dlpack(output.as_tensor()).contiguous())
-            return torch.cat(chunks_t, dim=0), orig_shapes
+                chunks.append(torch.from_dlpack(output.as_tensor()).contiguous())
+            return torch.cat(chunks, dim=0), orig_shapes
 
         self._pipe.feed_input("images", images)
         (output,) = self._pipe.run()
-
-        # Zero-copy DALI → PyTorch via DLPack.
-        t = torch.from_dlpack(output.as_tensor()).contiguous()
-
-        return t, orig_shapes
+        return torch.from_dlpack(output.as_tensor()).contiguous(), orig_shapes
 
 
 _NP_TO_TORCH_DTYPE = {
@@ -328,28 +400,43 @@ class TRTYoloxEngine:
         self._yolox_nms = _yolox_nms
 
         # DALI-accelerated letterbox preprocessing (optional).
+        # Prefer the JPEG pipeline (NVJPEG hardware decode on GPU);
+        # keep the raw-array pipeline as fallback for numpy inputs.
+        self._dali_jpeg_pipe: Optional[_DaliJpegLetterboxPipeline] = None
         self._dali_pipe: Optional[_DaliLetterboxPipeline] = None
         if _DALI_AVAILABLE:
+            dev_id = self._device.index or 0
+            try:
+                self._dali_jpeg_pipe = _DaliJpegLetterboxPipeline(
+                    target_h=input_shape[0],
+                    target_w=input_shape[1],
+                    device_id=dev_id,
+                    max_batch_size=128,
+                )
+                logger.info("DALI JPEG (NVJPEG) letterbox pipeline initialized.")
+            except Exception:
+                logger.warning("DALI JPEG pipeline init failed.", exc_info=True)
             try:
                 self._dali_pipe = _DaliLetterboxPipeline(
                     target_h=input_shape[0],
                     target_w=input_shape[1],
-                    device_id=self._device.index or 0,
+                    device_id=dev_id,
                     max_batch_size=128,
                 )
-                logger.info("DALI letterbox pipeline initialized for TRTYoloxEngine.")
+                logger.info("DALI raw-array letterbox pipeline initialized.")
             except Exception:
-                logger.warning("DALI pipeline init failed; falling back to torch letterbox.", exc_info=True)
-                self._dali_pipe = None
+                logger.warning("DALI raw-array pipeline init failed.", exc_info=True)
 
         logger.info(
             "TRTYoloxEngine loaded: path=%s, input=%s, outputs=%s, "
-            "spatial=%s, dynamic_batch=%s, double_buffer=True, dali=%s, device=%s",
+            "spatial=%s, dynamic_batch=%s, double_buffer=True, "
+            "dali_jpeg=%s, dali_raw=%s, device=%s",
             engine_path,
             self._input_name,
             self._output_names,
             input_shape,
             self._has_dynamic_batch,
+            self._dali_jpeg_pipe is not None,
             self._dali_pipe is not None,
             self._device,
         )
@@ -396,92 +483,133 @@ class TRTYoloxEngine:
     def preprocess_batch_gpu(
         self,
         images: List[Any],
+        known_shapes: Optional[List[Optional[Tuple[int, int]]]] = None,
     ) -> Tuple[torch.Tensor, List[Tuple[int, int]]]:
-        """Letterbox a list of variable-sized raw images on GPU.
+        """Letterbox a list of variable-sized images on GPU.
 
-        Each element can be a HWC numpy array or a CHW torch tensor.
-        Returns ``(batch_BCHW_on_GPU, orig_shapes)``.  The output batch
-        is pre-allocated on GPU and filled with the pad value, so images
-        of different sizes are handled without CPU resize.
+        Accepts a list where each element is one of:
+        - ``bytes`` — JPEG-compressed image (preferred, decoded on GPU
+          via NVJPEG hardware)
+        - ``np.ndarray`` — HWC uint8 raw pixels
+        - ``torch.Tensor`` — CHW or BCHW
 
-        Uses DALI when available for fully GPU-accelerated preprocessing;
-        falls back to per-image torch ops otherwise.
+        *known_shapes* — optional list parallel to *images* with pre-known
+        ``(H, W)`` tuples for JPEG inputs (avoids a CPU decode just to
+        read the header).
+
+        Returns ``(batch_BCHW_on_GPU, orig_shapes)``.
+
+        Pipeline priority: DALI JPEG → DALI raw → per-image torch fallback.
         """
-        # ---- DALI fast path: whole batch in one GPU kernel launch ----
-        if self._dali_pipe is not None:
-            hwc_arrays: list[np.ndarray] = []
-            for img in images:
-                if isinstance(img, torch.Tensor):
-                    arr = img.cpu().numpy()
-                    if arr.ndim == 4:
-                        arr = arr[0]
-                    if arr.shape[0] == 3 and arr.ndim == 3:
-                        arr = np.ascontiguousarray(arr.transpose(1, 2, 0))
-                else:
-                    arr = np.ascontiguousarray(img)
-                    if arr.ndim == 4:
-                        arr = arr[0]
-                hwc_arrays.append(arr)
-            try:
-                return self._dali_pipe.run(hwc_arrays)
-            except Exception:
-                logger.warning("DALI preprocess failed; rebuilding pipeline.", exc_info=True)
-                try:
-                    self._dali_pipe = _DaliLetterboxPipeline(
-                        target_h=self._input_shape[0],
-                        target_w=self._input_shape[1],
-                        device_id=self._device.index or 0,
-                        max_batch_size=128,
-                    )
-                except Exception:
-                    logger.warning("DALI rebuild failed; falling back to torch permanently.", exc_info=True)
-                    self._dali_pipe = None
+        # ---- Partition inputs by type -----------------------------------
+        jpeg_items: list[Tuple[int, bytes, Tuple[int, int]]] = []
+        array_items: list[Tuple[int, np.ndarray]] = []
 
-        # ---- Torch fallback: per-image letterbox on GPU ----
-        tgt_h, tgt_w = self._input_shape
-        B = len(images)
-
-        d_batch = torch.full(
-            (B, 3, tgt_h, tgt_w), 114.0,
-            dtype=torch.float32, device=self._device,
-        )
-
-        orig_shapes: List[Tuple[int, int]] = []
-        for i, img in enumerate(images):
-            if isinstance(img, np.ndarray):
-                arr = np.array(img, copy=False)
-                if not arr.flags.writeable:
-                    arr = arr.copy()
-                if arr.ndim == 4 and int(arr.shape[0]) == 1:
-                    arr = arr[0]
-                if int(arr.shape[-1]) == 3 and int(arr.shape[0]) != 3:
-                    t = torch.from_numpy(np.ascontiguousarray(arr)).permute(2, 0, 1)
-                else:
-                    t = torch.from_numpy(np.ascontiguousarray(arr))
+        for idx, img in enumerate(images):
+            if isinstance(img, bytes):
+                shape = (known_shapes[idx] if known_shapes and idx < len(known_shapes)
+                         and known_shapes[idx] else None)
+                if shape is None or shape == (0, 0):
+                    tmp = cv2.imdecode(np.frombuffer(img, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+                    shape = (int(tmp.shape[0]), int(tmp.shape[1])) if tmp is not None else (0, 0)
+                jpeg_items.append((idx, img, shape))
             elif isinstance(img, torch.Tensor):
-                t = img
-                if t.ndim == 4 and int(t.shape[0]) == 1:
-                    t = t[0]
+                arr = img.cpu().numpy()
+                if arr.ndim == 4:
+                    arr = arr[0]
+                if arr.shape[0] == 3 and arr.ndim == 3:
+                    arr = np.ascontiguousarray(arr.transpose(1, 2, 0))
+                array_items.append((idx, np.ascontiguousarray(arr)))
             else:
-                raise TypeError(f"Expected np.ndarray or torch.Tensor, got {type(img)!r}")
+                arr = np.ascontiguousarray(img)
+                if arr.ndim == 4:
+                    arr = arr[0]
+                array_items.append((idx, arr))
+
+        B = len(images)
+        results = [None] * B  # type: list[Optional[Tuple[torch.Tensor, Tuple[int, int]]]]
+
+        # ---- DALI JPEG fast path (NVJPEG hardware decode on GPU) --------
+        if jpeg_items and self._dali_jpeg_pipe is not None:
+            bufs = [item[1] for item in jpeg_items]
+            shapes = [item[2] for item in jpeg_items]
+            try:
+                t, s = self._dali_jpeg_pipe.run(bufs, shapes)
+                for local_i, (orig_idx, _, shape) in enumerate(jpeg_items):
+                    results[orig_idx] = (t[local_i], shape)
+                jpeg_items = []  # all handled
+            except Exception:
+                logger.warning("DALI JPEG preprocess failed; trying raw-array path.", exc_info=True)
+                # Convert JPEG to numpy for the raw-array path.
+                for orig_idx, jbytes, shape in jpeg_items:
+                    decoded = cv2.imdecode(np.frombuffer(jbytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+                    if decoded is not None:
+                        array_items.append((orig_idx, decoded))
+                jpeg_items = []
+
+        # ---- DALI raw-array path ----------------------------------------
+        if array_items and self._dali_pipe is not None:
+            hwc_arrays = [item[1] for item in array_items]
+            try:
+                t, s = self._dali_pipe.run(hwc_arrays)
+                for local_i, (orig_idx, arr) in enumerate(array_items):
+                    results[orig_idx] = (t[local_i], s[local_i])
+                array_items = []
+            except Exception:
+                logger.warning("DALI raw-array preprocess failed; falling back to torch.", exc_info=True)
+
+        # ---- Torch fallback for remaining items ----------------------------
+        tgt_h, tgt_w = self._input_shape
+
+        # Process any remaining JPEG items that DALI couldn't handle.
+        for orig_idx, jbytes, shape in jpeg_items:
+            decoded = cv2.imdecode(np.frombuffer(jbytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+            if decoded is not None:
+                array_items.append((orig_idx, decoded))
+
+        for orig_idx, arr in array_items:
+            if not arr.flags.writeable:
+                arr = arr.copy()
+            if arr.ndim == 4 and int(arr.shape[0]) == 1:
+                arr = arr[0]
+            if int(arr.shape[-1]) == 3 and int(arr.shape[0]) != 3:
+                t = torch.from_numpy(np.ascontiguousarray(arr)).permute(2, 0, 1)
+            else:
+                t = torch.from_numpy(np.ascontiguousarray(arr))
 
             C, H, W = int(t.shape[0]), int(t.shape[1]), int(t.shape[2])
-            orig_shapes.append((H, W))
-
-            d_img = t.float().contiguous().pin_memory().to(
-                device=self._device, non_blocking=True
-            )
+            d_img = t.float().to(device=self._device)
             ratio = min(tgt_h / H, tgt_w / W)
             new_h, new_w = int(round(H * ratio)), int(round(W * ratio))
 
+            d_out = torch.full((3, tgt_h, tgt_w), 114.0,
+                               dtype=torch.float32, device=self._device)
             d_resized = F.interpolate(
                 d_img.unsqueeze(0), size=(new_h, new_w),
                 mode="bilinear", align_corners=False,
             )[0]
-            d_batch[i, :C, :new_h, :new_w] = d_resized
+            d_out[:C, :new_h, :new_w] = d_resized
+            results[orig_idx] = (
+                torch.clamp(d_out, 0, 255).to(torch.uint8).float(),
+                (H, W),
+            )
 
-        d_batch = torch.clamp(d_batch, 0, 255).to(torch.uint8).float()
-        return d_batch.contiguous(), orig_shapes
+        # ---- Assemble final batch in original order ---------------------
+        tensors = []
+        orig_shapes: List[Tuple[int, int]] = []
+        for r in results:
+            if r is None:
+                tensors.append(torch.full((3, tgt_h, tgt_w), 114.0,
+                               dtype=torch.float32, device=self._device))
+                orig_shapes.append((0, 0))
+            else:
+                t_img, shape = r
+                if t_img.device != self._device:
+                    t_img = t_img.to(self._device)
+                tensors.append(t_img)
+                orig_shapes.append(shape)
+
+        return torch.stack(tensors, dim=0).contiguous(), orig_shapes
 
     def invoke(
         self,

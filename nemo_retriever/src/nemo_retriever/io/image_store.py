@@ -171,10 +171,13 @@ def load_image_b64_from_uri(uri: str) -> Optional[str]:
 
 
 def resolve_image_b64(container: dict) -> Optional[str]:
-    """Return image_b64, reloading from stored_image_uri or raw pixels."""
+    """Return image_b64, reloading from stored_image_uri, jpeg_bytes, or raw pixels."""
     b64 = container.get("image_b64")
     if b64 is not None:
         return b64
+    jpeg = container.get("jpeg_bytes")
+    if jpeg is not None:
+        return base64.b64encode(jpeg).decode("ascii")
     pixels = container.get("pixels")
     if pixels is not None:
         try:
@@ -220,7 +223,9 @@ class _RowCtx:
         if self._page_pil_attempted:
             return self._page_pil
         self._page_pil_attempted = True
-        if isinstance(self.page_image, dict) and self.page_image.get("pixels") is not None:
+        if isinstance(self.page_image, dict) and self.page_image.get("jpeg_bytes") is not None:
+            self._page_pil = Image.open(io.BytesIO(self.page_image["jpeg_bytes"]))
+        elif isinstance(self.page_image, dict) and self.page_image.get("pixels") is not None:
             import numpy as np
             self._page_pil = Image.fromarray(np.ascontiguousarray(self.page_image["pixels"]))
         elif isinstance(self.page_image_b64, str) and self.page_image_b64:
@@ -233,7 +238,10 @@ def _store_page_image(ctx: _RowCtx) -> dict | None:
     raw: bytes | None = None
     direct_ext = ctx.ext
 
-    if isinstance(ctx.page_image, dict) and ctx.page_image.get("pixels") is not None:
+    if isinstance(ctx.page_image, dict) and ctx.page_image.get("jpeg_bytes") is not None:
+        raw = ctx.page_image["jpeg_bytes"]
+        direct_ext = "jpg"
+    elif isinstance(ctx.page_image, dict) and ctx.page_image.get("pixels") is not None:
         import cv2
         import numpy as np
         arr = np.ascontiguousarray(ctx.page_image["pixels"])
@@ -255,6 +263,7 @@ def _store_page_image(ctx: _RowCtx) -> dict | None:
     if ctx.strip_base64:
         ctx.page_image.pop("image_b64", None)
         ctx.page_image.pop("pixels", None)
+        ctx.page_image.pop("jpeg_bytes", None)
     return ctx.page_image
 
 

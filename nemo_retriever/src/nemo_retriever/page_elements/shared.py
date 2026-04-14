@@ -97,7 +97,8 @@ def _error_payload(*, stage: str, exc: BaseException) -> Dict[str, Any]:
 def _extract_page_pixels(page_image: Dict[str, Any]) -> Tuple["np.ndarray", Tuple[int, int]]:
     """Extract raw pixel array from a page_image dict.
 
-    Supports two formats:
+    Supports three formats (checked in priority order):
+    - **JPEG bytes** (``"jpeg_bytes"`` key): cv2 decode — fast, small memory.
     - **Raw pixels** (``"pixels"`` key): zero-copy, no decode needed.
     - **Base64 legacy** (``"image_b64"`` key): base64 decode → PIL → numpy.
 
@@ -106,14 +107,23 @@ def _extract_page_pixels(page_image: Dict[str, Any]) -> Tuple["np.ndarray", Tupl
     if np is None:  # pragma: no cover
         raise ImportError("page element detection requires numpy.")
 
-    # Fast path: raw numpy pixels from extract.py (no encode/decode overhead).
+    # Preferred path: JPEG-compressed bytes (small in-memory footprint).
+    jpeg = page_image.get("jpeg_bytes")
+    if jpeg is not None:
+        import cv2 as _cv2
+        arr = _cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), _cv2.IMREAD_COLOR)
+        if arr is not None:
+            h, w = int(arr.shape[0]), int(arr.shape[1])
+            return arr, (h, w)
+
+    # Raw numpy pixels (legacy from earlier raw-pixel pipeline).
     pixels = page_image.get("pixels")
     if pixels is not None:
         arr = np.ascontiguousarray(pixels)
         h, w = int(arr.shape[0]), int(arr.shape[1])
         return arr, (h, w)
 
-    # Legacy path: base64-encoded JPEG/PNG.
+    # Base64-encoded JPEG/PNG.
     image_b64 = page_image.get("image_b64")
     if image_b64:
         if Image is None:  # pragma: no cover
@@ -126,7 +136,7 @@ def _extract_page_pixels(page_image: Dict[str, Any]) -> Tuple["np.ndarray", Tupl
             arr = arr[:, :, ::-1].copy()  # RGB → BGR
         return arr, (int(h), int(w))
 
-    raise ValueError("page_image has neither 'pixels' nor 'image_b64' key.")
+    raise ValueError("page_image has no 'jpeg_bytes', 'pixels', or 'image_b64' key.")
 
 
 def _labels_from_model(_model: Any) -> List[str]:
@@ -530,8 +540,8 @@ def detect_page_elements_v3(
             pi = row.get("page_image")
             if pi is None or not isinstance(pi, dict):
                 raise ValueError("No usable page_image found in row.")
-            if "pixels" not in pi and "image_b64" not in pi:
-                raise ValueError("page_image has neither 'pixels' nor 'image_b64'.")
+            if "jpeg_bytes" not in pi and "pixels" not in pi and "image_b64" not in pi:
+                raise ValueError("page_image has no 'jpeg_bytes', 'pixels', or 'image_b64'.")
             page_image_dicts.append(pi)
         except BaseException:
             page_image_dicts.append(None)
@@ -547,15 +557,33 @@ def detect_page_elements_v3(
 
     _DECODE_WORKERS = min(16, max(1, len(page_image_dicts)))
 
+    # When jpeg_bytes are available AND the model has GPU preprocess
+    # (DALI NVJPEG), skip CPU decode — pass bytes straight through.
+    _has_gpu_pp = hasattr(model, "preprocess_batch_gpu") if model is not None else False
+    _all_jpeg = all(
+        pi is not None and "jpeg_bytes" in pi
+        for pi in page_image_dicts
+    ) if page_image_dicts else False
+
     if not use_remote and page_image_dicts:
-        # Raw-pixels path is fast enough to not need threading, but
-        # the legacy base64 path benefits from parallel PIL decode.
-        has_raw = any(pi is not None and "pixels" in pi for pi in page_image_dicts)
-        if has_raw:
-            decode_results = [_safe_extract(pi) for pi in page_image_dicts]
+        if _all_jpeg and _has_gpu_pp:
+            # JPEG bytes will be decoded on GPU by DALI — no CPU decode needed.
+            # Store the raw bytes as the "tensor" and extract shape from the dict.
+            decode_results = []
+            for pi in page_image_dicts:
+                if pi is None:
+                    decode_results.append((None, None, ValueError("No page_image")))
+                else:
+                    sh = pi.get("orig_shape_hw", (0, 0))
+                    decode_results.append((pi["jpeg_bytes"], (int(sh[0]), int(sh[1])), None))
         else:
-            with ThreadPoolExecutor(max_workers=_DECODE_WORKERS) as pool:
-                decode_results = list(pool.map(_safe_extract, page_image_dicts))
+            has_raw = any(pi is not None and ("pixels" in pi or "jpeg_bytes" in pi)
+                          for pi in page_image_dicts)
+            if has_raw:
+                decode_results = [_safe_extract(pi) for pi in page_image_dicts]
+            else:
+                with ThreadPoolExecutor(max_workers=_DECODE_WORKERS) as pool:
+                    decode_results = list(pool.map(_safe_extract, page_image_dicts))
     else:
         decode_results = [(None, None, None)] * len(page_image_dicts)
 
@@ -567,9 +595,12 @@ def detect_page_elements_v3(
             row_payloads.append(_error_payload(stage="decode_image", exc=ValueError("No page_image")))
             continue
         b64_val = pi.get("image_b64")
-        if b64_val is None and use_remote and "pixels" in pi:
-            from nemo_retriever.ocr.ocr import _np_rgb_to_b64_png
-            b64_val = _np_rgb_to_b64_png(pi["pixels"])
+        if b64_val is None and use_remote:
+            if "jpeg_bytes" in pi:
+                b64_val = base64.b64encode(pi["jpeg_bytes"]).decode("ascii")
+            elif "pixels" in pi:
+                from nemo_retriever.ocr.ocr import _np_rgb_to_b64_png
+                b64_val = _np_rgb_to_b64_png(pi["pixels"])
         row_b64.append(b64_val)
         if use_remote:
             row_tensors.append(None)
@@ -751,7 +782,9 @@ def detect_page_elements_v3(
         # Fast path: GPU letterbox (avoids per-image CPU resize_pad).
         if _has_gpu_preprocess:
             try:
-                batch, orig_shapes = model.preprocess_batch_gpu(valid_images)  # type: ignore[union-attr]
+                batch, orig_shapes = model.preprocess_batch_gpu(  # type: ignore[union-attr]
+                    valid_images, known_shapes=valid_shapes,
+                )
                 return valid_images, orig_shapes, batch
             except Exception:
                 pass  # fall through to CPU path

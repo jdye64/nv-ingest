@@ -328,9 +328,9 @@ def table_structure_ocr_page_elements(
             page_image = getattr(row, "page_image", None) or {}
             if not isinstance(page_image, dict):
                 continue
-            page_img_source = page_image.get("pixels")
-            if page_img_source is None:
-                page_img_source = page_image.get("image_b64")
+            page_img_source = (page_image.get("jpeg_bytes")
+                               or page_image.get("pixels")
+                               or page_image.get("image_b64"))
             if page_img_source is None:
                 continue
 

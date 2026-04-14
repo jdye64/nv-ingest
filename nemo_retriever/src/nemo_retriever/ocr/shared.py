@@ -120,7 +120,7 @@ def _crop_b64_image_by_norm_bbox(
 
 
 def _crop_all_from_page(
-    page_image_source: "str | np.ndarray",
+    page_image_source: "str | bytes | np.ndarray",
     detections: List[Dict[str, Any]],
     wanted_labels: set,
     *,
@@ -130,7 +130,8 @@ def _crop_all_from_page(
     Decode the page image **once** and crop all matching detections.
 
     *page_image_source* can be:
-    - A raw HWC uint8 numpy array (BGR or RGB) — zero-copy, fastest path.
+    - ``bytes`` — JPEG-compressed image (decoded via cv2, fastest).
+    - A raw HWC uint8 numpy array (BGR or RGB) — zero-copy.
     - A base64-encoded JPEG/PNG string — legacy decode path.
 
     Returns a list of ``(label_name, bbox_xyxy_norm, value)`` tuples for
@@ -145,7 +146,13 @@ def _crop_all_from_page(
         raise ImportError("Cropping requires pillow.")
 
     try:
-        if isinstance(page_image_source, np.ndarray):
+        if isinstance(page_image_source, bytes):
+            import cv2 as _cv2
+            arr = _cv2.imdecode(np.frombuffer(page_image_source, dtype=np.uint8), _cv2.IMREAD_COLOR)
+            if arr is None:
+                return []
+            im = Image.fromarray(arr[:, :, ::-1])  # BGR → RGB for PIL
+        elif isinstance(page_image_source, np.ndarray):
             im = Image.fromarray(page_image_source)
         elif isinstance(page_image_source, str) and page_image_source:
             raw = base64.b64decode(page_image_source)
@@ -547,9 +554,9 @@ def ocr_page_elements(
                 all_text.append(None)
                 all_ocr_meta.append({"timing": None, "error": None})
                 continue
-            page_img_source = page_image.get("pixels")
-            if page_img_source is None:
-                page_img_source = page_image.get("image_b64")
+            page_img_source = (page_image.get("jpeg_bytes")
+                               or page_image.get("pixels")
+                               or page_image.get("image_b64"))
             if page_img_source is None:
                 all_table.append(table_items)
                 all_chart.append(chart_items)
@@ -861,9 +868,9 @@ def nemotron_parse_page_elements(
                 all_text.append(None)
                 all_meta.append({"timing": None, "error": None})
                 continue
-            page_img_source = page_image.get("pixels")
-            if page_img_source is None:
-                page_img_source = page_image.get("image_b64")
+            page_img_source = (page_image.get("jpeg_bytes")
+                               or page_image.get("pixels")
+                               or page_image.get("image_b64"))
             if page_img_source is None:
                 all_table.append(table_items)
                 all_chart.append(chart_items)

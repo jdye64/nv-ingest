@@ -288,18 +288,25 @@ def nemotron_parse_pages(
         page_image = getattr(row, "page_image", None) or {}
         if not isinstance(page_image, dict):
             continue
+        jpeg = page_image.get("jpeg_bytes")
         pixels = page_image.get("pixels")
         page_image_b64 = page_image.get("image_b64")
-        if pixels is None and not isinstance(page_image_b64, str):
+        if jpeg is None and pixels is None and not isinstance(page_image_b64, str):
             continue
         try:
             if use_remote:
+                if page_image_b64 is None and jpeg is not None:
+                    import base64 as _b64
+                    page_image_b64 = _b64.b64encode(jpeg).decode("ascii")
                 if page_image_b64 is None and pixels is not None:
                     from nemo_retriever.ocr.ocr import _np_rgb_to_b64_png
                     page_image_b64 = _np_rgb_to_b64_png(pixels)
                 batch_images.append(page_image_b64)
             else:
-                if pixels is not None:
+                if jpeg is not None:
+                    import cv2 as _cv2
+                    batch_images.append(_cv2.imdecode(np.frombuffer(jpeg, np.uint8), _cv2.IMREAD_COLOR))
+                elif pixels is not None:
                     batch_images.append(np.ascontiguousarray(pixels))
                 else:
                     batch_images.append(_decode_page_image(page_image_b64))
