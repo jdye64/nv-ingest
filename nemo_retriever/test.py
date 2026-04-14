@@ -20,7 +20,7 @@ embed = EmbedParams()
 
 ing = GraphIngestor(
     run_mode="batch",
-    ray_address="local",
+    ray_address="auto",
     node_overrides={
         "PDFExtractionActor": {"concurrency": 48, "batch_size": 16},
         "PageElementDetectionActor": {"concurrency": 4, "num_gpus": 0.1, "num_cpus": 0, "batch_size": 32},
@@ -57,7 +57,10 @@ ing = GraphIngestor(
 #         "_BatchEmbedActor": {"concurrency": 2, "num_gpus": 0.10, "batch_size": 256},
 #     },
 # )
-ing = ing.files(docs).extract(extract).embed(embed)
+#ing = ing.files(docs).extract(extract).embed(embed)
+
+# Disable embedding for a test
+ing = ing.files(docs).extract(extract)
 t0 = time.perf_counter()
 ray_ds = ing.ingest()
 raw_num_rows = ray_ds.count()
