@@ -419,9 +419,11 @@ def graphic_elements_ocr_page_elements(
             page_image = getattr(row, "page_image", None) or {}
             if not isinstance(page_image, dict):
                 continue
-            page_img_source = (page_image.get("jpeg_bytes")
-                               or page_image.get("pixels")
-                               or page_image.get("image_b64"))
+            page_img_source = next(
+                (v for k in ("jpeg_bytes", "pixels", "image_b64")
+                 if (v := page_image.get(k)) is not None),
+                None,
+            )
             if page_img_source is None:
                 continue
 

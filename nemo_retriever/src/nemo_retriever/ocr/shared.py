@@ -554,9 +554,11 @@ def ocr_page_elements(
                 all_text.append(None)
                 all_ocr_meta.append({"timing": None, "error": None})
                 continue
-            page_img_source = (page_image.get("jpeg_bytes")
-                               or page_image.get("pixels")
-                               or page_image.get("image_b64"))
+            page_img_source = next(
+                (v for k in ("jpeg_bytes", "pixels", "image_b64")
+                 if (v := page_image.get(k)) is not None),
+                None,
+            )
             if page_img_source is None:
                 all_table.append(table_items)
                 all_chart.append(chart_items)
@@ -868,9 +870,11 @@ def nemotron_parse_page_elements(
                 all_text.append(None)
                 all_meta.append({"timing": None, "error": None})
                 continue
-            page_img_source = (page_image.get("jpeg_bytes")
-                               or page_image.get("pixels")
-                               or page_image.get("image_b64"))
+            page_img_source = next(
+                (v for k in ("jpeg_bytes", "pixels", "image_b64")
+                 if (v := page_image.get(k)) is not None),
+                None,
+            )
             if page_img_source is None:
                 all_table.append(table_items)
                 all_chart.append(chart_items)
