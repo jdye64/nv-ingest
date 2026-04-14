@@ -399,33 +399,13 @@ class TRTYoloxEngine:
         from nemotron_page_elements_v3.yolox.boxes import postprocess as _yolox_nms
         self._yolox_nms = _yolox_nms
 
-        # DALI-accelerated letterbox preprocessing (optional).
-        # Prefer the JPEG pipeline (NVJPEG hardware decode on GPU);
-        # keep the raw-array pipeline as fallback for numpy inputs.
+        # DALI pipelines disabled — they caused persistent "Critical error
+        # in pipeline" / "Current pipeline object is no longer valid" failures
+        # and always fell back to the torch path anyway, adding thousands of
+        # exception-handling round-trips per run.  The torch letterbox path
+        # (F.interpolate + F.pad) is reliable and fast enough on modern GPUs.
         self._dali_jpeg_pipe: Optional[_DaliJpegLetterboxPipeline] = None
         self._dali_pipe: Optional[_DaliLetterboxPipeline] = None
-        if _DALI_AVAILABLE:
-            dev_id = self._device.index or 0
-            try:
-                self._dali_jpeg_pipe = _DaliJpegLetterboxPipeline(
-                    target_h=input_shape[0],
-                    target_w=input_shape[1],
-                    device_id=dev_id,
-                    max_batch_size=128,
-                )
-                logger.info("DALI JPEG (NVJPEG) letterbox pipeline initialized.")
-            except Exception:
-                logger.warning("DALI JPEG pipeline init failed.", exc_info=True)
-            try:
-                self._dali_pipe = _DaliLetterboxPipeline(
-                    target_h=input_shape[0],
-                    target_w=input_shape[1],
-                    device_id=dev_id,
-                    max_batch_size=128,
-                )
-                logger.info("DALI raw-array letterbox pipeline initialized.")
-            except Exception:
-                logger.warning("DALI raw-array pipeline init failed.", exc_info=True)
 
         logger.info(
             "TRTYoloxEngine loaded: path=%s, input=%s, outputs=%s, "
