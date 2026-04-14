@@ -925,28 +925,12 @@ class TRTEmbedEngine:
             "attention_mask": np.ascontiguousarray(attention_mask),
         }
 
-        # Set input shapes first (TRT needs all inputs before output shape resolves).
-        for name, arr in inputs_np.items():
-            if name in self._io_info:
-                ctx.set_input_shape(name, arr.shape)
-
-        # Resolve output shape — must happen after all set_input_shape calls.
-        out_shape = tuple(ctx.get_tensor_shape(self._output_name))
-        if any(d < 0 for d in out_shape):
-            raise RuntimeError(
-                f"TRT output shape still unresolved: {out_shape} for "
-                f"input ({B}, {S}) on profile {profile_idx}. "
-                f"Profiles: {self._profiles}"
-            )
-        out_np_dtype = np.dtype(self._io_info[self._output_name]["dtype"])
-        out_t_dtype = _NP_TO_TORCH_DTYPE.get(out_np_dtype, torch.float32)
-        slot.d_output = torch.empty(out_shape, dtype=out_t_dtype, device=self._device)
-        ctx.set_tensor_address(self._output_name, slot.d_output.data_ptr())
-
-        # Transfer input data to GPU with pinned memory.
+        # Allocate input GPU tensors, set shapes and addresses — TRT 10.x
+        # needs valid tensor addresses before output shape can resolve.
         slot.d_inputs = {}
         for name, arr in inputs_np.items():
             if name in self._io_info:
+                ctx.set_input_shape(name, arr.shape)
                 np_dtype = np.dtype(arr.dtype)
                 t_dtype = _NP_TO_TORCH_DTYPE.get(np_dtype, torch.int32)
                 cpu_buf = torch.tensor(arr, dtype=t_dtype).contiguous().pin_memory()
@@ -955,6 +939,30 @@ class TRTEmbedEngine:
                 ctx.set_tensor_address(name, d_buf.data_ptr())
                 slot.d_inputs[name] = d_buf
                 slot.d_inputs[f"_pin_{name}"] = cpu_buf
+
+        # Resolve output shape — happens after all input shapes AND addresses
+        # are set, which TRT 10.x requires for shape inference.
+        out_shape = tuple(ctx.get_tensor_shape(self._output_name))
+        if any(d < 0 for d in out_shape):
+            # Fallback: infer output shape from the engine's static dim and
+            # the known input batch/seq dims.  Embed engines produce [B, S, D].
+            engine_out_shape = self._io_info[self._output_name]["shape"]
+            D = engine_out_shape[-1] if len(engine_out_shape) >= 3 and engine_out_shape[-1] > 0 else None
+            if D is not None:
+                out_shape = (B, S, D)
+                logger.debug(
+                    "Inferred output shape %s from engine static dim D=%d", out_shape, D
+                )
+            else:
+                raise RuntimeError(
+                    f"TRT output shape unresolved: {out_shape} for "
+                    f"input ({B}, {S}) on profile {profile_idx}. "
+                    f"Profiles: {self._profiles}"
+                )
+        out_np_dtype = np.dtype(self._io_info[self._output_name]["dtype"])
+        out_t_dtype = _NP_TO_TORCH_DTYPE.get(out_np_dtype, torch.float32)
+        slot.d_output = torch.empty(out_shape, dtype=out_t_dtype, device=self._device)
+        ctx.set_tensor_address(self._output_name, slot.d_output.data_ptr())
 
         with torch.cuda.stream(slot.stream):
             ctx.execute_async_v3(stream_handle=slot.stream.cuda_stream)
