@@ -62,9 +62,45 @@ t1 = time.perf_counter()
 df = ray_ds.to_pandas()
 print(f"  → {len(df)} rows in {time.perf_counter() - t1:.2f}s")
 
+import json
+
+# ── Debug: dump raw DataFrame columns and a sample row ──────────────
+DUMP_DIR = Path("/tmp/nemo_retriever_debug")
+DUMP_DIR.mkdir(parents=True, exist_ok=True)
+
+print(f"DataFrame columns: {list(df.columns)}")
+df_sample = df.head(3)
+df_sample.to_json(DUMP_DIR / "df_sample.json", orient="records", indent=2, default_handler=str)
+print(f"  → wrote {DUMP_DIR / 'df_sample.json'}")
+
+# Check for embeddings in both possible locations
+for i, row in df.head(3).iterrows():
+    meta = row.get("metadata")
+    embed_col = row.get("text_embeddings_1b_v2")
+    meta_emb = None
+    col_emb = None
+    if isinstance(meta, dict):
+        meta_emb = meta.get("embedding")
+    if isinstance(embed_col, dict):
+        col_emb = embed_col.get("embedding")
+    meta_type = type(meta_emb).__name__ if meta_emb is not None else "None"
+    col_type = type(col_emb).__name__ if col_emb is not None else "None"
+    meta_len = len(meta_emb) if hasattr(meta_emb, '__len__') else "N/A"
+    col_len = len(col_emb) if hasattr(col_emb, '__len__') else "N/A"
+    print(f"  row {i}: metadata.embedding type={meta_type} len={meta_len} | "
+          f"text_embeddings_1b_v2.embedding type={col_type} len={col_len}")
+
 print("Building LanceDB rows …")
 lance_rows = build_lancedb_rows(df)
 print(f"  → {len(lance_rows)} rows with embeddings (from {len(df)} total rows)")
+
+if lance_rows:
+    sample_vec = lance_rows[0].get("vector", [])
+    print(f"  → first vector: type={type(sample_vec).__name__}, len={len(sample_vec)}, "
+          f"first_5={sample_vec[:5]}")
+    with open(DUMP_DIR / "lance_rows_sample.json", "w") as f:
+        json.dump(lance_rows[:3], f, indent=2, default=str)
+    print(f"  → wrote {DUMP_DIR / 'lance_rows_sample.json'}")
 
 if not lance_rows:
     print("ERROR: No embeddings found in the output. Skipping LanceDB + recall.")
