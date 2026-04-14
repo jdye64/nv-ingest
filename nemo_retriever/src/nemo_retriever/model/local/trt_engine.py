@@ -798,16 +798,65 @@ class TRTEmbedEngine:
         self._slots = [_EmbedSlot(engine, self._device) for _ in range(2)]
         self._active_slot = 0
 
+        # Determine the static embedding dimension via a lightweight probe.
+        self._embed_dim: Optional[int] = self._probe_embed_dim()
+
         logger.info(
             "TRTEmbedEngine loaded: path=%s, tensors=%s, max_length=%d, "
-            "normalize=%s, profiles=%s, double_buffer=True, device=%s",
+            "normalize=%s, profiles=%s, embed_dim=%s, double_buffer=True, device=%s",
             engine_path,
             list(self._io_info.keys()),
             self._max_length,
             normalize,
             self._profiles,
+            self._embed_dim,
             self._device,
         )
+
+    def _probe_embed_dim(self) -> Optional[int]:
+        """Run a tiny shape-only probe to discover the embedding dimension.
+
+        Sets (1, 2) inputs on slot-0's context, calls ``infer_shapes()``, and
+        reads back the output shape.  Falls back to any positive static dim
+        found in the engine metadata.
+        """
+        # 1. Check the engine's static output shape for a positive last dim.
+        static_shape = self._io_info[self._output_name]["shape"]
+        pos_dims = [d for d in static_shape if d > 0]
+        if pos_dims:
+            return pos_dims[-1]
+
+        # 2. Probe via infer_shapes on slot 0.
+        slot = self._slots[0]
+        ctx = slot.ctx
+        try:
+            slot.stream.synchronize()
+            torch.cuda.current_stream(self._device).synchronize()
+
+            ctx.set_optimization_profile_async(0, slot.stream.cuda_stream)
+            slot.stream.synchronize()
+
+            probe_shape = (1, 2)
+            d_probe = torch.ones(probe_shape, dtype=torch.int32, device=self._device)
+            for name, info in self._io_info.items():
+                if info["is_input"]:
+                    ctx.set_input_shape(name, probe_shape)
+                    ctx.set_tensor_address(name, d_probe.data_ptr())
+
+            try:
+                ctx.infer_shapes()
+            except Exception:
+                pass
+
+            out_shape = tuple(ctx.get_tensor_shape(self._output_name))
+            pos_dims = [d for d in out_shape if d > 0]
+            if pos_dims:
+                logger.debug("Probed embed_dim=%d from output shape %s", pos_dims[-1], out_shape)
+                return pos_dims[-1]
+        except Exception as exc:
+            logger.debug("embed dim probe failed: %s", exc)
+
+        return None
 
     @property
     def is_remote(self) -> bool:
@@ -940,25 +989,27 @@ class TRTEmbedEngine:
                 slot.d_inputs[name] = d_buf
                 slot.d_inputs[f"_pin_{name}"] = cpu_buf
 
-        # Resolve output shape — happens after all input shapes AND addresses
-        # are set, which TRT 10.x requires for shape inference.
+        # Explicitly trigger shape inference now that all inputs are bound.
+        try:
+            ctx.infer_shapes()
+        except Exception:
+            pass
+
         out_shape = tuple(ctx.get_tensor_shape(self._output_name))
         if any(d < 0 for d in out_shape):
-            # Fallback: infer output shape from the engine's static dim and
-            # the known input batch/seq dims.  Embed engines produce [B, S, D].
-            engine_out_shape = self._io_info[self._output_name]["shape"]
-            D = engine_out_shape[-1] if len(engine_out_shape) >= 3 and engine_out_shape[-1] > 0 else None
-            if D is not None:
-                out_shape = (B, S, D)
-                logger.debug(
-                    "Inferred output shape %s from engine static dim D=%d", out_shape, D
-                )
-            else:
+            D = self._embed_dim
+            if D is None:
                 raise RuntimeError(
                     f"TRT output shape unresolved: {out_shape} for "
                     f"input ({B}, {S}) on profile {profile_idx}. "
                     f"Profiles: {self._profiles}"
                 )
+            ndim = len(out_shape)
+            out_shape = (B, S, D) if ndim >= 3 else (B, D)
+            logger.debug("Used cached embed_dim=%d → output shape %s", D, out_shape)
+        else:
+            if self._embed_dim is None:
+                self._embed_dim = out_shape[-1]
         out_np_dtype = np.dtype(self._io_info[self._output_name]["dtype"])
         out_t_dtype = _NP_TO_TORCH_DTYPE.get(out_np_dtype, torch.float32)
         slot.d_output = torch.empty(out_shape, dtype=out_t_dtype, device=self._device)
@@ -981,7 +1032,10 @@ class TRTEmbedEngine:
         slot.stream.synchronize()
 
         hidden = slot.d_output.float()  # type: ignore[union-attr]
-        pooled = (hidden * mask_gpu).sum(dim=1) / mask_gpu.sum(dim=1)
+        if hidden.ndim == 3:
+            pooled = (hidden * mask_gpu).sum(dim=1) / mask_gpu.sum(dim=1)
+        else:
+            pooled = hidden
         if self._normalize:
             pooled = _l2_normalize(pooled)
 
