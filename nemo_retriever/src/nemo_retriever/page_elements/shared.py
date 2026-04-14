@@ -890,6 +890,29 @@ def detect_page_elements_v3(
                 time.perf_counter() - _pending_t0,  # type: ignore[operator]
             )
 
+    # ---- Decode-once: write decoded pixels back so downstream stages
+    # (table-structure, graphic-elements, OCR) skip redundant JPEG decode.
+    if not use_remote:
+        target_df = pages_df if kwargs.get("_inplace") else None
+        for idx, pi in enumerate(page_image_dicts):
+            if pi is None:
+                continue
+            t = row_tensors[idx]
+            if t is None:
+                continue
+            if "jpeg_bytes" not in pi:
+                continue
+            if isinstance(t, torch.Tensor):
+                arr_hwc = t.cpu().numpy()
+                if arr_hwc.ndim == 3 and int(arr_hwc.shape[0]) == 3:
+                    arr_hwc = np.ascontiguousarray(arr_hwc.transpose(1, 2, 0))
+            elif isinstance(t, np.ndarray):
+                arr_hwc = t
+            else:
+                continue
+            pi["pixels"] = arr_hwc
+            pi.pop("jpeg_bytes", None)
+
     if kwargs.get("_inplace"):
         pages_df[output_column] = row_payloads
         pages_df[num_detections_column] = [

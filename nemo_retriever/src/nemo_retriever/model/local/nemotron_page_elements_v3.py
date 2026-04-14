@@ -2,10 +2,11 @@
 # All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, Dict, List, Sequence, Tuple, Union, cast  # noqa: F401
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union, cast  # noqa: F401
 
 from torch import nn
 import torch
+import torch.nn.functional as F
 import numpy as np
 from nemo_retriever.utils.hf_cache import configure_global_hf_cache_base
 from ..model import HuggingFaceModel, RunMode
@@ -92,6 +93,62 @@ class NemotronPageElementsV3(HuggingFaceModel):
             return y.unsqueeze(0)
 
         raise ValueError(f"Expected CHW or BCHW tensor, got shape {tuple(x.shape)}")
+
+    def preprocess_batch_gpu(
+        self,
+        images: List[Any],
+        known_shapes: Optional[List[Optional[Tuple[int, int]]]] = None,
+    ) -> Tuple[torch.Tensor, List[Tuple[int, int]]]:
+        """Letterbox a list of HWC numpy arrays on GPU in one batched pass."""
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        tgt_h, tgt_w = self._page_elements_input_shape
+        tensors: List[torch.Tensor] = []
+        orig_shapes: List[Tuple[int, int]] = []
+
+        for idx, img in enumerate(images):
+            if isinstance(img, np.ndarray):
+                arr = img
+                if arr.ndim == 4:
+                    arr = arr[0]
+                if int(arr.shape[-1]) == 3 and int(arr.shape[0]) != 3:
+                    t = torch.from_numpy(np.ascontiguousarray(arr)).permute(2, 0, 1)
+                else:
+                    t = torch.from_numpy(np.ascontiguousarray(arr))
+            elif isinstance(img, torch.Tensor):
+                t = img
+                if t.ndim == 4:
+                    t = t[0]
+                if t.ndim == 3 and int(t.shape[-1]) == 3 and int(t.shape[0]) != 3:
+                    t = t.permute(2, 0, 1)
+            elif isinstance(img, bytes):
+                import cv2
+                decoded = cv2.imdecode(np.frombuffer(img, dtype=np.uint8), cv2.IMREAD_COLOR)
+                if decoded is None:
+                    t = torch.full((3, tgt_h, tgt_w), 114.0, dtype=torch.float32)
+                    tensors.append(t.to(device))
+                    orig_shapes.append((0, 0))
+                    continue
+                t = torch.from_numpy(np.ascontiguousarray(decoded)).permute(2, 0, 1)
+            else:
+                raise TypeError(f"Unsupported image type: {type(img)!r}")
+
+            C, H, W = int(t.shape[0]), int(t.shape[1]), int(t.shape[2])
+            orig_shapes.append((H, W))
+
+            d_img = t.float().to(device=device)
+            ratio = min(tgt_h / H, tgt_w / W)
+            new_h, new_w = int(round(H * ratio)), int(round(W * ratio))
+
+            d_resized = F.interpolate(
+                d_img.unsqueeze(0), size=(new_h, new_w),
+                mode="bilinear", align_corners=False,
+            )[0]
+            d_out = torch.full((C, tgt_h, tgt_w), 114.0,
+                               dtype=torch.float32, device=device)
+            d_out[:C, :new_h, :new_w] = d_resized
+            tensors.append(torch.clamp(d_out, 0, 255).to(torch.uint8).float())
+
+        return torch.stack(tensors, dim=0).contiguous(), orig_shapes
 
     def __call__(
         self, input_data: torch.Tensor, orig_shape: Union[Tuple[int, int], Sequence[Tuple[int, int]]]

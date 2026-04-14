@@ -55,16 +55,32 @@ class LlamaNemotronEmbed1BV2Embedder:
             cache_dir=hf_cache_dir,
             trust_remote_code=True,
         )
-        self._model = AutoModel.from_pretrained(
-            MODEL_ID,
+
+        _load_kwargs = dict(
             revision=_revision,
             trust_remote_code=True,
             cache_dir=hf_cache_dir,
             torch_dtype=torch.bfloat16,
         )
+        for _attn_impl in ("flash_attention_2", "sdpa", "eager"):
+            try:
+                self._model = AutoModel.from_pretrained(
+                    MODEL_ID, attn_implementation=_attn_impl, **_load_kwargs,
+                )
+                break
+            except Exception:
+                continue
+        if self._model is None:
+            self._model = AutoModel.from_pretrained(MODEL_ID, **_load_kwargs)
+
         self._model = self._model.to(dev)
         self._model.eval()
         self._device = dev
+
+        try:
+            self._model = torch.compile(self._model)
+        except Exception:
+            pass
 
     @property
     def is_remote(self) -> bool:

@@ -337,7 +337,14 @@ def table_structure_ocr_page_elements(
             if page_img_source is None:
                 continue
 
-            crops = _crop_all_from_page(page_img_source, dets, {"table"})
+            _use_gpu_crop = (
+                not use_remote_ts
+                and not use_remote_ocr
+                and hasattr(table_structure_model, "preprocess_batch_gpu")
+            )
+            crops = _crop_all_from_page(
+                page_img_source, dets, {"table"}, on_gpu=_use_gpu_crop,
+            )
             if not crops:
                 continue
 

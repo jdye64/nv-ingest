@@ -125,6 +125,7 @@ def _crop_all_from_page(
     wanted_labels: set,
     *,
     as_b64: bool = False,
+    on_gpu: bool = False,
 ) -> List[Tuple[str, List[float], Any]]:
     """
     Decode the page image **once** and crop all matching detections.
@@ -141,6 +142,10 @@ def _crop_all_from_page(
     When *as_b64* is ``False`` (default), *value* is an HWC uint8 numpy array
     suitable for local model inference.  When ``True``, *value* is a base64-
     encoded PNG string.
+
+    When *on_gpu* is ``True``, the page image is uploaded to GPU once and
+    crops are extracted via GPU tensor slicing.  Each *value* is an HWC
+    ``torch.Tensor`` on the GPU device.  Incompatible with *as_b64*.
     """
     try:
         if isinstance(page_image_source, bytes):
@@ -164,6 +169,14 @@ def _crop_all_from_page(
     h, w = arr.shape[0], arr.shape[1]
     if w <= 1 or h <= 1:
         return []
+
+    import torch as _torch
+
+    gpu_tensor: Optional[_torch.Tensor] = None
+    if on_gpu and not as_b64 and _torch.cuda.is_available():
+        gpu_tensor = _torch.from_numpy(np.ascontiguousarray(arr)).to(
+            device="cuda", non_blocking=True,
+        )
 
     def _clamp_int(v: float, lo: int, hi: int) -> int:
         if v != v:  # NaN
@@ -201,6 +214,8 @@ def _crop_all_from_page(
             crop_pil.save(buf, format="PNG")
             crop_pil.close()
             value = base64.b64encode(buf.getvalue()).decode("ascii")
+        elif gpu_tensor is not None:
+            value = gpu_tensor[y1:y2, x1:x2].contiguous()
         else:
             value = arr[y1:y2, x1:x2].copy()
         results.append((label_name, [float(x) for x in bbox], value))

@@ -428,7 +428,14 @@ def graphic_elements_ocr_page_elements(
             if page_img_source is None:
                 continue
 
-            crops = _crop_all_from_page(page_img_source, dets, {"chart"})
+            _use_gpu_crop = (
+                not use_remote_ge
+                and not use_remote_ocr
+                and hasattr(graphic_elements_model, "preprocess_batch_gpu")
+            )
+            crops = _crop_all_from_page(
+                page_img_source, dets, {"chart"}, on_gpu=_use_gpu_crop,
+            )
             if not crops:
                 continue
 

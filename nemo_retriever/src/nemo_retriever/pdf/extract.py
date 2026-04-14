@@ -178,7 +178,7 @@ def pdf_extraction(
     extract_infographics: bool = False,
     dpi: int = 200,
     image_format: str = "jpeg",
-    jpeg_quality: int = 100,
+    jpeg_quality: int = 85,
     text_extraction_method: str = "pdfium_hybrid",
     text_depth: str = "page",
     render_mode: RenderMode = "fit_to_model",
