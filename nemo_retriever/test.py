@@ -64,14 +64,15 @@ print(f"  → {len(df)} rows in {time.perf_counter() - t1:.2f}s")
 
 import json
 
-# ── Debug: dump raw DataFrame columns and a sample row ──────────────
-DUMP_DIR = Path("/tmp/nemo_retriever_debug")
-DUMP_DIR.mkdir(parents=True, exist_ok=True)
-
-print(f"DataFrame columns: {list(df.columns)}")
-df_sample = df.head(3)
-df_sample.to_json(DUMP_DIR / "df_sample.json", orient="records", indent=2, default_handler=str)
-print(f"  → wrote {DUMP_DIR / 'df_sample.json'}")
+# ── Debug: verify trt_engine module path and code ──────────────
+import nemo_retriever.model.local.trt_engine as _trt_mod
+print(f"trt_engine module loaded from: {_trt_mod.__file__}")
+import inspect
+src = inspect.getsource(_trt_mod.TRTEmbedEngine._bind_extra_inputs)
+has_65536 = "65536" in src
+has_profile_shapes = "_extra_input_shapes" in src
+print(f"  _bind_extra_inputs has 65536 fallback: {has_65536}")
+print(f"  _bind_extra_inputs uses _extra_input_shapes: {has_profile_shapes}")
 
 # Check for embeddings in both possible locations
 for i, row in df.head(3).iterrows():

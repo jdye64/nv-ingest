@@ -797,14 +797,24 @@ class TRTEmbedEngine:
         self._max_length = min(max_length, abs_max_seq)
 
         # Catalogue extra input tensors (beyond input_ids / attention_mask).
+        # For each, query the profile-0 max shape so we know the exact
+        # dimensions TRT expects (e.g. `dimensions` is always (1,)).
         _PRIMARY_INPUTS = {"input_ids", "attention_mask"}
         self._extra_input_names: List[str] = []
+        self._extra_input_shapes: Dict[str, Tuple[int, ...]] = {}
         for name, info in self._io_info.items():
             if info["is_input"] and name not in _PRIMARY_INPUTS:
                 self._extra_input_names.append(name)
+                try:
+                    _min_s, _opt_s, max_s = engine.get_tensor_profile_shape(name, 0)
+                    self._extra_input_shapes[name] = tuple(int(d) for d in max_s)
+                except Exception:
+                    self._extra_input_shapes[name] = (1,)
                 logger.info(
-                    "TRTEmbedEngine: extra input tensor '%s' shape=%s dtype=%s",
-                    name, info["shape"], info["dtype"],
+                    "TRTEmbedEngine: extra input tensor '%s' engine_shape=%s "
+                    "profile_max_shape=%s dtype=%s",
+                    name, info["shape"], self._extra_input_shapes[name],
+                    info["dtype"],
                 )
 
         # Double-buffer: two slots with independent contexts / streams.
@@ -828,34 +838,23 @@ class TRTEmbedEngine:
             self._device,
         )
 
-    def _make_extra_input(self, name: str, B: int) -> torch.Tensor:
-        """Create a GPU tensor for an extra input (e.g. ``dimensions``).
-
-        For the ``dimensions`` tensor (Matryoshka), the value is set to the
-        full embedding dimension so the model outputs untruncated vectors.
-        """
-        info = self._io_info[name]
-        ndim = len(info["shape"])
-        np_dtype = np.dtype(info["dtype"])
-        t_dtype = _NP_TO_TORCH_DTYPE.get(np_dtype, torch.int32)
-
-        fill = 0
-        if name == "dimensions":
-            # Use discovered dim, or a large default so the model outputs its
-            # full (untruncated) embedding rather than a 1-d scalar.
-            fill = self._embed_dim if self._embed_dim is not None else 65536
-
-        if ndim == 0:
-            return torch.full((), fill, dtype=t_dtype, device=self._device)
-        if ndim == 1:
-            return torch.full((B,), fill, dtype=t_dtype, device=self._device)
-        return torch.full((B, 1), fill, dtype=t_dtype, device=self._device)
-
     def _bind_extra_inputs(self, ctx: Any, slot: Any, B: int) -> None:
-        """Set shapes and addresses for all extra input tensors on *ctx*."""
+        """Set shapes and addresses for all extra input tensors on *ctx*.
+
+        Uses the profile-derived shape for each tensor (queried at init)
+        rather than guessing from the batch dimension.
+        """
         for name in self._extra_input_names:
-            d_extra = self._make_extra_input(name, B)
-            shape = tuple(d_extra.shape) if d_extra.ndim > 0 else (1,)
+            info = self._io_info[name]
+            np_dtype = np.dtype(info["dtype"])
+            t_dtype = _NP_TO_TORCH_DTYPE.get(np_dtype, torch.int32)
+            shape = self._extra_input_shapes.get(name, (1,))
+
+            fill = 0
+            if name == "dimensions":
+                fill = self._embed_dim if self._embed_dim is not None else 65536
+
+            d_extra = torch.full(shape, fill, dtype=t_dtype, device=self._device)
             ctx.set_input_shape(name, shape)
             ctx.set_tensor_address(name, d_extra.data_ptr())
             slot.d_inputs[f"_extra_{name}"] = d_extra
@@ -889,25 +888,17 @@ class TRTEmbedEngine:
                     ctx.set_input_shape(name, probe_shape)
                     ctx.set_tensor_address(name, d_probe.data_ptr())
 
-            # Bind extra inputs with a large fill value for 'dimensions'
-            # so the model outputs full-size embeddings during the probe.
+            # Bind extra inputs using profile-derived shapes with a large
+            # fill value for 'dimensions' so the model outputs full embeddings.
             slot.d_inputs = {}
-            PROBE_DIM_FILL = 8192
+            PROBE_DIM_FILL = 65536
             for extra_name in self._extra_input_names:
                 info = self._io_info[extra_name]
-                extra_ndim = len(info["shape"])
                 extra_np_dtype = np.dtype(info["dtype"])
                 extra_t_dtype = _NP_TO_TORCH_DTYPE.get(extra_np_dtype, torch.int32)
-                if extra_ndim <= 1:
-                    d_extra = torch.full(
-                        (probe_B,), PROBE_DIM_FILL, dtype=extra_t_dtype, device=self._device,
-                    )
-                    ctx.set_input_shape(extra_name, (probe_B,))
-                else:
-                    d_extra = torch.full(
-                        (probe_B, 1), PROBE_DIM_FILL, dtype=extra_t_dtype, device=self._device,
-                    )
-                    ctx.set_input_shape(extra_name, (probe_B, 1))
+                shape = self._extra_input_shapes.get(extra_name, (1,))
+                d_extra = torch.full(shape, PROBE_DIM_FILL, dtype=extra_t_dtype, device=self._device)
+                ctx.set_input_shape(extra_name, shape)
                 ctx.set_tensor_address(extra_name, d_extra.data_ptr())
                 slot.d_inputs[f"_extra_{extra_name}"] = d_extra
 
