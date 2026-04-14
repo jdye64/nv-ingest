@@ -26,12 +26,12 @@ ing = GraphIngestor(
     run_mode="batch",
     ray_address="auto",
     node_overrides={
-        "PDFExtractionActor": {"concurrency": 8, "batch_size": 16},
-        "PageElementDetectionActor": {"concurrency": 4, "num_gpus": 0.04, "batch_size": 64},
-        "TableStructureActor": {"concurrency": 2, "num_gpus": 0.04, "batch_size": 32},
-        "GraphicElementsActor": {"concurrency": 2, "num_gpus": 0.04, "batch_size": 32},
-        "OCRActor": {"concurrency": 6, "num_gpus": 0.04, "batch_size": 64},
-        "_BatchEmbedActor": {"concurrency": 4, "num_gpus": 0.04, "batch_size": 512},
+        "PDFExtractionActor": {"concurrency": 16, "batch_size": 16},
+        "PageElementDetectionActor": {"concurrency": 2, "num_gpus": 0.10, "batch_size": 32},
+        "TableStructureActor": {"concurrency": 2, "num_gpus": 0.10, "batch_size": 16},
+        "GraphicElementsActor": {"concurrency": 2, "num_gpus": 0.10, "batch_size": 16},
+        "OCRActor": {"concurrency": 4, "num_gpus": 0.15, "batch_size": 32},
+        "_BatchEmbedActor": {"concurrency": 2, "num_gpus": 0.15, "batch_size": 256},
     },
 )
 ing = ing.files(docs).extract(extract).embed(embed)
