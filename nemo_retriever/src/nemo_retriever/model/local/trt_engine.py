@@ -827,16 +827,25 @@ class TRTEmbedEngine:
         )
 
     def _make_extra_input(self, name: str, B: int) -> torch.Tensor:
-        """Create a GPU tensor for an extra input (e.g. ``dimensions``)."""
+        """Create a GPU tensor for an extra input (e.g. ``dimensions``).
+
+        For the ``dimensions`` tensor (Matryoshka), the value is set to the
+        full embedding dimension so the model outputs untruncated vectors.
+        """
         info = self._io_info[name]
         ndim = len(info["shape"])
         np_dtype = np.dtype(info["dtype"])
         t_dtype = _NP_TO_TORCH_DTYPE.get(np_dtype, torch.int32)
+
+        fill = 0
+        if name == "dimensions" and self._embed_dim is not None:
+            fill = self._embed_dim
+
         if ndim == 0:
-            return torch.zeros((), dtype=t_dtype, device=self._device)
+            return torch.full((), fill, dtype=t_dtype, device=self._device)
         if ndim == 1:
-            return torch.zeros((B,), dtype=t_dtype, device=self._device)
-        return torch.zeros((B, 1), dtype=t_dtype, device=self._device)
+            return torch.full((B,), fill, dtype=t_dtype, device=self._device)
+        return torch.full((B, 1), fill, dtype=t_dtype, device=self._device)
 
     def _bind_extra_inputs(self, ctx: Any, slot: Any, B: int) -> None:
         """Set shapes and addresses for all extra input tensors on *ctx*."""
@@ -876,8 +885,27 @@ class TRTEmbedEngine:
                     ctx.set_input_shape(name, probe_shape)
                     ctx.set_tensor_address(name, d_probe.data_ptr())
 
+            # Bind extra inputs with a large fill value for 'dimensions'
+            # so the model outputs full-size embeddings during the probe.
             slot.d_inputs = {}
-            self._bind_extra_inputs(ctx, slot, probe_B)
+            PROBE_DIM_FILL = 8192
+            for extra_name in self._extra_input_names:
+                info = self._io_info[extra_name]
+                extra_ndim = len(info["shape"])
+                extra_np_dtype = np.dtype(info["dtype"])
+                extra_t_dtype = _NP_TO_TORCH_DTYPE.get(extra_np_dtype, torch.int32)
+                if extra_ndim <= 1:
+                    d_extra = torch.full(
+                        (probe_B,), PROBE_DIM_FILL, dtype=extra_t_dtype, device=self._device,
+                    )
+                    ctx.set_input_shape(extra_name, (probe_B,))
+                else:
+                    d_extra = torch.full(
+                        (probe_B, 1), PROBE_DIM_FILL, dtype=extra_t_dtype, device=self._device,
+                    )
+                    ctx.set_input_shape(extra_name, (probe_B, 1))
+                ctx.set_tensor_address(extra_name, d_extra.data_ptr())
+                slot.d_inputs[f"_extra_{extra_name}"] = d_extra
 
             try:
                 ctx.infer_shapes()
