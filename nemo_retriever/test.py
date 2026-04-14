@@ -24,7 +24,7 @@ embed = EmbedParams(
 
 ing = GraphIngestor(
     run_mode="batch",
-    ray_address="auto",
+    ray_address="local",
     # node_overrides={
     #     # Single-GPU budget: total = 1.0 GPU so all stages coexist.
     #     #   5×0.05 + 2×0.05 + 2×0.05 + 5×0.05 + 6×0.05 = 1.0 GPU
