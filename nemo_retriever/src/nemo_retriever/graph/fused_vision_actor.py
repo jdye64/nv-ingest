@@ -4,28 +4,29 @@
 
 """Fused vision actor — all vision models in one Ray Data stage.
 
-Performance tricks applied:
-1. **Zero intermediate serialization** — DataFrame never leaves process
-   memory between the four model stages.
-2. **Overlapped CPU↔GPU** — JPEG→numpy decode runs on CPU threads
-   *while* page-element detection runs on GPU (DALI NVJPEG).
-3. **Parallel table + graphic** — table-structure and graphic-elements
-   are independent (disjoint output columns, read-only on inputs) so
-   they run concurrently in separate threads with their own CUDA
-   streams.
-4. **Thread-pooled JPEG decode** — ``cv2.imdecode`` releases the GIL;
-   a persistent thread pool decodes all pages in parallel.
-5. **Single decode, shared pixels** — each page's JPEG bytes are decoded
-   exactly once; all downstream stages consume the cached numpy array.
-6. **Compact on exit** — decoded pixels are swapped back to JPEG bytes
-   before the DataFrame is serialized to the object store.
+Restructured pipeline:
+
+1. **Overlapped detection + JPEG decode** — DALI NVJPEG detects on GPU
+   while cv2 decodes JPEGs to numpy on CPU threads concurrently.
+2. **Table-structure TRT** — batched GPU inference (no OCR yet).
+3. **Graphic-elements TRT** — batched GPU inference (no OCR yet).
+   Runs sequentially after table-structure since both share the same
+   GPU; threading them only adds contention.
+4. **Unified OCR** — ALL crops (table + chart) are collected and run
+   through the OCR model in a single batched pass, eliminating the
+   per-crop GPU syncs that were the main bottleneck.
+5. **Join + stitch** — structure/GE detections are joined with OCR
+   results per-crop and written to the DataFrame.
+6. **Compact** — decoded pixels are swapped back to JPEG bytes for
+   compact object-store serialization.
 """
 
 from __future__ import annotations
 
 import logging
 import time
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
@@ -38,6 +39,7 @@ from nemo_retriever.graph.gpu_operator import GPUOperator
 logger = logging.getLogger(__name__)
 
 _DECODE_THREADS = 8
+_OCR_BATCH_SIZE = 8
 
 
 def _decode_one(pair: Tuple[int, bytes]) -> Tuple[int, "np.ndarray | None", bytes]:
@@ -50,9 +52,9 @@ def _decode_one(pair: Tuple[int, bytes]) -> Tuple[int, "np.ndarray | None", byte
 class FusedVisionActor(AbstractOperator, GPUOperator):
     """Single GPU actor that runs the full vision pipeline in-process.
 
-    Loads all four vision sub-actors once in ``__init__`` and keeps a
-    persistent thread pool for CPU-bound work (JPEG decode, image
-    cropping) so it can overlap with GPU inference.
+    Loads all vision sub-actors once in ``__init__`` and orchestrates
+    a restructured pipeline that batches ALL OCR crops into a single
+    pass instead of running per-crop OCR inside each model stage.
     """
 
     def __init__(
@@ -114,7 +116,6 @@ class FusedVisionActor(AbstractOperator, GPUOperator):
         self._use_table_structure = use_table_structure and extract_tables
         self._use_graphic_elements = use_graphic_elements and extract_charts
 
-        # Persistent thread pool for CPU work (JPEG decode, parallel stages).
         self._pool = ThreadPoolExecutor(
             max_workers=max(4, _DECODE_THREADS),
             thread_name_prefix="fused_vision",
@@ -145,7 +146,7 @@ class FusedVisionActor(AbstractOperator, GPUOperator):
         self._detect = _PEDActor(**detect_kw)
         logger.info("FusedVisionActor: PageElementDetection sub-actor loaded.")
 
-        # ---- 2. Table Structure + OCR (conditional) -----------------------
+        # ---- 2. Table Structure (conditional) ------------------------------
         self._table: Optional[Any] = None
         if self._use_table_structure:
             from nemo_retriever.table.gpu_actor import (
@@ -169,7 +170,7 @@ class FusedVisionActor(AbstractOperator, GPUOperator):
             self._table = _TSActor(**table_kw)
             logger.info("FusedVisionActor: TableStructure sub-actor loaded.")
 
-        # ---- 3. Graphic Elements + OCR (conditional) ----------------------
+        # ---- 3. Graphic Elements (conditional) -----------------------------
         self._graphic: Optional[Any] = None
         if self._use_graphic_elements:
             from nemo_retriever.chart.gpu_actor import (
@@ -191,12 +192,14 @@ class FusedVisionActor(AbstractOperator, GPUOperator):
             self._graphic = _GEActor(**graphic_kw)
             logger.info("FusedVisionActor: GraphicElements sub-actor loaded.")
 
-        # ---- 4. OCR (conditional — for text / non-table/chart crops) ------
+        # ---- 4. OCR standalone (for text / infographic crops) ---------------
         self._ocr: Optional[Any] = None
-        self._needs_ocr = any([extract_text, extract_infographics,
-                               (extract_tables and not use_table_structure),
-                               (extract_charts and not use_graphic_elements)])
-        if self._needs_ocr:
+        self._needs_standalone_ocr = any([
+            extract_text, extract_infographics,
+            (extract_tables and not use_table_structure),
+            (extract_charts and not use_graphic_elements),
+        ])
+        if self._needs_standalone_ocr:
             from nemo_retriever.ocr.gpu_ocr import OCRActor as _OCRActor
 
             ocr_kw: dict[str, Any] = {
@@ -215,56 +218,33 @@ class FusedVisionActor(AbstractOperator, GPUOperator):
             self._ocr = _OCRActor(**ocr_kw)
             logger.info("FusedVisionActor: OCR sub-actor loaded.")
 
-        self._can_parallel_table_graphic = (
-            self._table is not None and self._graphic is not None
+        # ---- Extract a single OCR model reference for unified OCR pass -----
+        self._ocr_model: Optional[Any] = None
+        if self._table is not None:
+            self._ocr_model = getattr(self._table, "_ocr_model", None)
+        if self._ocr_model is None and self._graphic is not None:
+            self._ocr_model = getattr(self._graphic, "_ocr_model", None)
+
+        self._has_deferred_ocr = (
+            self._ocr_model is not None
+            and (self._use_table_structure or self._use_graphic_elements)
         )
 
         logger.info(
             "FusedVisionActor ready: detect=True, table=%s, graphic=%s, "
-            "ocr=%s, parallel_table_graphic=%s",
+            "standalone_ocr=%s, deferred_ocr=%s",
             self._use_table_structure,
             self._use_graphic_elements,
-            self._needs_ocr,
-            self._can_parallel_table_graphic,
+            self._needs_standalone_ocr,
+            self._has_deferred_ocr,
         )
 
     def preprocess(self, data: Any, **kwargs: Any) -> Any:
         return data
 
     # ------------------------------------------------------------------
-    # Pixel caching helpers
+    # JPEG decode helpers
     # ------------------------------------------------------------------
-
-    def _decode_pixels_parallel(
-        self, batch_df: pd.DataFrame,
-    ) -> Dict[int, bytes]:
-        """Thread-pool JPEG decode → numpy.  Returns saved jpeg_bytes map.
-
-        ``cv2.imdecode`` releases the GIL, so N pages decode in
-        parallel across ``_DECODE_THREADS`` threads.
-        """
-        saved: Dict[int, bytes] = {}
-        if "page_image" not in batch_df.columns:
-            return saved
-
-        work: List[Tuple[int, bytes]] = []
-        for idx in batch_df.index:
-            pi = batch_df.at[idx, "page_image"]
-            if isinstance(pi, dict) and pi.get("jpeg_bytes") is not None:
-                work.append((idx, pi["jpeg_bytes"]))
-
-        if not work:
-            return saved
-
-        for idx, arr, jpeg in self._pool.map(_decode_one, work):
-            if arr is None:
-                continue
-            pi = batch_df.at[idx, "page_image"]
-            saved[idx] = jpeg
-            pi["pixels"] = arr
-            del pi["jpeg_bytes"]
-
-        return saved
 
     @staticmethod
     def _restore_jpeg_bytes(
@@ -278,37 +258,124 @@ class FusedVisionActor(AbstractOperator, GPUOperator):
                 pi["jpeg_bytes"] = jpeg
 
     # ------------------------------------------------------------------
-    # Parallel table + graphic
+    # Unified OCR pass
     # ------------------------------------------------------------------
 
-    def _run_table_and_graphic_parallel(
-        self, batch_df: pd.DataFrame,
-    ) -> pd.DataFrame:
-        """Run table-structure and graphic-elements concurrently.
-
-        They write to disjoint columns (``table`` / ``table_structure_ocr_v1``
-        vs ``chart`` / ``graphic_elements_ocr_v1``) and only READ
-        ``page_image`` and ``page_elements_v3``.  Table operates in-place
-        on batch_df; graphic gets a shallow copy for thread safety, then
-        its new columns are merged back.
-        """
-        df_graphic = batch_df.copy()
-
-        ft: Future = self._pool.submit(
-            self._table.process, batch_df, _inplace=True,  # type: ignore[union-attr]
+    def _run_deferred_ocr(self, batch_df: pd.DataFrame) -> None:
+        """Collect ALL pending OCR crops, run OCR once, join & stitch."""
+        from nemo_retriever.ocr.ocr import (
+            _blocks_to_pseudo_markdown,
+            _blocks_to_text,
+            _parse_ocr_result,
         )
-        fg: Future = self._pool.submit(
-            self._graphic.process, df_graphic, _inplace=True,  # type: ignore[union-attr]
+        from nemo_retriever.utils.table_and_chart import (
+            join_graphic_elements_and_ocr_output,
+            join_table_structure_and_ocr_output,
         )
 
-        batch_df = ft.result()
-        df_g = fg.result()
+        has_table = "_table_pending_ocr" in batch_df.columns
+        has_chart = "_chart_pending_ocr" in batch_df.columns
 
-        for col in df_g.columns:
-            if col not in batch_df.columns:
-                batch_df[col] = df_g[col].values
+        if not has_table and not has_chart:
+            return
 
-        return batch_df
+        # --- Flatten all crops into one list ---
+        all_crop_arrays: List[np.ndarray] = []
+        # (source_type, df_idx, crop_idx_within_row)
+        crop_sources: List[Tuple[str, Any, int]] = []
+
+        if has_table:
+            for idx in batch_df.index:
+                for ci, p in enumerate(batch_df.at[idx, "_table_pending_ocr"]):
+                    all_crop_arrays.append(p["crop_array"])
+                    crop_sources.append(("table", idx, ci))
+
+        if has_chart:
+            for idx in batch_df.index:
+                for ci, p in enumerate(batch_df.at[idx, "_chart_pending_ocr"]):
+                    all_crop_arrays.append(p["crop_array"])
+                    crop_sources.append(("chart", idx, ci))
+
+        n_total = len(all_crop_arrays)
+        if n_total == 0:
+            if has_table:
+                batch_df.drop(columns=["_table_pending_ocr"], inplace=True)
+            if has_chart:
+                batch_df.drop(columns=["_chart_pending_ocr"], inplace=True)
+            return
+
+        # --- Single batched OCR pass ---
+        ocr_results: List[Any] = [None] * n_total
+        for start in range(0, n_total, _OCR_BATCH_SIZE):
+            batch_slice = all_crop_arrays[start : start + _OCR_BATCH_SIZE]
+            try:
+                batch_preds = self._ocr_model.invoke(
+                    batch_slice, merge_level="word",
+                )
+                if isinstance(batch_preds, list) and len(batch_preds) == len(batch_slice):
+                    for j, pred in enumerate(batch_preds):
+                        ocr_results[start + j] = pred
+                    continue
+            except Exception:
+                pass
+            for j, crop in enumerate(batch_slice):
+                try:
+                    ocr_results[start + j] = self._ocr_model.invoke(
+                        crop, merge_level="word",
+                    )
+                except Exception:
+                    pass
+
+        # --- Stitch table results ---
+        if has_table:
+            all_table: List[List[Dict[str, Any]]] = batch_df["table"].tolist()
+            for oci, (src_type, idx, ci) in enumerate(crop_sources):
+                if src_type != "table":
+                    continue
+                p = batch_df.at[idx, "_table_pending_ocr"][ci]
+                crop_hw = (int(p["crop_array"].shape[0]), int(p["crop_array"].shape[1]))
+                ocr_preds = ocr_results[oci]
+
+                markdown = join_table_structure_and_ocr_output(
+                    p["structure_dets"], ocr_preds, crop_hw,
+                )
+                if not markdown:
+                    blocks = _parse_ocr_result(ocr_preds)
+                    markdown = (
+                        _blocks_to_pseudo_markdown(blocks, crop_hw=crop_hw)
+                        or _blocks_to_text(blocks)
+                    )
+
+                row_pos = batch_df.index.get_loc(idx)
+                all_table[row_pos].append(
+                    {"bbox_xyxy_norm": p["bbox"], "text": markdown},
+                )
+            batch_df["table"] = all_table
+            batch_df.drop(columns=["_table_pending_ocr"], inplace=True)
+
+        # --- Stitch chart results ---
+        if has_chart:
+            all_chart: List[List[Dict[str, Any]]] = batch_df["chart"].tolist()
+            for oci, (src_type, idx, ci) in enumerate(crop_sources):
+                if src_type != "chart":
+                    continue
+                p = batch_df.at[idx, "_chart_pending_ocr"][ci]
+                crop_hw = (int(p["crop_array"].shape[0]), int(p["crop_array"].shape[1]))
+                ocr_preds = ocr_results[oci]
+
+                text = join_graphic_elements_and_ocr_output(
+                    p["ge_dets"], ocr_preds, crop_hw,
+                )
+                if not text:
+                    blocks = _parse_ocr_result(ocr_preds)
+                    text = _blocks_to_text(blocks)
+
+                row_pos = batch_df.index.get_loc(idx)
+                all_chart[row_pos].append(
+                    {"bbox_xyxy_norm": p["bbox"], "text": text},
+                )
+            batch_df["chart"] = all_chart
+            batch_df.drop(columns=["_chart_pending_ocr"], inplace=True)
 
     # ------------------------------------------------------------------
     # Main processing pipeline
@@ -318,54 +385,72 @@ class FusedVisionActor(AbstractOperator, GPUOperator):
         if not isinstance(batch_df, pd.DataFrame) or batch_df.empty:
             return batch_df
 
-        # Single copy up front so all downstream _inplace writes are
-        # on an owned DataFrame — avoids SettingWithCopyWarning.
         batch_df = batch_df.copy()
 
         t0 = time.perf_counter()
 
-        # ------ Overlapped phase: GPU detection + CPU JPEG decode ------
-        # Kick off JPEG→numpy decode in background threads NOW.
-        # Detection reads jpeg_bytes via DALI NVJPEG (GPU hardware),
-        # while cv2.imdecode runs on CPU threads concurrently.
-        # We ADD pixels alongside jpeg_bytes (don't delete yet) so
-        # detection can still read jpeg_bytes safely.
-        decode_future: Optional[Future] = None
+        # ===== Phase 1: Overlapped GPU detection + CPU JPEG decode =====
+        # Submit individual decode tasks to self._pool (no temp pool).
+        # Detection reads jpeg_bytes via DALI NVJPEG on GPU while cv2
+        # decodes the same bytes on CPU threads concurrently.
+        decode_futures: List[Future] = []
+        saved_jpegs: Dict[int, bytes] = {}
+
         if "page_image" in batch_df.columns:
-            decode_future = self._pool.submit(
-                self._overlapped_decode, batch_df,
-            )
+            for idx in batch_df.index:
+                pi = batch_df.at[idx, "page_image"]
+                if isinstance(pi, dict) and pi.get("jpeg_bytes") is not None:
+                    decode_futures.append(
+                        self._pool.submit(_decode_one, (idx, pi["jpeg_bytes"])),
+                    )
 
         batch_df = self._detect.process(batch_df, _inplace=True)
 
-        # Wait for CPU decode to finish and swap jpeg_bytes → pixels.
-        saved_jpegs: Dict[int, bytes] = {}
-        if decode_future is not None:
-            saved_jpegs = decode_future.result()
+        for fut in decode_futures:
+            r_idx, arr, jpeg = fut.result()
+            if arr is not None:
+                pi = batch_df.at[r_idx, "page_image"]
+                pi["pixels"] = arr
+                saved_jpegs[r_idx] = jpeg
+
+        for r_idx in saved_jpegs:
+            pi = batch_df.at[r_idx, "page_image"]
+            pi.pop("jpeg_bytes", None)
 
         t_detect = time.perf_counter() - t0
 
-        # ------ Table + Graphic (parallel when both enabled) -----------
+        # ===== Phase 2: Table structure (skip OCR) — sequential GPU =====
         t1 = time.perf_counter()
-        if self._can_parallel_table_graphic:
-            batch_df = self._run_table_and_graphic_parallel(batch_df)
-        else:
-            if self._table is not None:
-                batch_df = self._table.process(batch_df, _inplace=True)
-            if self._graphic is not None:
-                batch_df = self._graphic.process(batch_df, _inplace=True)
-        t_tg = time.perf_counter() - t1
+        if self._table is not None:
+            batch_df = self._table.process(
+                batch_df, _inplace=True, _skip_ocr=True,
+            )
+        t_ts = time.perf_counter() - t1
 
-        # ------ OCR ---------------------------------------------------
+        # ===== Phase 3: Graphic elements (skip OCR) — sequential GPU ====
         t2 = time.perf_counter()
+        if self._graphic is not None:
+            batch_df = self._graphic.process(
+                batch_df, _inplace=True, _skip_ocr=True,
+            )
+        t_ge = time.perf_counter() - t2
+
+        # ===== Phase 4: Unified OCR on ALL crops ========================
+        t3 = time.perf_counter()
+        if self._has_deferred_ocr:
+            self._run_deferred_ocr(batch_df)
+        t_ocr = time.perf_counter() - t3
+
+        # ===== Phase 5: Standalone OCR (text / infographic only) ========
+        t4 = time.perf_counter()
         if self._ocr is not None:
             batch_df = self._ocr.process(batch_df, _inplace=True)
-        t_ocr = time.perf_counter() - t2
+        t_standalone_ocr = time.perf_counter() - t4
 
-        # ------ Compact for serialization -----------------------------
-        t3 = time.perf_counter()
+        # ===== Phase 6: Compact for serialization =======================
+        t5 = time.perf_counter()
         self._restore_jpeg_bytes(batch_df, saved_jpegs)
-        t_ser = time.perf_counter() - t3
+        t_ser = time.perf_counter() - t5
 
         elapsed = time.perf_counter() - t0
 
@@ -375,54 +460,28 @@ class FusedVisionActor(AbstractOperator, GPUOperator):
             if isinstance(pe, dict):
                 n_det += len(pe.get("detections") or [])
 
+        n_table = 0
+        n_chart = 0
+        if "table" in batch_df.columns:
+            for idx in batch_df.index:
+                tl = batch_df.at[idx, "table"]
+                if isinstance(tl, list):
+                    n_table += len(tl)
+        if "chart" in batch_df.columns:
+            for idx in batch_df.index:
+                cl = batch_df.at[idx, "chart"]
+                if isinstance(cl, list):
+                    n_chart += len(cl)
+
         logger.info(
-            "FusedVisionActor: %d rows, %d detections in %.2fs "
-            "(detect=%.2fs, table+graphic=%.2fs, ocr=%.2fs, ser=%.2fs)",
-            len(batch_df), n_det, elapsed, t_detect, t_tg, t_ocr, t_ser,
+            "FusedVisionActor: %d rows, %d dets, %d table, %d chart "
+            "in %.2fs (detect=%.2fs, ts=%.2fs, ge=%.2fs, "
+            "ocr=%.2fs, standalone_ocr=%.2fs, ser=%.2fs)",
+            len(batch_df), n_det, n_table, n_chart,
+            elapsed, t_detect, t_ts, t_ge,
+            t_ocr, t_standalone_ocr, t_ser,
         )
         return batch_df
-
-    # ------------------------------------------------------------------
-    # Overlapped JPEG decode (runs in thread pool during detection)
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _overlapped_decode(batch_df: pd.DataFrame) -> Dict[int, bytes]:
-        """Decode JPEG bytes in threads; ADD pixels but keep jpeg_bytes.
-
-        After detection completes, the caller will delete jpeg_bytes
-        so downstream stages find pixels first.
-        """
-        saved: Dict[int, bytes] = {}
-        work: List[Tuple[int, bytes]] = []
-
-        for idx in batch_df.index:
-            pi = batch_df.at[idx, "page_image"]
-            if isinstance(pi, dict) and pi.get("jpeg_bytes") is not None:
-                work.append((idx, pi["jpeg_bytes"]))
-
-        if not work:
-            return saved
-
-        pool = ThreadPoolExecutor(
-            max_workers=min(_DECODE_THREADS, len(work)),
-            thread_name_prefix="jpeg_dec",
-        )
-        try:
-            for r_idx, arr, jpeg in pool.map(_decode_one, work):
-                if arr is None:
-                    continue
-                pi = batch_df.at[r_idx, "page_image"]
-                pi["pixels"] = arr
-                saved[r_idx] = jpeg
-            # Now remove jpeg_bytes so downstream stages use pixels.
-            for r_idx in saved:
-                pi = batch_df.at[r_idx, "page_image"]
-                pi.pop("jpeg_bytes", None)
-        finally:
-            pool.shutdown(wait=False)
-
-        return saved
 
     def postprocess(self, data: Any, **kwargs: Any) -> Any:
         return data
@@ -434,14 +493,6 @@ class FusedVisionActor(AbstractOperator, GPUOperator):
             logger.exception("FusedVisionActor: unhandled error in run()")
             if isinstance(batch_df, pd.DataFrame):
                 out = batch_df.copy()
-                payload = {
-                    "timing": None,
-                    "error": {
-                        "stage": "fused_vision_actor_call",
-                        "type": exc.__class__.__name__,
-                        "message": str(exc),
-                    },
-                }
                 n = len(out.index)
                 from nemo_retriever.page_elements.shared import _error_payload
                 out["page_elements_v3"] = [_error_payload(stage="fused_actor", exc=exc) for _ in range(n)]

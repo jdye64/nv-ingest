@@ -293,7 +293,8 @@ def table_structure_ocr_page_elements(
 
     if not use_remote_ts and table_structure_model is None:
         raise ValueError("A local `table_structure_model` is required when `table_structure_invoke_url` is not set.")
-    if not use_remote_ocr and ocr_model is None:
+    _skip_ocr = bool(kwargs.get("_skip_ocr", False))
+    if not _skip_ocr and not use_remote_ocr and ocr_model is None:
         raise ValueError("A local `ocr_model` is required when `ocr_invoke_url` is not set.")
 
     label_names = _labels_from_model(table_structure_model) if table_structure_model is not None else []
@@ -414,7 +415,7 @@ def table_structure_ocr_page_elements(
         )
 
     # When both endpoints are remote, overlap the two HTTP passes.
-    if use_remote_ts and use_remote_ocr:
+    if use_remote_ts and use_remote_ocr and not _skip_ocr:
         _parallel_pool = ThreadPoolExecutor(max_workers=2)
         ts_future: Future[List[Any]] = _parallel_pool.submit(_run_remote_ts)
         ocr_future: Future[List[Any]] = _parallel_pool.submit(_run_remote_ocr)
@@ -505,27 +506,52 @@ def table_structure_ocr_page_elements(
             for row_i in set(crop_row_indices):
                 all_meta[row_i]["error"] = err_payload
 
-        try:
-            if use_remote_ocr:
-                ocr_response_items = _run_remote_ocr()
-                if len(ocr_response_items) != n_crops:
-                    raise RuntimeError(f"Expected {n_crops} OCR responses, got {len(ocr_response_items)}")
-                for ci, resp in enumerate(ocr_response_items):
-                    ocr_results[ci] = _extract_remote_ocr_item(resp)
-            else:
-                for ci, (_, _, crop_array) in enumerate(flat_crops):
-                    ocr_results[ci] = ocr_model.invoke(crop_array, merge_level="word")
-        except BaseException as e:
-            print(f"Warning: table OCR batch inference failed: {type(e).__name__}: {e}")
-            err_payload = {
-                "stage": "table_structure_ocr_page_elements:ocr",
-                "type": e.__class__.__name__,
-                "message": str(e),
-                "traceback": "".join(traceback.format_exception(type(e), e, e.__traceback__)),
-            }
-            for row_i in set(crop_row_indices):
-                if all_meta[row_i]["error"] is None:
-                    all_meta[row_i]["error"] = err_payload
+        if not _skip_ocr:
+            try:
+                if use_remote_ocr:
+                    ocr_response_items = _run_remote_ocr()
+                    if len(ocr_response_items) != n_crops:
+                        raise RuntimeError(f"Expected {n_crops} OCR responses, got {len(ocr_response_items)}")
+                    for ci, resp in enumerate(ocr_response_items):
+                        ocr_results[ci] = _extract_remote_ocr_item(resp)
+                else:
+                    for ci, (_, _, crop_array) in enumerate(flat_crops):
+                        ocr_results[ci] = ocr_model.invoke(crop_array, merge_level="word")
+            except BaseException as e:
+                print(f"Warning: table OCR batch inference failed: {type(e).__name__}: {e}")
+                err_payload = {
+                    "stage": "table_structure_ocr_page_elements:ocr",
+                    "type": e.__class__.__name__,
+                    "message": str(e),
+                    "traceback": "".join(traceback.format_exception(type(e), e, e.__traceback__)),
+                }
+                for row_i in set(crop_row_indices):
+                    if all_meta[row_i]["error"] is None:
+                        all_meta[row_i]["error"] = err_payload
+
+    # ---- _skip_ocr: store intermediate data and return early --------
+    if _skip_ocr:
+        _pending = [[] for _ in range(num_rows)]
+        for ci in range(n_crops):
+            row_i = crop_row_indices[ci]
+            _pending[row_i].append({
+                "bbox": list(flat_crops[ci][1]),
+                "crop_array": flat_crops[ci][2],
+                "structure_dets": structure_results[ci],
+            })
+        elapsed = time.perf_counter() - t0_total
+        for meta in all_meta:
+            meta["timing"] = {"seconds": float(elapsed)}
+        if kwargs.get("_inplace"):
+            batch_df["table"] = all_table
+            batch_df["table_structure_ocr_v1"] = all_meta
+            batch_df["_table_pending_ocr"] = _pending
+            return batch_df
+        out = batch_df.copy()
+        out["table"] = all_table
+        out["table_structure_ocr_v1"] = all_meta
+        out["_table_pending_ocr"] = _pending
+        return out
 
     # ---------------------------------------------------------------
     # Pass 4: Stitch results back to the correct rows.
