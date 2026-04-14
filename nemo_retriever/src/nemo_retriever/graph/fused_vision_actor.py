@@ -288,13 +288,18 @@ class FusedVisionActor(AbstractOperator, GPUOperator):
 
         They write to disjoint columns (``table`` / ``table_structure_ocr_v1``
         vs ``chart`` / ``graphic_elements_ocr_v1``) and only READ
-        ``page_image`` and ``page_elements_v3``, so running them on
-        separate DataFrame copies is safe.  Results are merged back.
+        ``page_image`` and ``page_elements_v3``.  Table operates in-place
+        on batch_df; graphic gets a shallow copy for thread safety, then
+        its new columns are merged back.
         """
         df_graphic = batch_df.copy()
 
-        ft: Future = self._pool.submit(self._table.run, batch_df)  # type: ignore[union-attr]
-        fg: Future = self._pool.submit(self._graphic.run, df_graphic)  # type: ignore[union-attr]
+        ft: Future = self._pool.submit(
+            self._table.process, batch_df, _inplace=True,  # type: ignore[union-attr]
+        )
+        fg: Future = self._pool.submit(
+            self._graphic.process, df_graphic, _inplace=True,  # type: ignore[union-attr]
+        )
 
         batch_df = ft.result()
         df_g = fg.result()
@@ -327,7 +332,7 @@ class FusedVisionActor(AbstractOperator, GPUOperator):
                 self._overlapped_decode, batch_df,
             )
 
-        batch_df = self._detect.run(batch_df)
+        batch_df = self._detect.process(batch_df, _inplace=True)
 
         # Wait for CPU decode to finish and swap jpeg_bytes → pixels.
         saved_jpegs: Dict[int, bytes] = {}
@@ -342,15 +347,15 @@ class FusedVisionActor(AbstractOperator, GPUOperator):
             batch_df = self._run_table_and_graphic_parallel(batch_df)
         else:
             if self._table is not None:
-                batch_df = self._table.run(batch_df)
+                batch_df = self._table.process(batch_df, _inplace=True)
             if self._graphic is not None:
-                batch_df = self._graphic.run(batch_df)
+                batch_df = self._graphic.process(batch_df, _inplace=True)
         t_tg = time.perf_counter() - t1
 
         # ------ OCR ---------------------------------------------------
         t2 = time.perf_counter()
         if self._ocr is not None:
-            batch_df = self._ocr.run(batch_df)
+            batch_df = self._ocr.process(batch_df, _inplace=True)
         t_ocr = time.perf_counter() - t2
 
         # ------ Compact for serialization -----------------------------

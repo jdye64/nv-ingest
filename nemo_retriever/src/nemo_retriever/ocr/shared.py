@@ -729,11 +729,8 @@ def ocr_page_elements(
     for meta in all_ocr_meta:
         meta["timing"] = {"seconds": float(elapsed)}
 
-    # TODO: Is this actually a necessary copy?
-    out = batch_df.copy()
-    # Only overwrite content columns that this call is responsible for.
-    # When extract_tables=False, preserve any existing `table` column
-    # (e.g. populated by an upstream table-structure+OCR stage).
+    _inplace = kwargs.get("_inplace", False)
+    out = batch_df if _inplace else batch_df.copy()
     if extract_tables or "table" not in out.columns:
         out["table"] = all_table
     if extract_charts or "chart" not in out.columns:
@@ -741,7 +738,6 @@ def ocr_page_elements(
     if extract_infographics or "infographic" not in out.columns:
         out["infographic"] = all_infographic
     if extract_text and "text" in out.columns:
-        # Only overwrite rows where OCR produced text; preserve native text otherwise.
         for i, ocr_text in enumerate(all_text):
             if ocr_text is not None:
                 out.iat[i, out.columns.get_loc("text")] = ocr_text

@@ -360,6 +360,10 @@ def table_structure_ocr_page_elements(
         elapsed = time.perf_counter() - t0_total
         for meta in all_meta:
             meta["timing"] = {"seconds": float(elapsed)}
+        if kwargs.get("_inplace"):
+            batch_df["table"] = all_table
+            batch_df["table_structure_ocr_v1"] = all_meta
+            return batch_df
         out = batch_df.copy()
         out["table"] = all_table
         out["table_structure_ocr_v1"] = all_meta
@@ -546,6 +550,11 @@ def table_structure_ocr_page_elements(
     elapsed = time.perf_counter() - t0_total
     for meta in all_meta:
         meta["timing"] = {"seconds": float(elapsed)}
+
+    if kwargs.get("_inplace"):
+        batch_df["table"] = all_table
+        batch_df["table_structure_ocr_v1"] = all_meta
+        return batch_df
 
     out = batch_df.copy()
     out["table"] = all_table

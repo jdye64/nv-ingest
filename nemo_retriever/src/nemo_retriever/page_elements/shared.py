@@ -890,6 +890,16 @@ def detect_page_elements_v3(
                 time.perf_counter() - _pending_t0,  # type: ignore[operator]
             )
 
+    if kwargs.get("_inplace"):
+        pages_df[output_column] = row_payloads
+        pages_df[num_detections_column] = [
+            int(len(p.get("detections") or [])) if isinstance(p, dict) else 0 for p in row_payloads
+        ]
+        pages_df[counts_by_label_column] = [
+            _counts_by_label(p.get("detections") or []) if isinstance(p, dict) else {} for p in row_payloads
+        ]
+        return pages_df
+
     out = pages_df.copy()
     out[output_column] = row_payloads
     out[num_detections_column] = [

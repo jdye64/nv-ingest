@@ -450,6 +450,10 @@ def graphic_elements_ocr_page_elements(
         elapsed = time.perf_counter() - t0_total
         for meta in all_meta:
             meta["timing"] = {"seconds": float(elapsed)}
+        if kwargs.get("_inplace"):
+            batch_df["chart"] = all_chart
+            batch_df["graphic_elements_ocr_v1"] = all_meta
+            return batch_df
         out = batch_df.copy()
         out["chart"] = all_chart
         out["graphic_elements_ocr_v1"] = all_meta
@@ -583,6 +587,11 @@ def graphic_elements_ocr_page_elements(
     elapsed = time.perf_counter() - t0_total
     for meta in all_meta:
         meta["timing"] = {"seconds": float(elapsed)}
+
+    if kwargs.get("_inplace"):
+        batch_df["chart"] = all_chart
+        batch_df["graphic_elements_ocr_v1"] = all_meta
+        return batch_df
 
     out = batch_df.copy()
     out["chart"] = all_chart
