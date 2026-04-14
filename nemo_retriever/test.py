@@ -25,7 +25,7 @@ embed = EmbedParams(
 
 ing = GraphIngestor(
     run_mode="batch",
-    ray_address="auto",
+    ray_address="local",
     node_overrides={
         "PDFExtractionActor": {"concurrency": 48, "batch_size": 16},
         "FusedVisionActor": {"concurrency": 6, "num_gpus": 0.12, "num_cpus": 2, "batch_size": 32},
