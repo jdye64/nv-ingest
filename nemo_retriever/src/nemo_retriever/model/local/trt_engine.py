@@ -814,19 +814,16 @@ class TRTEmbedEngine:
         )
 
     def _probe_embed_dim(self) -> Optional[int]:
-        """Run a tiny shape-only probe to discover the embedding dimension.
+        """Discover the embedding dimension by running a real tiny inference.
 
-        Sets (1, 2) inputs on slot-0's context, calls ``infer_shapes()``, and
-        reads back the output shape.  Falls back to any positive static dim
-        found in the engine metadata.
+        Tries static metadata first; if all dims are dynamic, executes a
+        (1, 2) input through slot 0 and reads the output tensor shape.
         """
-        # 1. Check the engine's static output shape for a positive last dim.
         static_shape = self._io_info[self._output_name]["shape"]
         pos_dims = [d for d in static_shape if d > 0]
         if pos_dims:
             return pos_dims[-1]
 
-        # 2. Probe via infer_shapes on slot 0.
         slot = self._slots[0]
         ctx = slot.ctx
         try:
@@ -849,12 +846,33 @@ class TRTEmbedEngine:
                 pass
 
             out_shape = tuple(ctx.get_tensor_shape(self._output_name))
-            pos_dims = [d for d in out_shape if d > 0]
+            if all(d > 0 for d in out_shape):
+                logger.debug("Probed embed_dim=%d from infer_shapes %s", out_shape[-1], out_shape)
+                return out_shape[-1]
+
+            # Shape still unresolved — allocate a generous output buffer and
+            # run a real inference to measure the actual output.
+            out_np_dtype = np.dtype(self._io_info[self._output_name]["dtype"])
+            out_t_dtype = _NP_TO_TORCH_DTYPE.get(out_np_dtype, torch.float32)
+            max_dim_guess = 8192
+            n_out_dims = len(out_shape)
+            if n_out_dims == 2:
+                d_out = torch.empty((1, max_dim_guess), dtype=out_t_dtype, device=self._device)
+            else:
+                d_out = torch.empty((1, 2, max_dim_guess), dtype=out_t_dtype, device=self._device)
+            ctx.set_tensor_address(self._output_name, d_out.data_ptr())
+
+            ctx.execute_async_v3(stream_handle=slot.stream.cuda_stream)
+            slot.stream.synchronize()
+
+            real_shape = tuple(ctx.get_tensor_shape(self._output_name))
+            pos_dims = [d for d in real_shape if d > 0]
             if pos_dims:
-                logger.debug("Probed embed_dim=%d from output shape %s", pos_dims[-1], out_shape)
-                return pos_dims[-1]
+                dim = pos_dims[-1]
+                logger.info("Probed embed_dim=%d via real inference, output shape %s", dim, real_shape)
+                return dim
         except Exception as exc:
-            logger.debug("embed dim probe failed: %s", exc)
+            logger.warning("embed dim probe failed: %s", exc)
 
         return None
 
