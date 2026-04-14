@@ -14,6 +14,7 @@ from nemo_retriever.caption.caption import CaptionActor
 from nemo_retriever.audio import ASRActor
 from nemo_retriever.audio import MediaChunkActor
 from nemo_retriever.chart.chart_detection import GraphicElementsActor
+from nemo_retriever.graph.fused_vision_actor import FusedVisionActor
 from nemo_retriever.dedup.dedup import dedup_images
 from nemo_retriever.graph import Graph, StoreOperator, UDFOperator
 from nemo_retriever.graph.content_transforms import (
@@ -563,7 +564,45 @@ def build_graph(
                 parse_kwargs["nemotron_parse_model"] = extract_params.nemotron_parse_model
             parse_kwargs.update(_nim_remote_http_kwargs(extract_params))
             graph = graph >> NemotronParseActor(**parse_kwargs)
+        elif getattr(extract_params, "use_fused_vision", False):
+            # --- Fused path: single actor for detect + table + graphic + OCR ---
+            _rr = _nim_remote_http_kwargs(extract_params)
+            fused_kwargs: dict[str, Any] = {**_rr}
+            if extract_params.api_key:
+                fused_kwargs["api_key"] = extract_params.api_key
+            if extract_params.inference_batch_size:
+                fused_kwargs["inference_batch_size"] = int(extract_params.inference_batch_size)
+            if _positive(getattr(extract_params, "page_elements_trt_engine_path", None)):
+                fused_kwargs["page_elements_trt_engine_path"] = extract_params.page_elements_trt_engine_path
+            if extract_params.page_elements_invoke_url:
+                fused_kwargs["page_elements_invoke_url"] = extract_params.page_elements_invoke_url
+            fused_kwargs["use_table_structure"] = extract_params.use_table_structure
+            fused_kwargs["extract_tables"] = extract_params.extract_tables
+            if _positive(getattr(extract_params, "table_structure_trt_engine_path", None)):
+                fused_kwargs["table_structure_trt_engine_path"] = extract_params.table_structure_trt_engine_path
+            if extract_params.table_structure_invoke_url:
+                fused_kwargs["table_structure_invoke_url"] = extract_params.table_structure_invoke_url
+            if extract_params.table_output_format:
+                fused_kwargs["table_output_format"] = extract_params.table_output_format
+            fused_kwargs["use_graphic_elements"] = extract_params.use_graphic_elements
+            fused_kwargs["extract_charts"] = extract_params.extract_charts
+            if _positive(getattr(extract_params, "graphic_elements_trt_engine_path", None)):
+                fused_kwargs["graphic_elements_trt_engine_path"] = extract_params.graphic_elements_trt_engine_path
+            if extract_params.graphic_elements_invoke_url:
+                fused_kwargs["graphic_elements_invoke_url"] = extract_params.graphic_elements_invoke_url
+            if extract_params.method in ("pdfium_hybrid", "ocr") and extract_params.extract_text:
+                fused_kwargs["extract_text"] = True
+            if extract_params.extract_infographics:
+                fused_kwargs["extract_infographics"] = True
+            if _positive(getattr(extract_params, "ocr_trt_engine_path", None)):
+                fused_kwargs["ocr_trt_engine_path"] = extract_params.ocr_trt_engine_path
+            if extract_params.ocr_invoke_url:
+                fused_kwargs["ocr_invoke_url"] = extract_params.ocr_invoke_url
+
+            graph = graph >> PDFExtractionActor(**extract_kwargs) >> FusedVisionActor(**fused_kwargs)
+
         else:
+            # --- Separate-stage path (legacy) ----
             detect_kwargs: dict[str, Any] = {}
             if extract_params.page_elements_invoke_url:
                 detect_kwargs["page_elements_invoke_url"] = extract_params.page_elements_invoke_url

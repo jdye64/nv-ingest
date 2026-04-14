@@ -176,6 +176,11 @@ class ExtractParams(_ParamsModel):
     inference_batch_size: int = 8
     ocr_model_dir: Optional[str] = None
 
+    # When True, fuse page-element detection, table structure, graphic
+    # elements, and OCR into a single Ray Data actor so the page image
+    # data is never serialized through the object store between stages.
+    use_fused_vision: bool = True
+
     # TensorRT engine paths — when set, the actor loads a pre-built .trt
     # engine instead of the default HuggingFace model weights.
     page_elements_trt_engine_path: Optional[str] = None
