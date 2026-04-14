@@ -25,22 +25,74 @@ embed = EmbedParams(
 ing = GraphIngestor(
     run_mode="batch",
     ray_address="local",
-    # node_overrides={
-    #     # Single-GPU budget: total = 1.0 GPU so all stages coexist.
-    #     #   5×0.05 + 2×0.05 + 2×0.05 + 5×0.05 + 6×0.05 = 1.0 GPU
-    #     "PageElementDetectionActor": {"concurrency": 5, "num_gpus": 0.05},
-    #     "TableStructureActor": {"concurrency": 2, "num_gpus": 0.05},
-    #     "GraphicElementsActor": {"concurrency": 2, "num_gpus": 0.05},
-    #     "OCRActor": {"concurrency": 5, "num_gpus": 0.05},
-    #     "_BatchEmbedActor": {"concurrency": 6, "num_gpus": 0.05},
-    # },
 )
 ing = ing.files(docs).extract(extract).embed(embed)
 t0 = time.perf_counter()
 ray_ds = ing.ingest()
 raw_num_rows = ray_ds.count()
 elapsed = time.perf_counter() - t0
-num_rows = 54730
-print(f"raw_num_rows: {raw_num_rows}")
-print("rows", num_rows)
-print(f"pages/sec: {num_rows / elapsed:.2f}  ({num_rows} pages in {elapsed:.2f}s)")
+print(f"\n{'='*60}")
+print(f"Ingestion complete: {raw_num_rows} rows in {elapsed:.2f}s")
+print(f"Throughput: {raw_num_rows / elapsed:.2f} rows/sec")
+print(f"{'='*60}\n")
+
+# ── Write embeddings to LanceDB ──────────────────────────────────────
+from nemo_retriever.vector_store.lancedb_store import (
+    LanceDBConfig,
+    _build_lancedb_rows_from_df,
+    _write_rows_to_lancedb,
+    create_lancedb_index,
+)
+
+LANCEDB_URI = "/tmp/nemo_retriever_lancedb"
+LANCEDB_TABLE = "bo767"
+
+print("Materialising Ray Dataset to pandas …")
+t1 = time.perf_counter()
+df = ray_ds.to_pandas()
+print(f"  → {len(df)} rows in {time.perf_counter() - t1:.2f}s")
+
+print("Building LanceDB rows …")
+records = df.to_dict(orient="records")
+lance_rows = _build_lancedb_rows_from_df(records)
+print(f"  → {len(lance_rows)} rows with embeddings")
+
+lance_cfg = LanceDBConfig(
+    uri=LANCEDB_URI,
+    table_name=LANCEDB_TABLE,
+    overwrite=True,
+    create_index=True,
+)
+print(f"Writing to LanceDB at {LANCEDB_URI}/{LANCEDB_TABLE} …")
+t2 = time.perf_counter()
+_write_rows_to_lancedb(lance_rows, cfg=lance_cfg)
+print(f"  → done in {time.perf_counter() - t2:.2f}s")
+
+# ── Recall evaluation ────────────────────────────────────────────────
+from nemo_retriever.recall.core import RecallConfig, evaluate_recall
+
+QUERY_CSV = Path(__file__).resolve().parent.parent / "data" / "bo767_query_gt.csv"
+
+recall_cfg = RecallConfig(
+    lancedb_uri=LANCEDB_URI,
+    lancedb_table=LANCEDB_TABLE,
+    embedding_model="nvidia/llama-nemotron-embed-1b-v2",
+    top_k=10,
+    ks=(1, 5, 10),
+    nprobes=0,
+    refine_factor=10,
+    match_mode="pdf_page",
+)
+
+print(f"\nRunning recall evaluation on {QUERY_CSV} …")
+t3 = time.perf_counter()
+result = evaluate_recall(QUERY_CSV, cfg=recall_cfg)
+recall_elapsed = time.perf_counter() - t3
+
+print(f"\n{'='*60}")
+print(f"Recall Results  ({result['n_queries']} queries, top_k={result['top_k']})")
+print(f"{'='*60}")
+for metric, value in result["metrics"].items():
+    print(f"  {metric}: {value:.4f}")
+print(f"\nRecall evaluation took {recall_elapsed:.2f}s")
+print(f"Total pipeline time: {time.perf_counter() - t0:.2f}s")
