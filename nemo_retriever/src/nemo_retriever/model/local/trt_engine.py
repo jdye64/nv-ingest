@@ -811,7 +811,8 @@ class TRTEmbedEngine:
         # {384, 512, 768, 1024, 2048}; always request the full 2048.
         self._embed_dim: int = 2048
 
-        # Print tensor info to stdout so it's visible in Ray worker logs.
+        # Write tensor info to a temp file AND stdout for diagnostics.
+        _diag_lines = []
         for name, info in self._io_info.items():
             profile_shapes = []
             if info["is_input"]:
@@ -824,12 +825,21 @@ class TRTEmbedEngine:
                     except Exception:
                         pass
             raw_trt_dtype = engine.get_tensor_dtype(name)
-            print(
+            line = (
                 f"[TRTEmbedEngine] tensor: name={name}, is_input={info['is_input']}, "
                 f"trt_dtype={raw_trt_dtype}, np_dtype={info['dtype']}, "
-                f"shape={info['shape']}, profiles=[{', '.join(profile_shapes)}]",
-                flush=True,
+                f"shape={info['shape']}, profiles=[{', '.join(profile_shapes)}]"
             )
+            print(line, flush=True)
+            _diag_lines.append(line)
+        try:
+            import os
+            _diag_path = "/tmp/nemo_retriever_debug/trt_embed_tensors.txt"
+            os.makedirs(os.path.dirname(_diag_path), exist_ok=True)
+            with open(_diag_path, "w") as _f:
+                _f.write("\n".join(_diag_lines) + "\n")
+        except Exception:
+            pass
 
         # Double-buffer: two slots with independent contexts / streams.
         self._slots = [_EmbedSlot(engine, self._device) for _ in range(2)]
@@ -858,7 +868,7 @@ class TRTEmbedEngine:
         for name in self._extra_input_names:
             info = self._io_info[name]
             np_dtype = np.dtype(info["dtype"])
-            t_dtype = _NP_TO_TORCH_DTYPE.get(np_dtype, torch.int32)
+            t_dtype = _NP_TO_TORCH_DTYPE.get(np_dtype, torch.int64)
             ndim = len(info["shape"])
 
             fill = self._embed_dim if name == "dimensions" else 0
@@ -932,8 +942,8 @@ class TRTEmbedEngine:
                 max_length=max_seq,
                 return_tensors="np",
             )
-            input_ids = tokens["input_ids"].astype(np.int32)
-            attention_mask = tokens["attention_mask"].astype(np.int32)
+            input_ids = tokens["input_ids"].astype(np.int64)
+            attention_mask = tokens["attention_mask"].astype(np.int64)
 
             # Launch this sub-batch's TRT inference async on the current slot.
             slot = self._slots[self._active_slot]
@@ -950,7 +960,7 @@ class TRTEmbedEngine:
             # Record this sub-batch as pending.
             pending_slot_idx = launched_slot_idx
             pending_mask = (
-                torch.from_numpy(attention_mask.astype(np.float32))
+                torch.from_numpy(attention_mask.astype(np.float32, copy=False))
                 .to(device=self._device)
                 .unsqueeze(-1)
             )
@@ -1003,13 +1013,18 @@ class TRTEmbedEngine:
 
         # Allocate input GPU tensors, set shapes and addresses — TRT 10.x
         # needs valid tensor addresses before output shape can resolve.
+        # Use the ENGINE's expected dtype (from _io_info), not the numpy
+        # array's dtype, to guarantee the buffer element width matches
+        # what TRT will read (e.g. INT64 requires 8 bytes per element).
         slot.d_inputs = {}
         for name, arr in inputs_np.items():
             if name in self._io_info:
                 ctx.set_input_shape(name, arr.shape)
-                np_dtype = np.dtype(arr.dtype)
-                t_dtype = _NP_TO_TORCH_DTYPE.get(np_dtype, torch.int32)
-                cpu_buf = torch.tensor(arr, dtype=t_dtype).contiguous().pin_memory()
+                engine_np_dtype = np.dtype(self._io_info[name]["dtype"])
+                t_dtype = _NP_TO_TORCH_DTYPE.get(engine_np_dtype, torch.int64)
+                cpu_buf = torch.tensor(
+                    arr.astype(engine_np_dtype), dtype=t_dtype,
+                ).contiguous().pin_memory()
                 with torch.cuda.stream(slot.stream):
                     d_buf = cpu_buf.to(device=self._device, non_blocking=True)
                 ctx.set_tensor_address(name, d_buf.data_ptr())

@@ -69,6 +69,11 @@ _out: list[str] = []
 def _log(msg: str = ""):
     _out.append(msg)
 
+_diag_file = Path("/tmp/nemo_retriever_debug/trt_embed_tensors.txt")
+if _diag_file.exists():
+    _log("TRT Embed Engine tensor info:")
+    _log(_diag_file.read_text())
+
 _log("Materialising Ray Dataset to pandas …")
 t1 = time.perf_counter()
 df = ray_ds.to_pandas()
