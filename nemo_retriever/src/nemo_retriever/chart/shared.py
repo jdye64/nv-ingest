@@ -500,11 +500,17 @@ def graphic_elements_ocr_page_elements(
                     if (d.get("score") or 0.0) >= YOLOX_GRAPHIC_MIN_SCORE
                 ]
         elif hasattr(graphic_elements_model, "preprocess_batch_gpu") and flat_crops:
+            _GPU_SUB_BATCH = 8
             crop_arrays = [crop[2] for crop in flat_crops]
-            batch_tensor, batch_shapes = graphic_elements_model.preprocess_batch_gpu(crop_arrays)
-            all_preds = graphic_elements_model.invoke(batch_tensor, batch_shapes)
-            if not isinstance(all_preds, list):
-                all_preds = [all_preds]
+            all_preds: list = []
+            for sb_start in range(0, len(crop_arrays), _GPU_SUB_BATCH):
+                sb_crops = crop_arrays[sb_start : sb_start + _GPU_SUB_BATCH]
+                batch_tensor, batch_shapes = graphic_elements_model.preprocess_batch_gpu(sb_crops)
+                sb_preds = graphic_elements_model.invoke(batch_tensor, batch_shapes)
+                del batch_tensor
+                if not isinstance(sb_preds, list):
+                    sb_preds = [sb_preds]
+                all_preds.extend(sb_preds)
             for ci, pred in enumerate(all_preds):
                 ge_dets = _prediction_to_detections(pred, label_names=label_names)
                 ge_results[ci] = [d for d in ge_dets if (d.get("score") or 0.0) >= YOLOX_GRAPHIC_MIN_SCORE]
