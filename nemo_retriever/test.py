@@ -23,11 +23,11 @@ ing = GraphIngestor(
     ray_address="auto",
     node_overrides={
         "PDFExtractionActor": {"concurrency": 48, "batch_size": 16},
-        "PageElementDetectionActor": {"concurrency": 3, "num_gpus": 0.1, "num_cpus": 0, "batch_size": 32},
-        "TableStructureActor": {"concurrency": 2, "num_gpus": 0.1, "num_cpus": 0, "batch_size": 32},
-        "GraphicElementsActor": {"concurrency": 2, "num_gpus": 0.1, "num_cpus": 0, "batch_size": 32},
-        "OCRActor": {"concurrency": 2, "num_gpus": 0.1, "num_cpus": 0, "batch_size": 32},
-        "_BatchEmbedActor": {"concurrency": 1, "num_gpus": 0.1, "batch_size": 128},
+        "PageElementDetectionActor": {"concurrency": 1, "num_gpus": 0.10, "num_cpus": 0, "batch_size": 32},
+        "TableStructureActor": {"concurrency": 1, "num_gpus": 0.05, "num_cpus": 0, "batch_size": 32},
+        "GraphicElementsActor": {"concurrency": 1, "num_gpus": 0.05, "num_cpus": 0, "batch_size": 32},
+        "OCRActor": {"concurrency": 1, "num_gpus": 0.50, "num_cpus": 0, "batch_size": 32},
+        "_BatchEmbedActor": {"concurrency": 1, "num_gpus": 0.10, "batch_size": 128},
     },
 )
 
@@ -57,10 +57,10 @@ ing = GraphIngestor(
 #         "_BatchEmbedActor": {"concurrency": 2, "num_gpus": 0.10, "batch_size": 256},
 #     },
 # )
-#ing = ing.files(docs).extract(extract).embed(embed)
+ing = ing.files(docs).extract(extract).embed(embed)
 
-# Disable embedding for a test
-ing = ing.files(docs).extract(extract)
+# # Disable embedding for a test
+# ing = ing.files(docs).extract(extract)
 t0 = time.perf_counter()
 ray_ds = ing.ingest()
 raw_num_rows = ray_ds.count()
