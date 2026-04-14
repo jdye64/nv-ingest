@@ -946,42 +946,6 @@ class TRTEmbedEngine:
             self._device,
         )
 
-    def _bind_extra_inputs(self, ctx: Any, slot: Any, B: int) -> None:
-        """Set shapes and addresses for all extra input tensors on *ctx*.
-
-        The shape is derived from the engine metadata ndim, with the first
-        (batch) dimension set to *B* so it matches the primary inputs.
-        """
-        for name in self._extra_input_names:
-            info = self._io_info[name]
-            np_dtype = np.dtype(info["dtype"])
-            t_dtype = _NP_TO_TORCH_DTYPE.get(np_dtype, torch.int64)
-            ndim = len(info["shape"])
-
-            fill = self._embed_dim if name == "dimensions" else 0
-
-            if ndim == 0:
-                shape: Tuple[int, ...] = ()
-                d_extra = torch.full((), fill, dtype=t_dtype, device=self._device)
-            elif ndim == 1:
-                shape = (B,)
-                d_extra = torch.full((B,), fill, dtype=t_dtype, device=self._device)
-            else:
-                shape = (B, 1)
-                d_extra = torch.full((B, 1), fill, dtype=t_dtype, device=self._device)
-
-            ctx.set_input_shape(name, shape if len(shape) > 0 else (1,))
-            ctx.set_tensor_address(name, d_extra.data_ptr())
-            slot.d_inputs[f"_extra_{name}"] = d_extra
-
-            if not hasattr(self, "_extra_logged"):
-                logger.info(
-                    "Binding extra input '%s': fill=%d, dtype=%s (torch=%s), "
-                    "shape=%s, ndim=%d",
-                    name, fill, np_dtype, t_dtype, shape, ndim,
-                )
-        self._extra_logged = True
-
     @property
     def is_remote(self) -> bool:
         return False
@@ -1074,6 +1038,18 @@ class TRTEmbedEngine:
     ) -> None:
         """Configure the slot's context and launch ``execute_async_v3``
         **without** synchronising.
+
+        Follows the minimal pattern proven to work reliably across all
+        optimization profiles:
+          1. Synchronise → switch profile if needed
+          2. Create ALL GPU tensors on ``slot.stream``
+          3. Set ALL input shapes
+          4. Set ALL tensor addresses (inputs + output)
+          5. Launch ``execute_async_v3`` on ``slot.stream``
+
+        The output has a data-dependent second dimension (TRT reports -1),
+        so we always allocate ``(B, embed_dim)`` directly rather than
+        querying ``get_tensor_shape``.
         """
         B, S = input_ids.shape
         profile_idx = self._best_profile(B, S)
@@ -1093,66 +1069,75 @@ class TRTEmbedEngine:
             ctx.set_optimization_profile_async(profile_idx, slot.stream.cuda_stream)
             slot.stream.synchronize()
 
-        inputs_np = {
-            "input_ids": np.ascontiguousarray(input_ids),
-            "attention_mask": np.ascontiguousarray(attention_mask),
-        }
-
-        # Allocate input GPU tensors, set shapes and addresses — TRT 10.x
-        # needs valid tensor addresses before output shape can resolve.
-        # Use the ENGINE's expected dtype (from _io_info), not the numpy
-        # array's dtype, to guarantee the buffer element width matches
-        # what TRT will read (e.g. INT64 requires 8 bytes per element).
+        # -- Build ALL GPU tensors on slot.stream so they are ordered
+        #    relative to execute_async_v3 (also on slot.stream). ----------
         slot.d_inputs = {}
-        for name, arr in inputs_np.items():
-            if name in self._io_info:
-                ctx.set_input_shape(name, arr.shape)
+        with torch.cuda.stream(slot.stream):
+            # Primary inputs via pinned-memory H2D transfer.
+            for name, arr in [("input_ids", input_ids),
+                              ("attention_mask", attention_mask)]:
+                arr = np.ascontiguousarray(arr)
                 engine_np_dtype = np.dtype(self._io_info[name]["dtype"])
                 t_dtype = _NP_TO_TORCH_DTYPE.get(engine_np_dtype, torch.int64)
                 cpu_buf = torch.tensor(
                     arr.astype(engine_np_dtype), dtype=t_dtype,
                 ).contiguous().pin_memory()
-                with torch.cuda.stream(slot.stream):
-                    d_buf = cpu_buf.to(device=self._device, non_blocking=True)
-                ctx.set_tensor_address(name, d_buf.data_ptr())
+                d_buf = cpu_buf.to(device=self._device, non_blocking=True)
                 slot.d_inputs[name] = d_buf
                 slot.d_inputs[f"_pin_{name}"] = cpu_buf
 
-        # Bind any extra input tensors (e.g. 'dimensions' for Matryoshka).
-        self._bind_extra_inputs(ctx, slot, B)
+            # Extra inputs (e.g. 'dimensions' for Matryoshka embeddings).
+            for name in self._extra_input_names:
+                info = self._io_info[name]
+                np_dtype = np.dtype(info["dtype"])
+                t_dtype = _NP_TO_TORCH_DTYPE.get(np_dtype, torch.int64)
+                fill = self._embed_dim if name == "dimensions" else 0
+                ndim = len(info["shape"])
+                if ndim == 0:
+                    d_extra = torch.full((), fill, dtype=t_dtype, device=self._device)
+                elif ndim == 1:
+                    d_extra = torch.full((B,), fill, dtype=t_dtype, device=self._device)
+                else:
+                    d_extra = torch.full((B, 1), fill, dtype=t_dtype, device=self._device)
+                slot.d_inputs[f"_extra_{name}"] = d_extra
 
-        # Explicitly trigger shape inference now that all inputs are bound.
-        try:
-            ctx.infer_shapes()
-        except Exception:
-            pass
+            # Output buffer — always (B, embed_dim).  The second dimension
+            # is data-dependent and TRT never resolves it; we provide a
+            # buffer large enough for the full embedding.
+            out_np_dtype = np.dtype(self._io_info[self._output_name]["dtype"])
+            out_t_dtype = _NP_TO_TORCH_DTYPE.get(out_np_dtype, torch.float32)
+            slot.d_output = torch.zeros(
+                (B, self._embed_dim), dtype=out_t_dtype, device=self._device,
+            )
 
-        try:
-            out_shape = tuple(ctx.get_tensor_shape(self._output_name))
-            shape_ok = all(d > 0 for d in out_shape)
-        except Exception:
-            out_shape = ()
-            shape_ok = False
+        # -- Set ALL input shapes ----------------------------------------
+        ctx.set_input_shape("input_ids", (B, S))
+        ctx.set_input_shape("attention_mask", (B, S))
+        for name in self._extra_input_names:
+            ndim = len(self._io_info[name]["shape"])
+            if ndim == 0:
+                ctx.set_input_shape(name, (1,))
+            elif ndim == 1:
+                ctx.set_input_shape(name, (B,))
+            else:
+                ctx.set_input_shape(name, (B, 1))
 
-        if not shape_ok:
-            D = self._embed_dim
-            static_ndim = len(self._io_info[self._output_name]["shape"])
-            out_shape = (B, S, D) if static_ndim >= 3 else (B, D)
-            logger.debug("Used embed_dim=%d → output shape %s", D, out_shape)
-        out_np_dtype = np.dtype(self._io_info[self._output_name]["dtype"])
-        out_t_dtype = _NP_TO_TORCH_DTYPE.get(out_np_dtype, torch.float32)
-        slot.d_output = torch.empty(out_shape, dtype=out_t_dtype, device=self._device)
+        # -- Set ALL tensor addresses ------------------------------------
+        ctx.set_tensor_address("input_ids", slot.d_inputs["input_ids"].data_ptr())
+        ctx.set_tensor_address("attention_mask", slot.d_inputs["attention_mask"].data_ptr())
+        for name in self._extra_input_names:
+            ctx.set_tensor_address(name, slot.d_inputs[f"_extra_{name}"].data_ptr())
         ctx.set_tensor_address(self._output_name, slot.d_output.data_ptr())
 
+        # -- Launch ------------------------------------------------------
         with torch.cuda.stream(slot.stream):
             ok = ctx.execute_async_v3(stream_handle=slot.stream.cuda_stream)
         if not ok:
             logger.error(
                 "execute_async_v3 FAILED for embed input (%d, %d) on profile %d. "
-                "Extra inputs: %s. Output shape: %s",
+                "Extra inputs: %s.",
                 B, S, profile_idx,
                 {n: slot.d_inputs.get(f"_extra_{n}") for n in self._extra_input_names},
-                out_shape,
             )
 
     def _drain_embed_slot(
