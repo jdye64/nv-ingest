@@ -897,17 +897,25 @@ class TRTEmbedEngine:
                     ctx.set_input_shape(name, probe_shape)
                     ctx.set_tensor_address(name, d_probe.data_ptr())
 
-            # Bind extra inputs using profile-derived shapes with a large
-            # fill value for 'dimensions' so the model outputs full embeddings.
+            # Bind extra inputs with batch=probe_B and a large fill value
+            # for 'dimensions' so the model outputs full embeddings.
             slot.d_inputs = {}
             PROBE_DIM_FILL = 65536
             for extra_name in self._extra_input_names:
                 info = self._io_info[extra_name]
+                extra_ndim = len(info["shape"])
                 extra_np_dtype = np.dtype(info["dtype"])
                 extra_t_dtype = _NP_TO_TORCH_DTYPE.get(extra_np_dtype, torch.int32)
-                shape = self._extra_input_shapes.get(extra_name, (1,))
-                d_extra = torch.full(shape, PROBE_DIM_FILL, dtype=extra_t_dtype, device=self._device)
-                ctx.set_input_shape(extra_name, shape)
+                if extra_ndim <= 1:
+                    d_extra = torch.full(
+                        (probe_B,), PROBE_DIM_FILL, dtype=extra_t_dtype, device=self._device,
+                    )
+                    ctx.set_input_shape(extra_name, (probe_B,))
+                else:
+                    d_extra = torch.full(
+                        (probe_B, 1), PROBE_DIM_FILL, dtype=extra_t_dtype, device=self._device,
+                    )
+                    ctx.set_input_shape(extra_name, (probe_B, 1))
                 ctx.set_tensor_address(extra_name, d_extra.data_ptr())
                 slot.d_inputs[f"_extra_{extra_name}"] = d_extra
 
@@ -1087,8 +1095,14 @@ class TRTEmbedEngine:
         except Exception:
             pass
 
-        out_shape = tuple(ctx.get_tensor_shape(self._output_name))
-        if any(d < 0 for d in out_shape):
+        try:
+            out_shape = tuple(ctx.get_tensor_shape(self._output_name))
+            shape_ok = all(d > 0 for d in out_shape)
+        except Exception:
+            out_shape = ()
+            shape_ok = False
+
+        if not shape_ok:
             D = self._embed_dim
             if D is None:
                 raise RuntimeError(
@@ -1096,8 +1110,8 @@ class TRTEmbedEngine:
                     f"input ({B}, {S}) on profile {profile_idx}. "
                     f"Profiles: {self._profiles}"
                 )
-            ndim = len(out_shape)
-            out_shape = (B, S, D) if ndim >= 3 else (B, D)
+            static_ndim = len(self._io_info[self._output_name]["shape"])
+            out_shape = (B, S, D) if static_ndim >= 3 else (B, D)
             logger.debug("Used cached embed_dim=%d → output shape %s", D, out_shape)
         else:
             if self._embed_dim is None:
