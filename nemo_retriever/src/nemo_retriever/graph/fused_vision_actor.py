@@ -8,14 +8,22 @@ graphic elements, and OCR in a single Ray Data ``map_batches`` stage.
 Eliminates 3 intermediate object-store serialization boundaries that the
 separate-stage pipeline would incur — the page image data is read from
 the object store once and stays in-process memory for all 4 model stages.
+
+Within process(), JPEG bytes are decoded to numpy *once* after detection
+and cached in the page_image dict so table/graphic/OCR stages skip
+redundant CPU JPEG decodes.  Before returning, the decoded pixels are
+dropped and the compact JPEG bytes are restored for efficient
+serialization to the next Ray Data stage (embedding).
 """
 
 from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
+import cv2
+import numpy as np
 import pandas as pd
 
 from nemo_retriever.graph.abstract_operator import AbstractOperator
@@ -191,13 +199,60 @@ class FusedVisionActor(AbstractOperator, GPUOperator):
     def preprocess(self, data: Any, **kwargs: Any) -> Any:
         return data
 
+    # ------------------------------------------------------------------
+    # Pixel caching helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _decode_and_cache_pixels(batch_df: pd.DataFrame) -> Dict[int, bytes]:
+        """Decode JPEG bytes → numpy once and stash in page_image dicts.
+
+        Returns a mapping ``{row_index: original_jpeg_bytes}`` so the
+        caller can restore the compact representation before the
+        DataFrame leaves this actor.
+        """
+        saved: Dict[int, bytes] = {}
+        if "page_image" not in batch_df.columns:
+            return saved
+        for idx in batch_df.index:
+            pi = batch_df.at[idx, "page_image"]
+            if not isinstance(pi, dict):
+                continue
+            jpeg = pi.get("jpeg_bytes")
+            if jpeg is None:
+                continue
+            arr = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
+            if arr is not None:
+                saved[idx] = jpeg
+                pi["pixels"] = arr
+                del pi["jpeg_bytes"]
+        return saved
+
+    @staticmethod
+    def _restore_jpeg_bytes(batch_df: pd.DataFrame, saved: Dict[int, bytes]) -> None:
+        """Swap decoded pixels back to JPEG bytes for compact serialization."""
+        for idx, jpeg in saved.items():
+            pi = batch_df.at[idx, "page_image"]
+            if isinstance(pi, dict):
+                pi.pop("pixels", None)
+                pi["jpeg_bytes"] = jpeg
+
+    # ------------------------------------------------------------------
+    # Main processing
+    # ------------------------------------------------------------------
+
     def process(self, batch_df: Any, **kwargs: Any) -> Any:
         if not isinstance(batch_df, pd.DataFrame) or batch_df.empty:
             return batch_df
 
         t0 = time.perf_counter()
 
+        # Stage 1: Page element detection.
+        # Let detection use JPEG bytes directly (DALI NVJPEG hardware decode).
         batch_df = self._detect.run(batch_df)
+
+        # Decode JPEG → numpy ONCE for all downstream crop-based stages.
+        saved_jpegs = self._decode_and_cache_pixels(batch_df)
 
         if self._table is not None:
             batch_df = self._table.run(batch_df)
@@ -207,6 +262,10 @@ class FusedVisionActor(AbstractOperator, GPUOperator):
 
         if self._ocr is not None:
             batch_df = self._ocr.run(batch_df)
+
+        # Restore compact JPEG bytes before the DataFrame is serialized
+        # to the object store for the next Ray Data stage (embedding).
+        self._restore_jpeg_bytes(batch_df, saved_jpegs)
 
         elapsed = time.perf_counter() - t0
         logger.debug(

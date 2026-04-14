@@ -28,7 +28,7 @@ ing = GraphIngestor(
     ray_address="auto",
     node_overrides={
         "PDFExtractionActor": {"concurrency": 48, "batch_size": 16},
-        "FusedVisionActor": {"concurrency": 2, "num_gpus": 0.25, "batch_size": 16},
+        "FusedVisionActor": {"concurrency": 4, "num_gpus": 0.15, "num_cpus": 2, "batch_size": 32},
         "_BatchEmbedActor": {"concurrency": 2, "num_gpus": 0.10, "batch_size": 256},
     },
 )
