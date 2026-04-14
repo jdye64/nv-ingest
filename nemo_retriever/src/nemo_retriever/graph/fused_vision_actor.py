@@ -318,6 +318,10 @@ class FusedVisionActor(AbstractOperator, GPUOperator):
         if not isinstance(batch_df, pd.DataFrame) or batch_df.empty:
             return batch_df
 
+        # Single copy up front so all downstream _inplace writes are
+        # on an owned DataFrame — avoids SettingWithCopyWarning.
+        batch_df = batch_df.copy()
+
         t0 = time.perf_counter()
 
         # ------ Overlapped phase: GPU detection + CPU JPEG decode ------
