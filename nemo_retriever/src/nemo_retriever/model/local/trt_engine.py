@@ -912,16 +912,13 @@ class TRTEmbedEngine:
 
         ctx = slot.ctx
 
-        # Ensure the stream is idle before any profile switch or shape change.
+        # Drain any in-flight work before touching shapes or profiles.
         slot.stream.synchronize()
+        torch.cuda.current_stream(self._device).synchronize()
 
         if ctx.active_optimization_profile != profile_idx:
-            ok = ctx.set_optimization_profile(profile_idx)
-            if not ok:
-                raise RuntimeError(
-                    f"Failed to switch to TRT profile {profile_idx} for shape "
-                    f"({B}, {S}). Profiles: {self._profiles}"
-                )
+            ctx.set_optimization_profile_async(profile_idx, slot.stream.cuda_stream)
+            slot.stream.synchronize()
 
         inputs_np = {
             "input_ids": np.ascontiguousarray(input_ids),
