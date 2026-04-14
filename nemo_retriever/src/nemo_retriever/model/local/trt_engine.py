@@ -1039,14 +1039,6 @@ class TRTEmbedEngine:
         """Configure the slot's context and launch ``execute_async_v3``
         **without** synchronising.
 
-        Follows the minimal pattern proven to work reliably across all
-        optimization profiles:
-          1. Synchronise → switch profile if needed
-          2. Create ALL GPU tensors on ``slot.stream``
-          3. Set ALL input shapes
-          4. Set ALL tensor addresses (inputs + output)
-          5. Launch ``execute_async_v3`` on ``slot.stream``
-
         The output has a data-dependent second dimension (TRT reports -1),
         so we always allocate ``(B, embed_dim)`` directly rather than
         querying ``get_tensor_shape``.
@@ -1061,17 +1053,17 @@ class TRTEmbedEngine:
 
         ctx = slot.ctx
 
-        # Drain any in-flight work before touching shapes or profiles.
+        # Only sync the slot's own stream (not the global default stream).
+        # The double-buffer caller already drains the previous slot before
+        # reusing it, so this is typically a no-op.
         slot.stream.synchronize()
-        torch.cuda.current_stream(self._device).synchronize()
 
+        # Switch optimisation profile only when necessary.
         if ctx.active_optimization_profile != profile_idx:
             ctx.set_optimization_profile_async(profile_idx, slot.stream.cuda_stream)
             slot.stream.synchronize()
 
-        # -- Build ALL GPU tensors on slot.stream so they are ordered
-        #    relative to execute_async_v3 (also on slot.stream). ----------
-        slot.d_inputs = {}
+        # -- Build GPU tensors on slot.stream -----------------------------
         with torch.cuda.stream(slot.stream):
             # Primary inputs via pinned-memory H2D transfer.
             for name, arr in [("input_ids", input_ids),
@@ -1087,28 +1079,35 @@ class TRTEmbedEngine:
                 slot.d_inputs[f"_pin_{name}"] = cpu_buf
 
             # Extra inputs (e.g. 'dimensions' for Matryoshka embeddings).
+            # Reuse existing tensor if shape matches to avoid re-allocation.
             for name in self._extra_input_names:
                 info = self._io_info[name]
                 np_dtype = np.dtype(info["dtype"])
                 t_dtype = _NP_TO_TORCH_DTYPE.get(np_dtype, torch.int64)
                 fill = self._embed_dim if name == "dimensions" else 0
                 ndim = len(info["shape"])
-                if ndim == 0:
-                    d_extra = torch.full((), fill, dtype=t_dtype, device=self._device)
-                elif ndim == 1:
-                    d_extra = torch.full((B,), fill, dtype=t_dtype, device=self._device)
-                else:
-                    d_extra = torch.full((B, 1), fill, dtype=t_dtype, device=self._device)
-                slot.d_inputs[f"_extra_{name}"] = d_extra
+                want_shape = () if ndim == 0 else (B,) if ndim == 1 else (B, 1)
 
-            # Output buffer — always (B, embed_dim).  The second dimension
-            # is data-dependent and TRT never resolves it; we provide a
-            # buffer large enough for the full embedding.
-            out_np_dtype = np.dtype(self._io_info[self._output_name]["dtype"])
-            out_t_dtype = _NP_TO_TORCH_DTYPE.get(out_np_dtype, torch.float32)
-            slot.d_output = torch.zeros(
-                (B, self._embed_dim), dtype=out_t_dtype, device=self._device,
-            )
+                key = f"_extra_{name}"
+                existing = slot.d_inputs.get(key)
+                if existing is not None and existing.shape == want_shape:
+                    existing.fill_(fill)
+                else:
+                    slot.d_inputs[key] = torch.full(
+                        want_shape if want_shape else (1,),
+                        fill, dtype=t_dtype, device=self._device,
+                    )
+
+            # Output buffer — reuse if already the right size.
+            out_shape = (B, self._embed_dim)
+            if slot.d_output is None or slot.d_output.shape != out_shape:
+                out_np_dtype = np.dtype(self._io_info[self._output_name]["dtype"])
+                out_t_dtype = _NP_TO_TORCH_DTYPE.get(out_np_dtype, torch.float32)
+                slot.d_output = torch.zeros(
+                    out_shape, dtype=out_t_dtype, device=self._device,
+                )
+            else:
+                slot.d_output.zero_()
 
         # -- Set ALL input shapes ----------------------------------------
         ctx.set_input_shape("input_ids", (B, S))
