@@ -131,7 +131,7 @@ def _crop_all_from_page(
 
     *page_image_source* can be:
     - ``bytes`` — JPEG-compressed image (decoded via cv2, fastest).
-    - A raw HWC uint8 numpy array (BGR or RGB) — zero-copy.
+    - A raw HWC uint8 numpy array (BGR or RGB) — zero-copy crop via numpy.
     - A base64-encoded JPEG/PNG string — legacy decode path.
 
     Returns a list of ``(label_name, bbox_xyxy_norm, value)`` tuples for
@@ -142,31 +142,27 @@ def _crop_all_from_page(
     suitable for local model inference.  When ``True``, *value* is a base64-
     encoded PNG string.
     """
-    if Image is None:  # pragma: no cover
-        raise ImportError("Cropping requires pillow.")
-
     try:
         if isinstance(page_image_source, bytes):
             import cv2 as _cv2
             arr = _cv2.imdecode(np.frombuffer(page_image_source, dtype=np.uint8), _cv2.IMREAD_COLOR)
             if arr is None:
                 return []
-            im = Image.fromarray(arr[:, :, ::-1])  # BGR → RGB for PIL
+            arr = arr[:, :, ::-1].copy()  # BGR → RGB
         elif isinstance(page_image_source, np.ndarray):
-            im = Image.fromarray(page_image_source)
+            arr = page_image_source
         elif isinstance(page_image_source, str) and page_image_source:
             raw = base64.b64decode(page_image_source)
             im0 = Image.open(io.BytesIO(raw))
-            im = im0.convert("RGB")
+            arr = np.asarray(im0.convert("RGB"), dtype=np.uint8)
             im0.close()
         else:
             return []
     except Exception:
         return []
 
-    w, h = im.size
+    h, w = arr.shape[0], arr.shape[1]
     if w <= 1 or h <= 1:
-        im.close()
         return []
 
     def _clamp_int(v: float, lo: int, hi: int) -> int:
@@ -196,26 +192,19 @@ def _crop_all_from_page(
         y1 = _clamp_int(y1n * h, 0, h)
         y2 = _clamp_int(y2n * h, 0, h)
 
-        if x2 <= x1 or y2 <= y1:
-            continue
-
-        crop = im.crop((x1, y1, x2, y2))
-        cw, ch = crop.size
-        if cw <= 1 or ch <= 1:
-            crop.close()
+        if x2 - x1 <= 1 or y2 - y1 <= 1:
             continue
 
         if as_b64:
+            crop_pil = Image.fromarray(arr[y1:y2, x1:x2])
             buf = io.BytesIO()
-            crop.save(buf, format="PNG")
-            crop.close()
+            crop_pil.save(buf, format="PNG")
+            crop_pil.close()
             value = base64.b64encode(buf.getvalue()).decode("ascii")
         else:
-            value = np.asarray(crop, dtype=np.uint8).copy()
-            crop.close()
+            value = arr[y1:y2, x1:x2].copy()
         results.append((label_name, [float(x) for x in bbox], value))
 
-    im.close()
     return results
 
 

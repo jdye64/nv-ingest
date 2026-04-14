@@ -354,13 +354,22 @@ class FusedVisionActor(AbstractOperator, GPUOperator):
         t_ocr = time.perf_counter() - t2
 
         # ------ Compact for serialization -----------------------------
+        t3 = time.perf_counter()
         self._restore_jpeg_bytes(batch_df, saved_jpegs)
+        t_ser = time.perf_counter() - t3
 
         elapsed = time.perf_counter() - t0
+
+        n_det = 0
+        for idx in batch_df.index:
+            pe = batch_df.at[idx, "page_elements_v3"] if "page_elements_v3" in batch_df.columns else None
+            if isinstance(pe, dict):
+                n_det += len(pe.get("detections") or [])
+
         logger.info(
-            "FusedVisionActor: %d rows in %.2fs "
-            "(detect=%.2fs, table+graphic=%.2fs, ocr=%.2fs)",
-            len(batch_df), elapsed, t_detect, t_tg, t_ocr,
+            "FusedVisionActor: %d rows, %d detections in %.2fs "
+            "(detect=%.2fs, table+graphic=%.2fs, ocr=%.2fs, ser=%.2fs)",
+            len(batch_df), n_det, elapsed, t_detect, t_tg, t_ocr, t_ser,
         )
         return batch_df
 
