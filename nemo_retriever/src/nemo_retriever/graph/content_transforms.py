@@ -17,6 +17,22 @@ from nemo_retriever.params.models import IMAGE_MODALITIES
 _CONTENT_COLUMNS = ("table", "chart", "infographic")
 
 
+def _strip_heavy_image_data(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop raw pixel arrays from page_image dicts to cut serialization cost.
+
+    After the content transform, no downstream stage (embed, store, etc.)
+    needs the raw numpy array.  Keeping it would serialize ~2-3 MB per row
+    through every remaining Ray Data stage boundary.
+    """
+    if "page_image" not in df.columns:
+        return df
+    for idx in df.index:
+        pi = df.at[idx, "page_image"]
+        if isinstance(pi, dict) and "pixels" in pi:
+            pi.pop("pixels", None)
+    return df
+
+
 def _combine_text_with_content(row: Any, text_column: str, content_columns: Sequence[str]) -> str:
     """Combine page text with OCR content text for embedding."""
     parts = []
@@ -75,7 +91,7 @@ def explode_content_to_rows(
                 lambda page_image: resolve_image_b64(page_image) if isinstance(page_image, dict) else None
             )
         batch_df["_embed_modality"] = text_mod
-        return batch_df
+        return _strip_heavy_image_data(batch_df)
 
     new_rows: List[Dict[str, Any]] = []
     for _, row in batch_df.iterrows():
@@ -137,7 +153,8 @@ def explode_content_to_rows(
                 preserved["_image_b64"] = page_image_b64
             new_rows.append(preserved)
 
-    return pd.DataFrame(new_rows).reset_index(drop=True)
+    result = pd.DataFrame(new_rows).reset_index(drop=True)
+    return _strip_heavy_image_data(result)
 
 
 def collapse_content_to_page_rows(
@@ -166,4 +183,4 @@ def collapse_content_to_page_rows(
             batch_df["_image_b64"] = None
 
     batch_df["_embed_modality"] = modality
-    return batch_df
+    return _strip_heavy_image_data(batch_df)
