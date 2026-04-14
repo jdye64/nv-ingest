@@ -80,9 +80,68 @@ _log(f"  → {len(df)} rows in {time.perf_counter() - t1:.2f}s")
 DUMP_DIR = Path("/tmp/nemo_retriever_debug")
 DUMP_DIR.mkdir(parents=True, exist_ok=True)
 
-df_sample = df.head(5)
-df_sample.to_json(DUMP_DIR / "df_sample.json", orient="records", indent=2, default_handler=str)
-_log(f"  → wrote {DUMP_DIR / 'df_sample.json'}")
+# ── Count detections per model and add as columns ─────────────────────
+def _count_pe_detections(row):
+    pe = row.get("page_elements_v3")
+    if isinstance(pe, dict):
+        dets = pe.get("detections")
+        return len(dets) if isinstance(dets, list) else 0
+    return 0
+
+def _count_list_col(row, col):
+    val = row.get(col)
+    return len(val) if isinstance(val, list) else 0
+
+df["n_page_element_detections"] = df.apply(_count_pe_detections, axis=1)
+df["n_table_crops"] = df.apply(lambda r: _count_list_col(r, "table"), axis=1)
+df["n_chart_crops"] = df.apply(lambda r: _count_list_col(r, "chart"), axis=1)
+
+_log(f"  Detection totals across {len(df)} rows:")
+_log(f"    page_elements: {df['n_page_element_detections'].sum()}")
+_log(f"    table crops:   {df['n_table_crops'].sum()}")
+_log(f"    chart crops:   {df['n_chart_crops'].sum()}")
+
+# ── Count per-label breakdown from page_elements_v3 ───────────────────
+label_counts: dict[str, int] = {}
+for pe in df["page_elements_v3"]:
+    if isinstance(pe, dict):
+        for det in (pe.get("detections") or []):
+            if isinstance(det, dict):
+                lbl = det.get("label_name", "unknown")
+                label_counts[lbl] = label_counts.get(lbl, 0) + 1
+_log(f"    per-label breakdown: {json.dumps(label_counts, indent=6)}")
+
+# ── Strip image data and write full DataFrame to JSON ─────────────────
+def _strip_images(val):
+    if isinstance(val, dict):
+        return {k: v for k, v in val.items()
+                if k not in ("jpeg_bytes", "pixels", "image_b64", "orig_shape_hw")}
+    return val
+
+def _strip_embeddings(val):
+    """Replace large embedding vectors with their length for readability."""
+    if isinstance(val, dict) and "embedding" in val:
+        emb = val["embedding"]
+        out = dict(val)
+        if hasattr(emb, "__len__"):
+            out["embedding"] = f"<vector len={len(emb)}>"
+        return out
+    return val
+
+df_export = df.copy()
+if "page_image" in df_export.columns:
+    df_export["page_image"] = df_export["page_image"].apply(_strip_images)
+
+for col in df_export.columns:
+    if "embed" in col.lower():
+        df_export[col] = df_export[col].apply(_strip_embeddings)
+    sample = df_export[col].iloc[0] if len(df_export) > 0 else None
+    if isinstance(sample, (bytes, _np.ndarray)):
+        df_export.drop(columns=[col], inplace=True)
+
+EXPORT_PATH = DUMP_DIR / "full_dataframe.json"
+df_export.to_json(EXPORT_PATH, orient="records", indent=2, default_handler=str)
+_log(f"  → wrote full dataframe ({len(df_export)} rows, {len(df_export.columns)} cols) to {EXPORT_PATH}")
 
 for i, row in df.head(3).iterrows():
     meta = row.get("metadata")
