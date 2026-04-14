@@ -65,6 +65,10 @@ class OCRActor(AbstractOperator, GPUOperator):
             if ocr_path.is_dir():
                 model_dir = resolve_model_dir(ocr_trt_engine_path, model_type="ocr")
 
+            if model_dir:
+                os.environ["HF_HUB_OFFLINE"] = "1"
+                os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
             self._model = NemotronOCRV1(model_dir=model_dir)
             self._nim_client = None
             logger.info(

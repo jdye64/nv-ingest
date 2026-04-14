@@ -36,6 +36,8 @@ class NemotronOCRV1(BaseModel):
         from nemotron_ocr.inference.pipeline import NemotronOCR  # local-only import
 
         if model_dir:
+            os.environ["HF_HUB_OFFLINE"] = "1"
+            os.environ["TRANSFORMERS_OFFLINE"] = "1"
             self._model = NemotronOCR(model_dir=model_dir)
         else:
             self._model = NemotronOCR()

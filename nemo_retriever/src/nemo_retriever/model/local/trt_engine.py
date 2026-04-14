@@ -283,20 +283,29 @@ class TRTYoloxEngine:
             tuple(engine.get_tensor_shape(self._input_name))[0] == -1
         )
 
-        # Determine the engine's maximum batch size from its profiles.
+        # Parse all optimization profiles: list of (profile_idx, max_batch).
+        # Sorted by max_batch ascending so _best_detect_profile can pick
+        # the tightest fit.
+        self._detect_profiles: List[Tuple[int, int]] = []
         self._max_engine_batch = 1
         if self._has_dynamic_batch:
             for p_idx in range(engine.num_optimization_profiles):
                 try:
                     _, _, mx = engine.get_tensor_profile_shape(self._input_name, p_idx)
-                    self._max_engine_batch = max(self._max_engine_batch, int(mx[0]))
+                    max_b = int(mx[0])
+                    self._detect_profiles.append((p_idx, max_b))
+                    self._max_engine_batch = max(self._max_engine_batch, max_b)
                 except Exception:
                     pass
+            self._detect_profiles.sort(key=lambda t: t[1])
         else:
             static = tuple(engine.get_tensor_shape(self._input_name))
             self._max_engine_batch = int(static[0])
 
-        logger.info("TRTYoloxEngine max engine batch size: %d", self._max_engine_batch)
+        logger.info(
+            "TRTYoloxEngine max engine batch size: %d, profiles: %s",
+            self._max_engine_batch, self._detect_profiles,
+        )
 
         # Double-buffer: two slots with independent contexts / streams / buffers.
         self._slots = [_InferSlot(engine, self._device) for _ in range(2)]
@@ -580,6 +589,17 @@ class TRTYoloxEngine:
     # Double-buffered GPU inference
     # ------------------------------------------------------------------
 
+    def _best_detect_profile(self, batch: int) -> Optional[int]:
+        """Return the profile index whose max_batch is >= *batch*.
+
+        Prefers the tightest fit (smallest max_batch that still fits).
+        Returns ``None`` if no profile fits.
+        """
+        for p_idx, max_b in self._detect_profiles:
+            if batch <= max_b:
+                return p_idx
+        return None
+
     def _launch_on_slot(self, slot: _InferSlot, input_nchw: torch.Tensor) -> None:
         """Transfer *input_nchw* to GPU on *slot*'s stream, configure the
         execution context, and launch ``execute_async_v3`` **without**
@@ -598,6 +618,12 @@ class TRTYoloxEngine:
 
         ctx = slot.ctx
         if self._has_dynamic_batch:
+            B = int(d_input.shape[0])
+            profile_idx = self._best_detect_profile(B)
+            if profile_idx is not None and ctx.active_optimization_profile != profile_idx:
+                slot.stream.synchronize()
+                ctx.set_optimization_profile_async(profile_idx, slot.stream.cuda_stream)
+                slot.stream.synchronize()
             ctx.set_input_shape(self._input_name, tuple(d_input.shape))
 
         ctx.set_tensor_address(self._input_name, d_input.data_ptr())

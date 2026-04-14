@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any, Optional
 
@@ -104,6 +105,9 @@ class TableStructureActor(AbstractOperator, GPUOperator):
             ocr_model_dir: str | None = None
             if Path(_ocr_trt).is_dir():
                 ocr_model_dir = resolve_model_dir(_ocr_trt, model_type="ocr")
+            if ocr_model_dir:
+                os.environ["HF_HUB_OFFLINE"] = "1"
+                os.environ["TRANSFORMERS_OFFLINE"] = "1"
             self._ocr_model = NemotronOCRV1(model_dir=ocr_model_dir)
             logger.info("TableStructureActor: ocr backend=HUGGINGFACE+TRT model_dir=%s", ocr_model_dir)
         else:
