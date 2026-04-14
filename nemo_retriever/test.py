@@ -28,11 +28,11 @@ ing = GraphIngestor(
     node_overrides={
         # Single-GPU budget: total = 1.0 GPU so all stages coexist.
         #   5×0.05 + 2×0.05 + 2×0.05 + 5×0.05 + 6×0.05 = 1.0 GPU
-        "PageElementDetectionActor": {"concurrency": 5, "num_gpus": 0.05},
-        "TableStructureActor": {"concurrency": 2, "num_gpus": 0.05},
-        "GraphicElementsActor": {"concurrency": 2, "num_gpus": 0.05},
+        "PageElementDetectionActor": {"concurrency": 3, "num_gpus": 0.05},
+        "TableStructureActor": {"concurrency": 3, "num_gpus": 0.05},
+        "GraphicElementsActor": {"concurrency": 3, "num_gpus": 0.05},
         "OCRActor": {"concurrency": 5, "num_gpus": 0.05},
-        "_BatchEmbedActor": {"concurrency": 6, "num_gpus": 0.05},
+        "_BatchEmbedActor": {"concurrency": 4, "num_gpus": 0.05},
     },
 )
 ing = ing.files(docs).extract(extract).embed(embed)
