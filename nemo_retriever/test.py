@@ -71,8 +71,13 @@ if not lance_rows:
     print("ERROR: No embeddings found in the output. Skipping LanceDB + recall.")
 else:
     dim = infer_vector_dim(lance_rows)
+    print(f"  → vector dim = {dim}")
     schema = lancedb_schema(vector_dim=dim)
     db = lancedb.connect(uri=LANCEDB_URI)
+    try:
+        db.drop_table(LANCEDB_TABLE)
+    except Exception:
+        pass
     print(f"Writing {len(lance_rows)} rows to LanceDB at {LANCEDB_URI}/{LANCEDB_TABLE} …")
     t2 = time.perf_counter()
     table = create_or_append_lancedb_table(db, LANCEDB_TABLE, lance_rows, schema, overwrite=True)
