@@ -283,6 +283,21 @@ class TRTYoloxEngine:
             tuple(engine.get_tensor_shape(self._input_name))[0] == -1
         )
 
+        # Determine the engine's maximum batch size from its profiles.
+        self._max_engine_batch = 1
+        if self._has_dynamic_batch:
+            for p_idx in range(engine.num_optimization_profiles):
+                try:
+                    _, _, mx = engine.get_tensor_profile_shape(self._input_name, p_idx)
+                    self._max_engine_batch = max(self._max_engine_batch, int(mx[0]))
+                except Exception:
+                    pass
+        else:
+            static = tuple(engine.get_tensor_shape(self._input_name))
+            self._max_engine_batch = int(static[0])
+
+        logger.info("TRTYoloxEngine max engine batch size: %d", self._max_engine_batch)
+
         # Double-buffer: two slots with independent contexts / streams / buffers.
         self._slots = [_InferSlot(engine, self._device) for _ in range(2)]
         self._active_slot = 0
@@ -445,8 +460,11 @@ class TRTYoloxEngine:
         orig_shape: Union[Tuple[int, int], List[Tuple[int, int]]],
     ) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
         """Synchronous inference — submit then immediately flush."""
-        self.invoke_async(input_tensor, orig_shape)
-        return self.flush()  # type: ignore[return-value]
+        result = self.invoke_async(input_tensor, orig_shape)
+        flushed = self.flush()
+        if flushed is not None:
+            return flushed
+        return result  # type: ignore[return-value]
 
     def invoke_async(
         self,
@@ -456,6 +474,10 @@ class TRTYoloxEngine:
         """Launch TRT inference **asynchronously** and return the
         **previous** batch's post-processed results (or ``None`` on the
         first call).
+
+        If the input batch exceeds the engine's maximum batch size the
+        images are automatically sub-batched through the engine and the
+        results merged, transparent to the caller.
 
         Use with :meth:`flush` to drain the final in-flight batch::
 
@@ -477,14 +499,39 @@ class TRTYoloxEngine:
         else:
             shapes = [orig_shape] * batch_size
 
+        # If the batch exceeds the engine's max, run sub-batches
+        # synchronously and return merged results immediately.
+        if batch_size > self._max_engine_batch:
+            # Flush any in-flight work first.
+            prev_results = self.flush()
+            all_preds: List[Dict[str, Any]] = []
+            for start in range(0, batch_size, self._max_engine_batch):
+                end = min(start + self._max_engine_batch, batch_size)
+                sub_tensor = input_tensor[start:end]
+                sub_shapes = shapes[start:end]
+                slot = self._slots[0]
+                self._launch_on_slot(slot, sub_tensor)
+                slot.stream.synchronize()
+                preds = self._postprocess_batch(slot.bufs, sub_shapes)
+                all_preds.extend(preds)
+            # Return previous results plus current merged results.
+            # Caller expects None or results; since we flushed, return
+            # the merged list as the new "previous" and store nothing
+            # in-flight.
+            if prev_results is not None:
+                if isinstance(prev_results, list):
+                    return prev_results + all_preds
+                return [prev_results] + all_preds
+            return all_preds if len(all_preds) > 1 else all_preds[0]
+
         # ---- collect previous in-flight results (if any) ----
-        prev_results: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None
+        prev_results_normal: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None
         if self._inflight is not None:
             prev_slot_idx, prev_shapes, prev_bs = self._inflight
             prev_slot = self._slots[prev_slot_idx]
             prev_slot.stream.synchronize()
             preds = self._postprocess_batch(prev_slot.bufs, prev_shapes)
-            prev_results = preds[0] if prev_bs == 1 else preds
+            prev_results_normal = preds[0] if prev_bs == 1 else preds
 
         # ---- launch new batch on the current slot (no sync) ----
         slot = self._slots[self._active_slot]
@@ -492,7 +539,7 @@ class TRTYoloxEngine:
         self._inflight = (self._active_slot, shapes, batch_size)
         self._active_slot = 1 - self._active_slot
 
-        return prev_results
+        return prev_results_normal
 
     def flush(self) -> Optional[Union[Dict[str, Any], List[Dict[str, Any]]]]:
         """Synchronise and return the last in-flight batch's results.
