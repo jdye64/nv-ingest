@@ -60,6 +60,7 @@ LANCEDB_TABLE = "bo767"
 print("Materialising Ray Dataset to pandas …")
 t1 = time.perf_counter()
 df = ray_ds.to_pandas()
+breakpoint()
 print(f"  → {len(df)} rows in {time.perf_counter() - t1:.2f}s")
 
 print("Building LanceDB rows …")
