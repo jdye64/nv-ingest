@@ -61,9 +61,14 @@ class _DaliLetterboxPipeline:
     After ``build()``, call ``run(images)`` with a list of HWC uint8 numpy
     arrays and get back a ``(BCHW_float32_torch_tensor, orig_shapes)`` tuple,
     both on GPU.
+
+    The pipeline is configured with ``exec_async=False``,
+    ``exec_pipelined=False``, and ``prefetch_queue_depth=1`` so that a
+    single ``feed_input`` → ``run`` cycle works reliably without needing
+    to prime a multi-stage prefetch queue.
     """
 
-    def __init__(self, target_h: int, target_w: int, device_id: int = 0, max_batch_size: int = 64) -> None:
+    def __init__(self, target_h: int, target_w: int, device_id: int = 0, max_batch_size: int = 128) -> None:
         if not _DALI_AVAILABLE:
             raise ImportError("nvidia-dali is required for DaliLetterboxPipeline.")
 
@@ -79,6 +84,9 @@ class _DaliLetterboxPipeline:
             batch_size=self._max_batch_size,
             num_threads=4,
             device_id=self._device_id,
+            exec_async=False,
+            exec_pipelined=False,
+            prefetch_queue_depth=1,
         )
         def _pipe():
             images = _dali_fn.external_source(device="cpu", name="images")
@@ -104,18 +112,21 @@ class _DaliLetterboxPipeline:
 
     def run(self, images: "list[np.ndarray]") -> Tuple[torch.Tensor, "list[Tuple[int, int]]"]:
         """Feed a batch of HWC uint8 numpy arrays, return (BCHW float32 GPU tensor, orig_shapes)."""
+        if not images:
+            return torch.empty((0, 3, self._target_h, self._target_w),
+                               dtype=torch.float32, device=f"cuda:{self._device_id}"), []
+
         orig_shapes = [(int(img.shape[0]), int(img.shape[1])) for img in images]
 
         # Sub-batch if the input exceeds the pipeline's max_batch_size.
         if len(images) > self._max_batch_size:
-            chunks_t, chunks_s = [], []
+            chunks_t: list[torch.Tensor] = []
             for start in range(0, len(images), self._max_batch_size):
                 sub = images[start : start + self._max_batch_size]
                 self._pipe.feed_input("images", sub)
                 (output,) = self._pipe.run()
                 chunks_t.append(torch.from_dlpack(output.as_tensor()).contiguous())
-                chunks_s.extend(orig_shapes[start : start + self._max_batch_size])
-            return torch.cat(chunks_t, dim=0), chunks_s
+            return torch.cat(chunks_t, dim=0), orig_shapes
 
         self._pipe.feed_input("images", images)
         (output,) = self._pipe.run()
@@ -414,8 +425,17 @@ class TRTYoloxEngine:
             try:
                 return self._dali_pipe.run(hwc_arrays)
             except Exception:
-                logger.warning("DALI preprocess failed; falling back to torch.", exc_info=True)
-                self._dali_pipe = None
+                logger.warning("DALI preprocess failed; rebuilding pipeline.", exc_info=True)
+                try:
+                    self._dali_pipe = _DaliLetterboxPipeline(
+                        target_h=self._input_shape[0],
+                        target_w=self._input_shape[1],
+                        device_id=self._device.index or 0,
+                        max_batch_size=128,
+                    )
+                except Exception:
+                    logger.warning("DALI rebuild failed; falling back to torch permanently.", exc_info=True)
+                    self._dali_pipe = None
 
         # ---- Torch fallback: per-image letterbox on GPU ----
         tgt_h, tgt_w = self._input_shape
