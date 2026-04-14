@@ -26,8 +26,7 @@ ing = GraphIngestor(
     run_mode="batch",
     ray_address="auto",
     node_overrides={
-        "PDFExtractionActor": {"concurrency": 48, "batch_size": 16},
-        # GPU actors — total: 4×0.04 + 2×0.04 + 2×0.04 + 6×0.04 + 6×0.04 = 0.80 GPU
+        "PDFExtractionActor": {"concurrency": 96, "batch_size": 16},
         "PageElementDetectionActor": {"concurrency": 4, "num_gpus": 0.04, "batch_size": 64},
         "TableStructureActor": {"concurrency": 2, "num_gpus": 0.04, "batch_size": 32},
         "GraphicElementsActor": {"concurrency": 2, "num_gpus": 0.04, "batch_size": 32},

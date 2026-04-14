@@ -319,6 +319,11 @@ class RayDataExecutor(AbstractExecutor):
             else:
                 num_gpus = self._default_num_gpus
 
+            # Per Ray Data docs, GPU actors should request num_cpus=0 so they
+            # don't unnecessarily hold CPU slots that CPU-only actors need.
+            if num_gpus > 0 and num_cpus == self._default_num_cpus:
+                num_cpus = 0
+
             if target_num_rows_per_block is not None and int(target_num_rows_per_block) > 0:
                 ds = ds.repartition(target_num_rows_per_block=int(target_num_rows_per_block))
 
