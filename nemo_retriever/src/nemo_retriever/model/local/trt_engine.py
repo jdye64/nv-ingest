@@ -106,6 +106,17 @@ class _DaliLetterboxPipeline:
         """Feed a batch of HWC uint8 numpy arrays, return (BCHW float32 GPU tensor, orig_shapes)."""
         orig_shapes = [(int(img.shape[0]), int(img.shape[1])) for img in images]
 
+        # Sub-batch if the input exceeds the pipeline's max_batch_size.
+        if len(images) > self._max_batch_size:
+            chunks_t, chunks_s = [], []
+            for start in range(0, len(images), self._max_batch_size):
+                sub = images[start : start + self._max_batch_size]
+                self._pipe.feed_input("images", sub)
+                (output,) = self._pipe.run()
+                chunks_t.append(torch.from_dlpack(output.as_tensor()).contiguous())
+                chunks_s.extend(orig_shapes[start : start + self._max_batch_size])
+            return torch.cat(chunks_t, dim=0), chunks_s
+
         self._pipe.feed_input("images", images)
         (output,) = self._pipe.run()
 
@@ -289,7 +300,7 @@ class TRTYoloxEngine:
                     target_h=input_shape[0],
                     target_w=input_shape[1],
                     device_id=self._device.index or 0,
-                    max_batch_size=64,
+                    max_batch_size=128,
                 )
                 logger.info("DALI letterbox pipeline initialized for TRTYoloxEngine.")
             except Exception:
@@ -380,6 +391,7 @@ class TRTYoloxEngine:
                 return self._dali_pipe.run(hwc_arrays)
             except Exception:
                 logger.warning("DALI preprocess failed; falling back to torch.", exc_info=True)
+                self._dali_pipe = None
 
         # ---- Torch fallback: per-image letterbox on GPU ----
         tgt_h, tgt_w = self._input_shape
@@ -393,7 +405,9 @@ class TRTYoloxEngine:
         orig_shapes: List[Tuple[int, int]] = []
         for i, img in enumerate(images):
             if isinstance(img, np.ndarray):
-                arr = img
+                arr = np.array(img, copy=False)
+                if not arr.flags.writeable:
+                    arr = arr.copy()
                 if arr.ndim == 4 and int(arr.shape[0]) == 1:
                     arr = arr[0]
                 if int(arr.shape[-1]) == 3 and int(arr.shape[0]) != 3:
