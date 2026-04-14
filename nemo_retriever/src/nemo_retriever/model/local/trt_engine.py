@@ -811,7 +811,7 @@ class TRTEmbedEngine:
         # {384, 512, 768, 1024, 2048}; always request the full 2048.
         self._embed_dim: int = 2048
 
-        # Log detailed info about all tensors for debugging.
+        # Print tensor info to stdout so it's visible in Ray worker logs.
         for name, info in self._io_info.items():
             profile_shapes = []
             if info["is_input"]:
@@ -823,11 +823,12 @@ class TRTEmbedEngine:
                         )
                     except Exception:
                         pass
-            logger.info(
-                "TRTEmbedEngine tensor: name=%s, is_input=%s, dtype=%s, "
-                "shape=%s, profiles=[%s]",
-                name, info["is_input"], info["dtype"], info["shape"],
-                ", ".join(profile_shapes),
+            raw_trt_dtype = engine.get_tensor_dtype(name)
+            print(
+                f"[TRTEmbedEngine] tensor: name={name}, is_input={info['is_input']}, "
+                f"trt_dtype={raw_trt_dtype}, np_dtype={info['dtype']}, "
+                f"shape={info['shape']}, profiles=[{', '.join(profile_shapes)}]",
+                flush=True,
             )
 
         # Double-buffer: two slots with independent contexts / streams.
