@@ -183,13 +183,15 @@ class _InferSlot:
     """Resources for one side of the double-buffer: execution context,
     CUDA stream, and reusable output buffers."""
 
-    __slots__ = ("ctx", "stream", "cached_shapes", "bufs")
+    __slots__ = ("ctx", "stream", "cached_shapes", "bufs", "_d_input_ref", "_d_input_pinned_ref")
 
     def __init__(self, engine: Any, device: torch.device) -> None:
         self.ctx = engine.create_execution_context()
         self.stream = torch.cuda.Stream(device)
         self.cached_shapes: Optional[List[Tuple[int, ...]]] = None
         self.bufs: List[torch.Tensor] = []
+        self._d_input_ref: Optional[torch.Tensor] = None
+        self._d_input_pinned_ref: Optional[torch.Tensor] = None
 
 
 class TRTYoloxEngine:
@@ -838,8 +840,10 @@ class TRTEmbedEngine:
         t_dtype = _NP_TO_TORCH_DTYPE.get(np_dtype, torch.int32)
 
         fill = 0
-        if name == "dimensions" and self._embed_dim is not None:
-            fill = self._embed_dim
+        if name == "dimensions":
+            # Use discovered dim, or a large default so the model outputs its
+            # full (untruncated) embedding rather than a 1-d scalar.
+            fill = self._embed_dim if self._embed_dim is not None else 65536
 
         if ndim == 0:
             return torch.full((), fill, dtype=t_dtype, device=self._device)
@@ -939,7 +943,7 @@ class TRTEmbedEngine:
                 logger.info("Probed embed_dim=%d via real inference, output shape %s", dim, real_shape)
                 return dim
         except Exception as exc:
-            logger.warning("embed dim probe failed: %s", exc)
+            logger.error("embed dim probe failed (will use large default for 'dimensions'): %s", exc, exc_info=True)
 
         return None
 
