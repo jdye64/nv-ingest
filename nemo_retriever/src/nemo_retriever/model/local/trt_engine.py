@@ -811,6 +811,25 @@ class TRTEmbedEngine:
         # {384, 512, 768, 1024, 2048}; always request the full 2048.
         self._embed_dim: int = 2048
 
+        # Log detailed info about all tensors for debugging.
+        for name, info in self._io_info.items():
+            profile_shapes = []
+            if info["is_input"]:
+                for p_idx in range(num_profiles):
+                    try:
+                        mn, opt, mx = engine.get_tensor_profile_shape(name, p_idx)
+                        profile_shapes.append(
+                            f"p{p_idx}:[{tuple(mn)}..{tuple(mx)}]"
+                        )
+                    except Exception:
+                        pass
+            logger.info(
+                "TRTEmbedEngine tensor: name=%s, is_input=%s, dtype=%s, "
+                "shape=%s, profiles=[%s]",
+                name, info["is_input"], info["dtype"], info["shape"],
+                ", ".join(profile_shapes),
+            )
+
         # Double-buffer: two slots with independent contexts / streams.
         self._slots = [_EmbedSlot(engine, self._device) for _ in range(2)]
         self._active_slot = 0
@@ -856,6 +875,14 @@ class TRTEmbedEngine:
             ctx.set_input_shape(name, shape if len(shape) > 0 else (1,))
             ctx.set_tensor_address(name, d_extra.data_ptr())
             slot.d_inputs[f"_extra_{name}"] = d_extra
+
+            if not hasattr(self, "_extra_logged"):
+                logger.info(
+                    "Binding extra input '%s': fill=%d, dtype=%s (torch=%s), "
+                    "shape=%s, ndim=%d",
+                    name, fill, np_dtype, t_dtype, shape, ndim,
+                )
+        self._extra_logged = True
 
     @property
     def is_remote(self) -> bool:
@@ -1015,7 +1042,15 @@ class TRTEmbedEngine:
         ctx.set_tensor_address(self._output_name, slot.d_output.data_ptr())
 
         with torch.cuda.stream(slot.stream):
-            ctx.execute_async_v3(stream_handle=slot.stream.cuda_stream)
+            ok = ctx.execute_async_v3(stream_handle=slot.stream.cuda_stream)
+        if not ok:
+            logger.error(
+                "execute_async_v3 FAILED for embed input (%d, %d) on profile %d. "
+                "Extra inputs: %s. Output shape: %s",
+                B, S, profile_idx,
+                {n: slot.d_inputs.get(f"_extra_{n}") for n in self._extra_input_names},
+                out_shape,
+            )
 
     def _drain_embed_slot(
         self,

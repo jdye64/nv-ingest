@@ -90,6 +90,16 @@ print(f"  → {len(lance_rows)} rows with embeddings (from {len(df)} total rows)
 if lance_rows:
     sample_vec = lance_rows[0].get("vector", [])
     print(f"  → first vector: len={len(sample_vec)}, first_5={sample_vec[:5]}")
+    # Check if vectors are diverse or all identical
+    import numpy as _np
+    vecs_sample = [r["vector"] for r in lance_rows[:10] if "vector" in r]
+    if len(vecs_sample) >= 2:
+        v0 = _np.array(vecs_sample[0])
+        all_same = all(_np.allclose(v0, _np.array(v)) for v in vecs_sample[1:])
+        all_zero = _np.allclose(v0, 0.0)
+        print(f"  → first 10 vectors all identical: {all_same}")
+        print(f"  → first vector all zeros: {all_zero}")
+        print(f"  → first vector norm: {_np.linalg.norm(v0):.6f}")
     with open(DUMP_DIR / "lance_rows_sample.json", "w") as f:
         json.dump(lance_rows[:3], f, indent=2, default=str)
     print(f"  → wrote {DUMP_DIR / 'lance_rows_sample.json'}")
