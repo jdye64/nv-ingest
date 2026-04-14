@@ -27,7 +27,7 @@ embed = EmbedParams(
 
 ing = GraphIngestor(
     run_mode="batch",
-    ray_address="local",
+    ray_address="auto",
     node_overrides={
         "PDFExtractionActor": {"concurrency": 48, "batch_size": 16},
         "PageElementDetectionActor": {"concurrency": 4, "num_gpus": 0.25, "num_cpus": 0, "batch_size": 32},
