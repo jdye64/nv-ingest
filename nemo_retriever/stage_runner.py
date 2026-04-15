@@ -72,9 +72,10 @@ def _make_doc_to_pdf_actor(**kwargs: Any) -> Any:
 
 
 def _make_pdf_split_actor(**kwargs: Any) -> Any:
+    from nemo_retriever.params import PdfSplitParams
     from nemo_retriever.pdf.split import PDFSplitActor
 
-    return PDFSplitActor(**kwargs)
+    return PDFSplitActor(split_params=PdfSplitParams(**kwargs))
 
 
 def _make_pdf_extraction_actor(**kwargs: Any) -> Any:
@@ -108,15 +109,17 @@ def _make_ocr_actor(**kwargs: Any) -> Any:
 
 
 def _make_text_chunk_actor(**kwargs: Any) -> Any:
+    from nemo_retriever.params import TextChunkParams
     from nemo_retriever.txt.ray_data import TextChunkActor
 
-    return TextChunkActor(**kwargs)
+    return TextChunkActor(params=TextChunkParams(**kwargs))
 
 
 def _make_embed_actor(**kwargs: Any) -> Any:
+    from nemo_retriever.params import EmbedParams
     from nemo_retriever.text_embed.operators import _BatchEmbedActor
 
-    return _BatchEmbedActor(**kwargs)
+    return _BatchEmbedActor(params=EmbedParams(**kwargs))
 
 
 # Ordered registry for the default PDF pipeline.
