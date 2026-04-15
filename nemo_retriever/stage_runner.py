@@ -31,6 +31,7 @@ Each stage directory contains:
 from __future__ import annotations
 
 import argparse
+import gc
 import glob as _glob
 import json
 import os
@@ -49,8 +50,10 @@ from nemo_retriever.utils.stage_io import load_stage, save_stage
 # Stage registry
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class StageSpec(NamedTuple):
     """Descriptor for a single pipeline stage."""
+
     index: int
     dir_name: str
     actor_factory: Callable[..., Any]
@@ -64,46 +67,55 @@ def _make_file_load_actor(**_kwargs: Any) -> None:
 
 def _make_doc_to_pdf_actor(**kwargs: Any) -> Any:
     from nemo_retriever.utils.convert.to_pdf import DocToPdfConversionActor
+
     return DocToPdfConversionActor(**kwargs)
 
 
 def _make_pdf_split_actor(**kwargs: Any) -> Any:
     from nemo_retriever.pdf.split import PDFSplitActor
+
     return PDFSplitActor(**kwargs)
 
 
 def _make_pdf_extraction_actor(**kwargs: Any) -> Any:
     from nemo_retriever.pdf.extract import PDFExtractionActor
+
     return PDFExtractionActor(**kwargs)
 
 
 def _make_page_elements_actor(**kwargs: Any) -> Any:
     from nemo_retriever.page_elements.page_elements import PageElementDetectionActor
+
     return PageElementDetectionActor(**kwargs)
 
 
 def _make_table_structure_actor(**kwargs: Any) -> Any:
     from nemo_retriever.table.table_detection import TableStructureActor
+
     return TableStructureActor(**kwargs)
 
 
 def _make_graphic_elements_actor(**kwargs: Any) -> Any:
     from nemo_retriever.chart.chart_detection import GraphicElementsActor
+
     return GraphicElementsActor(**kwargs)
 
 
 def _make_ocr_actor(**kwargs: Any) -> Any:
     from nemo_retriever.ocr.ocr import OCRActor
+
     return OCRActor(**kwargs)
 
 
 def _make_text_chunk_actor(**kwargs: Any) -> Any:
     from nemo_retriever.txt.ray_data import TextChunkActor
+
     return TextChunkActor(**kwargs)
 
 
 def _make_embed_actor(**kwargs: Any) -> Any:
     from nemo_retriever.text_embed.operators import _BatchEmbedActor
+
     return _BatchEmbedActor(**kwargs)
 
 
@@ -185,6 +197,7 @@ ORDERED_STAGES: List[str] = sorted(STAGE_REGISTRY, key=lambda s: STAGE_REGISTRY[
 # Helpers
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 def _load_files(paths: List[str]) -> pd.DataFrame:
     """Read files as raw bytes into a DataFrame with ``bytes`` and ``path`` columns."""
     rows: List[Dict[str, Any]] = []
@@ -215,6 +228,24 @@ def _run_actor(actor: Any, df: pd.DataFrame) -> pd.DataFrame:
     if not isinstance(result, pd.DataFrame):
         raise RuntimeError(f"Actor returned {type(result).__name__}, expected DataFrame")
     return result
+
+
+def _unload_actor(actor: Any) -> None:
+    """Delete an actor and release its GPU memory.
+
+    Actors load models eagerly in __init__ but have no cleanup methods.
+    We explicitly delete the object, run a full GC pass, and clear the
+    CUDA memory cache so VRAM is available for subsequent stages.
+    """
+    del actor
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except ImportError:
+        pass
 
 
 def _coerce_value(val_str: str) -> Any:
@@ -289,6 +320,7 @@ def _kwargs_for_stage(
 # Subcommand: run-all
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 def cmd_run_all(args: argparse.Namespace) -> None:
     output_path = Path(args.output_path)
     global_kw, stage_kw = _parse_extra_kwargs(args.kwarg)
@@ -330,6 +362,7 @@ def cmd_run_all(args: argparse.Namespace) -> None:
 
         t0 = time.perf_counter()
 
+        actor = None
         if stage_name == "file_load":
             df = _load_files(file_paths)
         else:
@@ -340,6 +373,11 @@ def cmd_run_all(args: argparse.Namespace) -> None:
             df = _run_actor(actor, df)
 
         elapsed = time.perf_counter() - t0
+
+        if actor is not None:
+            _unload_actor(actor)
+            actor = None
+            print("  Unloaded actor and freed GPU memory")
 
         meta = {
             "stage": stage_name,
@@ -362,6 +400,7 @@ def cmd_run_all(args: argparse.Namespace) -> None:
 # ═══════════════════════════════════════════════════════════════════════════
 # Subcommand: run
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 def cmd_run(args: argparse.Namespace) -> None:
     stage_name = args.stage
@@ -408,6 +447,7 @@ def cmd_run(args: argparse.Namespace) -> None:
 # ═══════════════════════════════════════════════════════════════════════════
 # Subcommand: benchmark
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 def cmd_benchmark(args: argparse.Namespace) -> None:
     stage_name = args.stage
@@ -477,6 +517,7 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
 # Subcommand: list
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 def cmd_list(_args: argparse.Namespace) -> None:
     print(f"{'Index':<7} {'Name':<20} {'Directory':<25}")
     print(f"{'─'*7} {'─'*20} {'─'*25}")
@@ -488,6 +529,7 @@ def cmd_list(_args: argparse.Namespace) -> None:
 # ═══════════════════════════════════════════════════════════════════════════
 # CLI wiring
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
