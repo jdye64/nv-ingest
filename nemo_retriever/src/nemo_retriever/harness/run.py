@@ -390,6 +390,21 @@ def _build_command(cfg: HarnessConfig, artifact_dir: Path, run_id: str) -> tuple
             "--no-recall-details",
         ]
 
+    if cfg.api_key:
+        cmd += ["--api-key", cfg.api_key]
+    if cfg.page_elements_invoke_url:
+        cmd += ["--page-elements-invoke-url", cfg.page_elements_invoke_url]
+    if cfg.ocr_invoke_url:
+        cmd += ["--ocr-invoke-url", cfg.ocr_invoke_url]
+    if cfg.graphic_elements_invoke_url:
+        cmd += ["--graphic-elements-invoke-url", cfg.graphic_elements_invoke_url]
+    if cfg.table_structure_invoke_url:
+        cmd += ["--table-structure-invoke-url", cfg.table_structure_invoke_url]
+    if cfg.embed_invoke_url:
+        cmd += ["--embed-invoke-url", cfg.embed_invoke_url]
+    if cfg.caption_invoke_url:
+        cmd += ["--caption-invoke-url", cfg.caption_invoke_url]
+
     cmd += ["--extract-page-as-image" if cfg.extract_page_as_image else "--no-extract-page-as-image"]
     if cfg.input_type == "audio":
         cmd += ["--segment-audio" if cfg.segment_audio else "--no-segment-audio"]
@@ -554,6 +569,13 @@ def _run_single(cfg: HarnessConfig, artifact_dir: Path, run_id: str, tags: list[
             "extract_infographics": cfg.extract_infographics,
             "write_detection_file": cfg.write_detection_file,
             "use_heuristics": cfg.use_heuristics,
+            "api_key": "(set)" if cfg.api_key else None,
+            "page_elements_invoke_url": cfg.page_elements_invoke_url,
+            "ocr_invoke_url": cfg.ocr_invoke_url,
+            "graphic_elements_invoke_url": cfg.graphic_elements_invoke_url,
+            "table_structure_invoke_url": cfg.table_structure_invoke_url,
+            "embed_invoke_url": cfg.embed_invoke_url,
+            "caption_invoke_url": cfg.caption_invoke_url,
             "store_images_uri": _resolve_store_uri(cfg, artifact_dir),
             "store_text": cfg.store_text,
             "strip_base64": cfg.strip_base64,
