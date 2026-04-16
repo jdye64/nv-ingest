@@ -13,10 +13,32 @@ if TYPE_CHECKING:
     from nemo_retriever.graph.pipeline_graph import Graph, Node
 
 
+_policy_checked = False
+
+
+def _ensure_event_loop_policy() -> None:
+    """Reset to the default asyncio policy if the current one prevents loop creation.
+
+    uvloop >= 0.22's ``get_event_loop()`` raises ``RuntimeError`` when no loop
+    is *running* (not merely *set*), which breaks Ray Data's async-actor
+    initialisation in freshly spawned worker processes.  Falling back to the
+    default policy lets ``get_event_loop()`` create a loop implicitly.
+    """
+    global _policy_checked
+    if _policy_checked:
+        return
+    _policy_checked = True
+    try:
+        asyncio.get_event_loop_policy().get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+
+
 class AbstractOperator(ABC):
     """Base class for all pipeline operators."""
 
     def __init__(self, **kwargs: Any) -> None:
+        _ensure_event_loop_policy()
         self._graph_init_kwargs = dict(kwargs)
         for key, value in kwargs.items():
             setattr(self, key, value)
