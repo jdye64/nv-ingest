@@ -413,9 +413,9 @@ class PDFExtractionCPUActor(AbstractOperator, CPUOperator):
     def postprocess(self, data: Any, **kwargs: Any) -> Any:
         return data
 
-    def __call__(self, pdf: Any, **override_kwargs: Any) -> Optional[Any]:
+    async def __call__(self, pdf: Any, **override_kwargs: Any) -> Optional[Any]:
         try:
-            return self.run(pdf, **override_kwargs)
+            return await self.arun(pdf, **override_kwargs)
         except BaseException as e:
             # As a last line of defense, never let the Ray UDF raise.
             source_path = None

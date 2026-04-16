@@ -9,7 +9,7 @@ from typing import Any, Optional
 from nemo_retriever.graph.abstract_operator import AbstractOperator
 from nemo_retriever.graph.cpu_operator import CPUOperator
 from nemo_retriever.params import RemoteRetryParams
-from nemo_retriever.ocr.shared import nemotron_parse_page_elements
+from nemo_retriever.ocr.shared import anemotron_parse_page_elements, nemotron_parse_page_elements
 
 
 class NemotronParseCPUActor(AbstractOperator, CPUOperator):
@@ -70,3 +70,19 @@ class NemotronParseCPUActor(AbstractOperator, CPUOperator):
 
     def postprocess(self, data: Any, **kwargs: Any) -> Any:
         return data
+
+    async def aprocess(self, data: Any, **kwargs: Any) -> Any:
+        return await anemotron_parse_page_elements(
+            data,
+            model=self._model,
+            invoke_url=self._invoke_url,
+            api_key=self._api_key,
+            request_timeout_s=self._request_timeout_s,
+            task_prompt=self._task_prompt,
+            extract_text=self._extract_text,
+            extract_tables=self._extract_tables,
+            extract_charts=self._extract_charts,
+            extract_infographics=self._extract_infographics,
+            remote_retry=self._remote_retry,
+            **kwargs,
+        )

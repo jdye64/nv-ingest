@@ -422,6 +422,158 @@ def table_structure_ocr_page_elements(
     return out
 
 
+async def atable_structure_ocr_page_elements(
+    batch_df: Any,
+    *,
+    table_structure_model: Any = None,
+    table_structure_invoke_url: str = "",
+    api_key: str = "",
+    request_timeout_s: float = 120.0,
+    remote_retry: RemoteRetryParams | None = None,
+    **kwargs: Any,
+) -> Any:
+    """Async version of :func:`table_structure_ocr_page_elements`.
+
+    Uses ``ainvoke_image_inference_batches`` for non-blocking remote NIM calls.
+    Falls back to ``asyncio.to_thread`` for local GPU inference.
+    """
+    import asyncio
+
+    from nemo_retriever.nim.nim import ainvoke_image_inference_batches
+    from nemo_retriever.ocr.ocr import _crop_all_from_page, _np_rgb_to_b64_png
+
+    retry = remote_retry or RemoteRetryParams(
+        remote_max_pool_workers=int(kwargs.get("remote_max_pool_workers", 16)),
+        remote_max_retries=int(kwargs.get("remote_max_retries", 10)),
+        remote_max_429_retries=int(kwargs.get("remote_max_429_retries", 5)),
+    )
+
+    if not isinstance(batch_df, pd.DataFrame):
+        raise NotImplementedError("atable_structure_ocr_page_elements currently only supports pandas.DataFrame input.")
+
+    ts_url = (table_structure_invoke_url or kwargs.get("table_structure_invoke_url") or "").strip()
+    use_remote_ts = bool(ts_url)
+    table_output_format = kwargs.get("table_output_format")
+
+    if not use_remote_ts and table_structure_model is None:
+        raise ValueError("A local `table_structure_model` is required when `table_structure_invoke_url` is not set.")
+
+    label_names = _labels_from_model(table_structure_model) if table_structure_model is not None else []
+    if not label_names:
+        label_names = _DEFAULT_TABLE_STRUCTURE_LABELS
+    inference_batch_size = int(kwargs.get("inference_batch_size", 8))
+
+    all_table: List[List[Dict[str, Any]]] = []
+    all_meta: List[Dict[str, Any]] = []
+
+    t0_total = time.perf_counter()
+
+    for row in batch_df.itertuples(index=False):
+        table_items: List[Dict[str, Any]] = []
+        row_error: Any = None
+
+        try:
+            pe = getattr(row, "page_elements_v3", None)
+            dets: List[Dict[str, Any]] = []
+            if isinstance(pe, dict):
+                dets = pe.get("detections") or []
+            if not isinstance(dets, list):
+                dets = []
+
+            page_image = getattr(row, "page_image", None) or {}
+            page_image_b64 = page_image.get("image_b64") if isinstance(page_image, dict) else None
+
+            if not isinstance(page_image_b64, str) or not page_image_b64:
+                all_table.append(table_items)
+                all_meta.append({"timing": None, "error": None})
+                continue
+
+            crops = _crop_all_from_page(page_image_b64, dets, {"table"})
+
+            if not crops:
+                all_table.append(table_items)
+                all_meta.append({"timing": None, "error": None})
+                continue
+
+            crop_b64s = [_np_rgb_to_b64_png(crop_array) for _, _, crop_array in crops] if use_remote_ts else []
+
+            structure_results: List[List[Dict[str, Any]]] = []
+            if use_remote_ts:
+                response_items = await ainvoke_image_inference_batches(
+                    invoke_url=ts_url,
+                    image_b64_list=crop_b64s,
+                    api_key=api_key or None,
+                    timeout_s=float(request_timeout_s),
+                    max_batch_size=inference_batch_size,
+                    max_concurrency=int(retry.remote_max_pool_workers),
+                    max_retries=int(retry.remote_max_retries),
+                    max_429_retries=int(retry.remote_max_429_retries),
+                )
+                if len(response_items) != len(crops):
+                    raise RuntimeError(f"Expected {len(crops)} table-structure responses, got {len(response_items)}")
+                for resp in response_items:
+                    parsed = _parse_nim_bounding_boxes(resp)
+                    if not parsed:
+                        pred_item = _extract_remote_pred_item(resp)
+                        parsed = _prediction_to_detections(pred_item, label_names=label_names)
+                    structure_results.append([d for d in parsed if (d.get("score") or 0.0) >= YOLOX_TABLE_MIN_SCORE])
+            else:
+
+                def _run_local_ts():
+                    results = []
+                    for _, _, crop_array in crops:
+                        chw = torch.from_numpy(crop_array).permute(2, 0, 1).contiguous().to(dtype=torch.float32)
+                        h, w = crop_array.shape[:2]
+                        x = chw.unsqueeze(0)
+                        try:
+                            pre = table_structure_model.preprocess(x, (h, w))
+                        except TypeError:
+                            pre = table_structure_model.preprocess(x)
+                        if isinstance(pre, torch.Tensor) and pre.ndim == 3:
+                            pre = pre.unsqueeze(0)
+                        pred = table_structure_model.invoke(pre, (h, w))
+                        dets_local = _prediction_to_detections(pred, label_names=label_names)
+                        results.append([d for d in dets_local if (d.get("score") or 0.0) >= YOLOX_TABLE_MIN_SCORE])
+                    return results
+
+                structure_results = await asyncio.to_thread(_run_local_ts)
+
+            for crop_i, (_, bbox, _) in enumerate(crops):
+                structure_dets = structure_results[crop_i]
+                table_items.append(
+                    {
+                        "bbox_xyxy_norm": bbox,
+                        "text": _render_structure_only_text(
+                            structure_dets,
+                            table_output_format=table_output_format,
+                        ),
+                        "structure_detections": structure_dets,
+                        "structure_counts": _count_structure_labels(structure_dets),
+                    }
+                )
+
+        except BaseException as e:
+            print(f"Warning: table-structure failed: {type(e).__name__}: {e}")
+            row_error = {
+                "stage": "table_structure_ocr_page_elements",
+                "type": e.__class__.__name__,
+                "message": str(e),
+                "traceback": "".join(traceback.format_exception(type(e), e, e.__traceback__)),
+            }
+
+        all_table.append(table_items)
+        all_meta.append({"timing": None, "error": row_error})
+
+    elapsed = time.perf_counter() - t0_total
+    for meta in all_meta:
+        meta["timing"] = {"seconds": float(elapsed)}
+
+    out = batch_df.copy()
+    out["table"] = all_table
+    out["table_structure_ocr_v1"] = all_meta
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Combined table-structure + OCR Ray Actor
 # ---------------------------------------------------------------------------

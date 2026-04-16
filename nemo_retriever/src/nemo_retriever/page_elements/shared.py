@@ -12,7 +12,7 @@ import time
 import traceback
 
 import pandas as pd
-from nemo_retriever.nim.nim import invoke_page_elements_batches
+from nemo_retriever.nim.nim import ainvoke_page_elements_batches, invoke_page_elements_batches
 from nemo_retriever.params import RemoteRetryParams
 from nemo_retriever.page_elements.local import (
     YOLOX_PAGE_V3_CLASS_LABELS,
@@ -715,6 +715,133 @@ def detect_page_elements_v3(
             # If postprocess fails, attach an error but keep job alive.
             for row_i in chunk_idx:
                 row_payloads[row_i] = _error_payload(stage="postprocess", exc=e) | {
+                    "timing": {"seconds": float(elapsed)}
+                }
+
+    out = pages_df.copy()
+    out[output_column] = row_payloads
+    out[num_detections_column] = [
+        int(len(p.get("detections") or [])) if isinstance(p, dict) else 0 for p in row_payloads
+    ]
+    out[counts_by_label_column] = [
+        _counts_by_label(p.get("detections") or []) if isinstance(p, dict) else {} for p in row_payloads
+    ]
+    return out
+
+
+async def adetect_page_elements_v3(
+    pages_df: Any,
+    *,
+    model: Any = None,
+    invoke_url: Optional[str] = None,
+    api_key: Optional[str] = None,
+    request_timeout_s: float = 120.0,
+    inference_batch_size: int = 8,
+    output_column: str = "page_elements_v3",
+    num_detections_column: str = "page_elements_v3_num_detections",
+    counts_by_label_column: str = "page_elements_v3_counts_by_label",
+    remote_retry: RemoteRetryParams | None = None,
+    **kwargs: Any,
+) -> Any:
+    """Async version of :func:`detect_page_elements_v3`.
+
+    Uses ``ainvoke_page_elements_batches`` for non-blocking remote NIM calls.
+    Delegates local GPU inference to ``asyncio.to_thread`` wrapping the sync
+    version.
+    """
+    import asyncio
+
+    invoke_url_resolved = (invoke_url or kwargs.get("page_elements_invoke_url") or "").strip()
+    use_remote = bool(invoke_url_resolved)
+
+    if not use_remote:
+        return await asyncio.to_thread(
+            detect_page_elements_v3,
+            pages_df,
+            model=model,
+            invoke_url=invoke_url,
+            api_key=api_key,
+            request_timeout_s=request_timeout_s,
+            inference_batch_size=inference_batch_size,
+            output_column=output_column,
+            num_detections_column=num_detections_column,
+            counts_by_label_column=counts_by_label_column,
+            remote_retry=remote_retry,
+            **kwargs,
+        )
+
+    retry = remote_retry or RemoteRetryParams(
+        remote_max_pool_workers=int(kwargs.get("remote_max_pool_workers", 16)),
+        remote_max_retries=int(kwargs.get("remote_max_retries", 10)),
+        remote_max_429_retries=int(kwargs.get("remote_max_429_retries", 5)),
+    )
+
+    if not isinstance(pages_df, pd.DataFrame):
+        raise NotImplementedError("adetect_page_elements_v3 currently only supports pandas.DataFrame input.")
+
+    label_names = list(_RETRIEVER_LABEL_NAMES)
+    thresholds_per_class = [
+        YOLOX_PAGE_V3_FINAL_SCORE.get(_RETRIEVER_TO_API.get(name, name), 0.0) for name in label_names
+    ]
+
+    row_b64: List[Optional[str]] = []
+    row_payloads: List[Dict[str, Any]] = []
+
+    for _, row in pages_df.iterrows():
+        try:
+            b64 = row.get("page_image")["image_b64"]
+            if not b64:
+                raise ValueError("No usable image_b64 found in row.")
+            row_b64.append(b64)
+            row_payloads.append({"detections": []})
+        except BaseException as e:
+            row_b64.append(None)
+            row_payloads.append(_error_payload(stage="decode_image", exc=e))
+
+    valid_indices = [i for i, b64 in enumerate(row_b64) if b64]
+
+    if valid_indices:
+        valid_b64: List[str] = []
+        for row_i in valid_indices:
+            b64 = row_b64[row_i]
+            if b64:
+                valid_b64.append(b64)
+
+        t0 = time.perf_counter()
+        try:
+            response_items = await ainvoke_page_elements_batches(
+                invoke_url=invoke_url_resolved,
+                image_b64_list=valid_b64,
+                api_key=api_key,
+                timeout_s=float(request_timeout_s),
+                max_batch_size=int(inference_batch_size),
+                max_concurrency=int(retry.remote_max_pool_workers),
+                max_retries=int(retry.remote_max_retries),
+                max_429_retries=int(retry.remote_max_429_retries),
+            )
+            elapsed = time.perf_counter() - t0
+
+            if len(response_items) != len(valid_indices):
+                raise RuntimeError(
+                    "Remote response count mismatch: " f"expected {len(valid_indices)}, got {len(response_items)}"
+                )
+
+            for local_i, row_i in enumerate(valid_indices):
+                dets = _remote_response_to_detections(
+                    response_json=response_items[local_i],
+                    label_names=label_names,
+                    thresholds_per_class=thresholds_per_class,
+                )
+                row_payloads[row_i] = {
+                    "detections": dets,
+                    "timing": {"seconds": float(elapsed)},
+                    "error": None,
+                }
+        except BaseException as e:
+            elapsed = time.perf_counter() - t0
+            print(f"Warning: page_elements remote inference failed: {type(e).__name__}: {e}")
+            for row_i in valid_indices:
+                row_payloads[row_i] = _error_payload(stage="remote_inference", exc=e) | {
                     "timing": {"seconds": float(elapsed)}
                 }
 

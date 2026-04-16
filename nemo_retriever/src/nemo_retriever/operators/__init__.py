@@ -6,6 +6,6 @@
 
 from nemo_retriever.operators.base import AbstractOperator, CPUOperator, GPUOperator
 from nemo_retriever.operators.content import ExplodeContentActor
-from nemo_retriever.operators.embedding import _BatchEmbedActor
+from nemo_retriever.operators.embedding import BatchEmbedActor
 
-__all__ = ["AbstractOperator", "CPUOperator", "GPUOperator", "ExplodeContentActor", "_BatchEmbedActor"]
+__all__ = ["AbstractOperator", "CPUOperator", "GPUOperator", "ExplodeContentActor", "BatchEmbedActor"]

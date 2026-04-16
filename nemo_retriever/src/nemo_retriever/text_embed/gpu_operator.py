@@ -15,7 +15,7 @@ from nemo_retriever.text_embed.runtime import embed_text_main_text_embed
 from nemo_retriever.text_embed.shared import build_embed_kwargs
 
 
-class _BatchEmbedActor(AbstractOperator, GPUOperator):
+class BatchEmbedGPUActor(AbstractOperator, GPUOperator):
     """Graph embedding actor that loads a local embedder or calls a remote endpoint."""
 
     def __init__(self, params: EmbedParams) -> None:
@@ -55,5 +55,5 @@ class _BatchEmbedActor(AbstractOperator, GPUOperator):
     def postprocess(self, data: Any, **kwargs: Any) -> Any:
         return data
 
-    def __call__(self, batch_df: Any) -> Any:
-        return self.run(batch_df)
+    async def __call__(self, batch_df: Any) -> Any:
+        return await self.arun(batch_df)

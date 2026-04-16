@@ -27,7 +27,7 @@ class TestGPUOperatorFlag:
         from nemo_retriever.table.table_detection import TableStructureGPUActor
         from nemo_retriever.ocr.ocr import OCRGPUActor
         from nemo_retriever.parse.nemotron_parse import NemotronParseGPUActor
-        from nemo_retriever.text_embed.operators import _BatchEmbedGPUActor
+        from nemo_retriever.text_embed.operators import BatchEmbedGPUActor
         from nemo_retriever.caption.caption import CaptionGPUActor
         from nemo_retriever.infographic.infographic_detection import InfographicDetectionGPUActor
         from nemo_retriever.rerank.rerank import NemotronRerankGPUActor
@@ -38,7 +38,7 @@ class TestGPUOperatorFlag:
         assert issubclass(TableStructureGPUActor, GPUOperator)
         assert issubclass(OCRGPUActor, GPUOperator)
         assert issubclass(NemotronParseGPUActor, GPUOperator)
-        assert issubclass(_BatchEmbedGPUActor, GPUOperator)
+        assert issubclass(BatchEmbedGPUActor, GPUOperator)
         assert issubclass(CaptionGPUActor, GPUOperator)
         assert issubclass(InfographicDetectionGPUActor, GPUOperator)
         assert issubclass(NemotronRerankGPUActor, GPUOperator)
@@ -311,47 +311,47 @@ class TestBatchEmbedCPUActor:
         return EmbedParams(model_name="test-model", embed_invoke_url="http://fake")
 
     def test_inherits_cpu_operator(self):
-        from nemo_retriever.text_embed.cpu_operator import _BatchEmbedCPUActor
+        from nemo_retriever.text_embed.cpu_operator import BatchEmbedCPUActor
 
-        assert issubclass(_BatchEmbedCPUActor, CPUOperator)
-        assert not issubclass(_BatchEmbedCPUActor, GPUOperator)
+        assert issubclass(BatchEmbedCPUActor, CPUOperator)
+        assert not issubclass(BatchEmbedCPUActor, GPUOperator)
 
     def test_uses_default_invoke_url(self):
-        from nemo_retriever.text_embed.cpu_operator import _BatchEmbedCPUActor
+        from nemo_retriever.text_embed.cpu_operator import BatchEmbedCPUActor
         from nemo_retriever.params import EmbedParams
 
-        actor = _BatchEmbedCPUActor(params=EmbedParams(model_name="test-model"))
+        actor = BatchEmbedCPUActor(params=EmbedParams(model_name="test-model"))
         assert actor._model is None
         assert "integrate.api.nvidia.com" in actor._kwargs["embedding_endpoint"]
 
     def test_creates_with_custom_invoke_url(self):
-        from nemo_retriever.text_embed.cpu_operator import _BatchEmbedCPUActor
+        from nemo_retriever.text_embed.cpu_operator import BatchEmbedCPUActor
 
-        actor = _BatchEmbedCPUActor(params=self._make_params())
+        actor = BatchEmbedCPUActor(params=self._make_params())
         assert actor._model is None
         assert actor._kwargs["embedding_endpoint"] == "http://fake"
 
     @patch("nemo_retriever.text_embed.cpu_operator.embed_text_main_text_embed")
     def test_process(self, mock_fn):
-        from nemo_retriever.text_embed.cpu_operator import _BatchEmbedCPUActor
+        from nemo_retriever.text_embed.cpu_operator import BatchEmbedCPUActor
 
         expected = pd.DataFrame({"text": ["hello"], "embedding": [[0.1, 0.2]]})
         mock_fn.return_value = expected
-        actor = _BatchEmbedCPUActor(params=self._make_params())
+        actor = BatchEmbedCPUActor(params=self._make_params())
         result = actor.process(pd.DataFrame({"text": ["hello"]}))
         mock_fn.assert_called_once()
         pd.testing.assert_frame_equal(result, expected)
 
     def test_preprocess_passthrough(self):
-        from nemo_retriever.text_embed.cpu_operator import _BatchEmbedCPUActor
+        from nemo_retriever.text_embed.cpu_operator import BatchEmbedCPUActor
 
-        actor = _BatchEmbedCPUActor(params=self._make_params())
+        actor = BatchEmbedCPUActor(params=self._make_params())
         df = pd.DataFrame({"text": ["hello"]})
         pd.testing.assert_frame_equal(actor.preprocess(df), df)
 
     def test_postprocess_passthrough(self):
-        from nemo_retriever.text_embed.cpu_operator import _BatchEmbedCPUActor
+        from nemo_retriever.text_embed.cpu_operator import BatchEmbedCPUActor
 
-        actor = _BatchEmbedCPUActor(params=self._make_params())
+        actor = BatchEmbedCPUActor(params=self._make_params())
         df = pd.DataFrame({"text": ["hello"]})
         pd.testing.assert_frame_equal(actor.postprocess(df), df)

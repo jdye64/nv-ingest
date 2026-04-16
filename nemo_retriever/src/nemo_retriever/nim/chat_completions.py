@@ -11,10 +11,18 @@ self-hosted NIMs, OpenAI, vLLM, etc.).
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from nemo_retriever.nim.nim import _parse_invoke_urls, _post_with_retries, _mime_from_b64
+import aiohttp
+
+from nemo_retriever.nim.nim import (
+    _parse_invoke_urls,
+    _post_with_retries,
+    _apost_with_retries,
+    _mime_from_b64,
+)
 
 
 def extract_chat_completion_text(response_json: Any) -> str:
@@ -153,6 +161,125 @@ def invoke_chat_completions_images(
         temperature=temperature,
         extra_body=merged_extra,
         max_pool_workers=max_pool_workers,
+        max_retries=max_retries,
+        max_429_retries=max_429_retries,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Async variants (aiohttp)
+# ---------------------------------------------------------------------------
+
+
+async def ainvoke_chat_completions(
+    *,
+    invoke_url: str,
+    messages_list: Sequence[List[Dict[str, Any]]],
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    timeout_s: float = 120.0,
+    temperature: float = 0.0,
+    extra_body: Optional[Dict[str, Any]] = None,
+    max_concurrency: int = 16,
+    max_retries: int = 10,
+    max_429_retries: int = 5,
+) -> List[str]:
+    """Async version of :func:`invoke_chat_completions` using aiohttp."""
+    if not messages_list:
+        return []
+
+    token = (api_key or "").strip()
+    headers: Dict[str, str] = {"Accept": "application/json", "Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    invoke_urls = _parse_invoke_urls(invoke_url)
+    results: List[Optional[str]] = [None] * len(messages_list)
+
+    async def _invoke_one(
+        session: aiohttp.ClientSession,
+        idx: int,
+        messages: List[Dict[str, Any]],
+        endpoint_url: str,
+    ) -> Tuple[int, str]:
+        payload: Dict[str, Any] = {
+            "messages": messages,
+            "temperature": temperature,
+        }
+        if model:
+            payload["model"] = model
+        if extra_body:
+            payload.update(extra_body)
+        response_json = await _apost_with_retries(
+            session=session,
+            invoke_url=endpoint_url,
+            payload=payload,
+            headers=headers,
+            timeout_s=float(timeout_s),
+            max_retries=int(max_retries),
+            max_429_retries=int(max_429_retries),
+        )
+        return idx, extract_chat_completion_text(response_json)
+
+    connector = aiohttp.TCPConnector(limit=max(1, int(max_concurrency)))
+    async with aiohttp.ClientSession(connector=connector) as session:
+        tasks = [
+            _invoke_one(session, i, msgs, invoke_urls[i % len(invoke_urls)]) for i, msgs in enumerate(messages_list)
+        ]
+        completed = await asyncio.gather(*tasks)
+
+    for i, text in completed:
+        results[i] = text
+
+    return [r if r is not None else "" for r in results]
+
+
+async def ainvoke_chat_completions_images(
+    *,
+    invoke_url: str,
+    image_b64_list: Sequence[str],
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    timeout_s: float = 120.0,
+    task_prompt: Optional[str] = None,
+    temperature: float = 0.0,
+    repetition_penalty: float = 1.1,
+    extra_body: Optional[Dict[str, Any]] = None,
+    max_concurrency: int = 16,
+    max_retries: int = 10,
+    max_429_retries: int = 5,
+) -> List[str]:
+    """Async version of :func:`invoke_chat_completions_images`."""
+    if not image_b64_list:
+        return []
+
+    messages_list: List[List[Dict[str, Any]]] = []
+    for b64 in image_b64_list:
+        mime = _mime_from_b64(b64)
+        content: List[Dict[str, Any]] = []
+        if task_prompt:
+            content.append({"type": "text", "text": task_prompt})
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{mime};base64,{b64}"},
+            }
+        )
+        messages_list.append([{"role": "user", "content": content}])
+
+    merged_extra: Dict[str, Any] = {"repetition_penalty": repetition_penalty}
+    if extra_body:
+        merged_extra.update(extra_body)
+
+    return await ainvoke_chat_completions(
+        invoke_url=invoke_url,
+        messages_list=messages_list,
+        model=model,
+        api_key=api_key,
+        timeout_s=timeout_s,
+        temperature=temperature,
+        extra_body=merged_extra,
+        max_concurrency=max_concurrency,
         max_retries=max_retries,
         max_429_retries=max_429_retries,
     )

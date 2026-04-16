@@ -63,8 +63,8 @@ class HtmlSplitCPUActor(AbstractOperator, CPUOperator):
     def postprocess(self, data: Any, **kwargs: Any) -> Any:
         return data
 
-    def __call__(self, batch_df: pd.DataFrame) -> pd.DataFrame:
-        return self.run(batch_df)
+    async def __call__(self, batch_df: pd.DataFrame) -> pd.DataFrame:
+        return await self.arun(batch_df)
 
 
 class HtmlSplitActor(ArchetypeOperator):

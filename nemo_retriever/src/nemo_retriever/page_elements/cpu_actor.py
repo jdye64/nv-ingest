@@ -10,7 +10,7 @@ import pandas as pd
 
 from nemo_retriever.graph.abstract_operator import AbstractOperator
 from nemo_retriever.graph.cpu_operator import CPUOperator
-from nemo_retriever.page_elements.shared import _error_payload, detect_page_elements_v3
+from nemo_retriever.page_elements.shared import _error_payload, adetect_page_elements_v3, detect_page_elements_v3
 
 
 class PageElementDetectionCPUActor(AbstractOperator, CPUOperator):
@@ -48,9 +48,17 @@ class PageElementDetectionCPUActor(AbstractOperator, CPUOperator):
     def postprocess(self, data: Any, **kwargs: Any) -> Any:
         return data
 
-    def __call__(self, pages_df: Any, **override_kwargs: Any) -> Any:
+    async def aprocess(self, data: Any, **kwargs: Any) -> Any:
+        return await adetect_page_elements_v3(
+            data,
+            model=self._model,
+            **self.detect_kwargs,
+            **kwargs,
+        )
+
+    async def __call__(self, pages_df: Any, **override_kwargs: Any) -> Any:
         try:
-            return self.run(pages_df, **override_kwargs)
+            return await self.arun(pages_df, **override_kwargs)
         except Exception as exc:
             if isinstance(pages_df, pd.DataFrame):
                 out = pages_df.copy()

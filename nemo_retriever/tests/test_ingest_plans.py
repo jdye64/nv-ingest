@@ -7,7 +7,7 @@ from nemo_retriever.graph.ingestor_runtime import build_inprocess_graph
 from nemo_retriever.graph.pipeline_graph import Graph
 from nemo_retriever.ocr.ocr import OCRActor
 from nemo_retriever.page_elements.page_elements import PageElementDetectionActor
-from nemo_retriever.text_embed.operators import _BatchEmbedActor
+from nemo_retriever.text_embed.operators import BatchEmbedActor
 from nemo_retriever.graph.operator_archetype import ArchetypeOperator
 from nemo_retriever.graph.cpu_operator import CPUOperator
 from nemo_retriever.graph.gpu_operator import GPUOperator
@@ -101,7 +101,7 @@ def test_build_graph_accepts_execution_plan() -> None:
             break
         node = node.children[0]
 
-    assert names == ["MultiTypeExtractOperator", "TextChunkActor", "_BatchEmbedActor"]
+    assert names == ["MultiTypeExtractOperator", "TextChunkActor", "BatchEmbedActor"]
 
 
 def test_build_graph_keeps_archetype_operator_classes() -> None:
@@ -127,11 +127,11 @@ def test_build_graph_keeps_archetype_operator_classes() -> None:
         "PageElementDetectionActor",
         "OCRActor",
         "UDFOperator",
-        "_BatchEmbedActor",
+        "BatchEmbedActor",
     ]
     assert nodes[3].operator_class is PageElementDetectionActor
     assert nodes[4].operator_class is OCRActor
-    assert nodes[-1].operator_class is _BatchEmbedActor
+    assert nodes[-1].operator_class is BatchEmbedActor
     assert issubclass(nodes[3].operator_class, ArchetypeOperator)
     assert issubclass(nodes[4].operator_class, ArchetypeOperator)
     assert issubclass(nodes[-1].operator_class, ArchetypeOperator)
@@ -162,10 +162,10 @@ def test_build_graph_resolves_endpoint_configured_nodes_to_cpu_variants() -> Non
     assert classes["TableStructureActor"].__name__ == "TableStructureCPUActor"
     assert classes["GraphicElementsActor"].__name__ == "GraphicElementsCPUActor"
     assert classes["OCRActor"].__name__ == "OCRCPUActor"
-    assert classes["_BatchEmbedActor"].__name__ == "_BatchEmbedCPUActor"
+    assert classes["BatchEmbedActor"].__name__ == "BatchEmbedCPUActor"
     assert issubclass(classes["PageElementDetectionActor"], CPUOperator)
     assert issubclass(classes["OCRActor"], CPUOperator)
-    assert issubclass(classes["_BatchEmbedActor"], CPUOperator)
+    assert issubclass(classes["BatchEmbedActor"], CPUOperator)
 
 
 def test_build_graph_resolves_local_nodes_to_gpu_variants_when_gpus_available() -> None:
@@ -185,10 +185,10 @@ def test_build_graph_resolves_local_nodes_to_gpu_variants_when_gpus_available() 
 
     assert classes["PageElementDetectionActor"] is not PageElementDetectionActor
     assert classes["OCRActor"] is not OCRActor
-    assert classes["_BatchEmbedActor"] is not _BatchEmbedActor
+    assert classes["BatchEmbedActor"] is not BatchEmbedActor
     assert issubclass(classes["PageElementDetectionActor"], GPUOperator)
     assert issubclass(classes["OCRActor"], GPUOperator)
-    assert issubclass(classes["_BatchEmbedActor"], GPUOperator)
+    assert issubclass(classes["BatchEmbedActor"], GPUOperator)
 
 
 def test_batch_tuning_to_node_overrides_auto_cpu_only_when_no_gpus() -> None:
@@ -221,11 +221,11 @@ def test_batch_tuning_to_node_overrides_auto_cpu_only_when_no_gpus() -> None:
         cluster_resources=cluster,
     )
 
-    assert overrides["_BatchEmbedActor"]["num_gpus"] == 0.0
+    assert overrides["BatchEmbedActor"]["num_gpus"] == 0.0
     assert overrides["OCRActor"]["num_gpus"] == 0.0
     assert overrides["PageElementDetectionActor"]["num_gpus"] == 0.0
     assert overrides["NemotronParseActor"]["num_gpus"] == 0.0
-    assert overrides["_BatchEmbedActor"]["concurrency"] == 5
+    assert overrides["BatchEmbedActor"]["concurrency"] == 5
     assert overrides["OCRActor"]["concurrency"] == 4
     assert overrides["PageElementDetectionActor"]["concurrency"] == 3
     assert overrides["NemotronParseActor"]["concurrency"] == 2
@@ -310,7 +310,7 @@ def test_build_inprocess_graph_accepts_execution_plan() -> None:
         "TextChunkActor",
         "CaptionActor",
         "UDFOperator",
-        "_BatchEmbedActor",
+        "BatchEmbedActor",
     ]
 
 
@@ -335,7 +335,7 @@ def test_build_inprocess_graph_supports_text_execution_plan() -> None:
             break
         node = node.children[0]
 
-    assert names == ["MultiTypeExtractOperator", "TextChunkActor", "_BatchEmbedActor"]
+    assert names == ["MultiTypeExtractOperator", "TextChunkActor", "BatchEmbedActor"]
 
 
 @pytest.mark.skipif(not is_media_available(), reason="ffmpeg not available")

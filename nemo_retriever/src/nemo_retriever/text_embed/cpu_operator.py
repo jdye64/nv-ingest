@@ -15,7 +15,7 @@ from nemo_retriever.text_embed.runtime import embed_text_main_text_embed
 from nemo_retriever.text_embed.shared import build_embed_kwargs
 
 
-class _BatchEmbedCPUActor(AbstractOperator, CPUOperator):
+class BatchEmbedCPUActor(AbstractOperator, CPUOperator):
     """CPU-only embedding actor that always targets a remote endpoint."""
 
     DEFAULT_EMBED_INVOKE_URL = "https://integrate.api.nvidia.com/v1/embeddings"

@@ -22,7 +22,7 @@ import traceback
 import numpy as np
 import pandas as pd
 from nemo_retriever.params import RemoteRetryParams
-from nemo_retriever.nim.nim import invoke_image_inference_batches
+from nemo_retriever.nim.nim import ainvoke_image_inference_batches, invoke_image_inference_batches
 from nemo_retriever.utils.table_and_chart import join_graphic_elements_and_ocr_output
 
 try:
@@ -970,6 +970,392 @@ def nemotron_parse_page_elements(
     out["chart"] = all_chart
     out["infographic"] = all_infographic
     # Aliases retained for experiments that read parse-specific columns.
+    out["table_parse"] = all_table
+    out["chart_parse"] = all_chart
+    out["infographic_parse"] = all_infographic
+    out["nemotron_parse_v1_2"] = all_meta
+    return out
+
+
+async def aocr_page_elements(
+    batch_df: Any,
+    *,
+    model: Any = None,
+    invoke_url: Optional[str] = None,
+    api_key: Optional[str] = None,
+    request_timeout_s: float = 120.0,
+    extract_text: bool = False,
+    extract_tables: bool = False,
+    extract_charts: bool = False,
+    extract_infographics: bool = False,
+    use_graphic_elements: bool = False,
+    inference_batch_size: int = 8,
+    remote_retry: RemoteRetryParams | None = None,
+    **kwargs: Any,
+) -> Any:
+    """Async version of :func:`ocr_page_elements`.
+
+    Remote NIM calls use ``ainvoke_image_inference_batches``; local GPU
+    inference is delegated to ``asyncio.to_thread`` wrapping the sync version.
+    """
+    import asyncio
+
+    invoke_url_resolved = (invoke_url or kwargs.get("ocr_invoke_url") or "").strip()
+    use_remote = bool(invoke_url_resolved)
+
+    if not use_remote:
+        return await asyncio.to_thread(
+            ocr_page_elements,
+            batch_df,
+            model=model,
+            invoke_url=invoke_url,
+            api_key=api_key,
+            request_timeout_s=request_timeout_s,
+            extract_text=extract_text,
+            extract_tables=extract_tables,
+            extract_charts=extract_charts,
+            extract_infographics=extract_infographics,
+            use_graphic_elements=use_graphic_elements,
+            inference_batch_size=inference_batch_size,
+            remote_retry=remote_retry,
+            **kwargs,
+        )
+
+    retry = remote_retry or RemoteRetryParams(
+        remote_max_pool_workers=int(kwargs.get("remote_max_pool_workers", 16)),
+        remote_max_retries=int(kwargs.get("remote_max_retries", 10)),
+        remote_max_429_retries=int(kwargs.get("remote_max_429_retries", 5)),
+    )
+
+    if not isinstance(batch_df, pd.DataFrame):
+        raise NotImplementedError("aocr_page_elements currently only supports pandas.DataFrame input.")
+
+    wanted_labels: set[str] = set()
+    if extract_tables:
+        wanted_labels.add("table")
+    if extract_charts:
+        wanted_labels.add("chart")
+    if extract_infographics:
+        wanted_labels.add("infographic")
+
+    all_table: List[List[Dict[str, Any]]] = []
+    all_chart: List[List[Dict[str, Any]]] = []
+    all_infographic: List[List[Dict[str, Any]]] = []
+    all_text: List[str] = []
+    all_ocr_meta: List[Dict[str, Any]] = []
+
+    t0_total = time.perf_counter()
+
+    for row in batch_df.itertuples(index=False):
+        table_items: List[Dict[str, Any]] = []
+        chart_items: List[Dict[str, Any]] = []
+        infographic_items: List[Dict[str, Any]] = []
+        row_ocr_text_blocks: List[Dict[str, Any]] = []
+        row_error: Any = None
+
+        try:
+            pe = getattr(row, "page_elements_v3", None)
+            dets: List[Dict[str, Any]] = []
+            if isinstance(pe, dict):
+                dets = pe.get("detections") or []
+            if not isinstance(dets, list):
+                dets = []
+
+            page_image = getattr(row, "page_image", None) or {}
+            page_image_b64 = page_image.get("image_b64") if isinstance(page_image, dict) else None
+
+            if not isinstance(page_image_b64, str) or not page_image_b64:
+                all_table.append(table_items)
+                all_chart.append(chart_items)
+                all_infographic.append(infographic_items)
+                all_text.append(None)
+                all_ocr_meta.append({"timing": None, "error": None})
+                continue
+
+            row_wanted = wanted_labels
+            if extract_text:
+                meta = getattr(row, "metadata", None) or {}
+                needs_ocr = meta.get("needs_ocr_for_text", False) if isinstance(meta, dict) else False
+                if needs_ocr:
+                    row_wanted = wanted_labels | _TEXT_LABELS
+
+            crops = _crop_all_from_page(page_image_b64, dets, row_wanted, as_b64=True)
+            crop_b64s: List[str] = [b64 for _label, _bbox, b64 in crops]
+            crop_meta: List[Tuple[str, List[float]]] = [(label, bbox) for label, bbox, _b64 in crops]
+
+            if crop_b64s:
+                response_items = await ainvoke_image_inference_batches(
+                    invoke_url=invoke_url_resolved,
+                    image_b64_list=crop_b64s,
+                    api_key=api_key,
+                    timeout_s=float(request_timeout_s),
+                    max_batch_size=int(kwargs.get("inference_batch_size", 8)),
+                    max_concurrency=int(retry.remote_max_pool_workers),
+                    max_retries=int(retry.remote_max_retries),
+                    max_429_retries=int(retry.remote_max_429_retries),
+                )
+                if len(response_items) != len(crop_meta):
+                    raise RuntimeError(f"Expected {len(crop_meta)} OCR responses, got {len(response_items)}")
+
+                for i, (label_name, bbox) in enumerate(crop_meta):
+                    preds = _extract_remote_ocr_item(response_items[i])
+
+                    if label_name == "chart" and use_graphic_elements:
+                        ge_dets = _find_ge_detections_for_bbox(row, bbox)
+                        if ge_dets:
+                            crop_hw = (0, 0)
+                            try:
+                                _raw = base64.b64decode(crop_b64s[i])
+                                with Image.open(io.BytesIO(_raw)) as _cim:
+                                    _cw, _ch = _cim.size
+                                    crop_hw = (_ch, _cw)
+                            except Exception:
+                                pass
+                            text = join_graphic_elements_and_ocr_output(ge_dets, preds, crop_hw)
+                            if text:
+                                chart_items.append({"bbox_xyxy_norm": bbox, "text": text})
+                                continue
+
+                    blocks = _parse_ocr_result(preds)
+                    if label_name == "table":
+                        crop_hw_table: Tuple[int, int] = (0, 0)
+                        try:
+                            _raw = base64.b64decode(crop_b64s[i])
+                            with Image.open(io.BytesIO(_raw)) as _cim:
+                                _cw, _ch = _cim.size
+                                crop_hw_table = (_ch, _cw)
+                        except Exception:
+                            pass
+                        text = _blocks_to_pseudo_markdown(blocks, crop_hw=crop_hw_table) or _blocks_to_text(blocks)
+                    else:
+                        text = _blocks_to_text(blocks)
+                    entry = {"bbox_xyxy_norm": bbox, "text": text}
+                    if label_name == "table":
+                        table_items.append(entry)
+                    elif label_name == "chart":
+                        chart_items.append(entry)
+                    elif label_name == "infographic":
+                        infographic_items.append(entry)
+                    elif label_name in _TEXT_LABELS:
+                        row_ocr_text_blocks.extend(blocks)
+
+        except BaseException as e:
+            print(f"Warning: OCR failed: {type(e).__name__}: {e}")
+            row_error = {
+                "stage": "ocr_page_elements",
+                "type": e.__class__.__name__,
+                "message": str(e),
+                "traceback": "".join(traceback.format_exception(type(e), e, e.__traceback__)),
+            }
+
+        if extract_text and row_ocr_text_blocks:
+            all_text.append(_blocks_to_text(row_ocr_text_blocks))
+        else:
+            all_text.append(None)
+
+        all_table.append(table_items)
+        all_chart.append(chart_items)
+        all_infographic.append(infographic_items)
+        all_ocr_meta.append({"timing": None, "error": row_error})
+
+    elapsed = time.perf_counter() - t0_total
+    for meta in all_ocr_meta:
+        meta["timing"] = {"seconds": float(elapsed)}
+
+    out = batch_df.copy()
+    if extract_tables or "table" not in out.columns:
+        out["table"] = all_table
+    if extract_charts or "chart" not in out.columns:
+        out["chart"] = all_chart
+    if extract_infographics or "infographic" not in out.columns:
+        out["infographic"] = all_infographic
+    if extract_text and "text" in out.columns:
+        for i, ocr_text in enumerate(all_text):
+            if ocr_text is not None:
+                out.iat[i, out.columns.get_loc("text")] = ocr_text
+    elif extract_text:
+        out["text"] = [t if t is not None else "" for t in all_text]
+    out["ocr_v1"] = all_ocr_meta
+    return out
+
+
+async def anemotron_parse_page_elements(
+    batch_df: Any,
+    *,
+    model: Any = None,
+    invoke_url: Optional[str] = None,
+    api_key: Optional[str] = None,
+    request_timeout_s: float = 120.0,
+    extract_text: bool = False,
+    extract_tables: bool = False,
+    extract_charts: bool = False,
+    extract_infographics: bool = False,
+    task_prompt: str = "</s><s><predict_bbox><predict_classes><output_markdown><predict_no_text_in_pic>",
+    remote_retry: RemoteRetryParams | None = None,
+    **kwargs: Any,
+) -> Any:
+    """Async version of :func:`nemotron_parse_page_elements`.
+
+    Remote NIM calls use ``ainvoke_image_inference_batches``; local inference
+    is delegated to ``asyncio.to_thread`` wrapping the sync version.
+    """
+    import asyncio
+
+    invoke_url_resolved = (invoke_url or kwargs.get("nemotron_parse_invoke_url") or "").strip()
+    use_remote = bool(invoke_url_resolved)
+
+    if not use_remote:
+        return await asyncio.to_thread(
+            nemotron_parse_page_elements,
+            batch_df,
+            model=model,
+            invoke_url=invoke_url,
+            api_key=api_key,
+            request_timeout_s=request_timeout_s,
+            extract_text=extract_text,
+            extract_tables=extract_tables,
+            extract_charts=extract_charts,
+            extract_infographics=extract_infographics,
+            task_prompt=task_prompt,
+            remote_retry=remote_retry,
+            **kwargs,
+        )
+
+    retry = remote_retry or RemoteRetryParams(
+        remote_max_pool_workers=int(kwargs.get("remote_max_pool_workers", 16)),
+        remote_max_retries=int(kwargs.get("remote_max_retries", 10)),
+        remote_max_429_retries=int(kwargs.get("remote_max_429_retries", 5)),
+    )
+
+    if not isinstance(batch_df, pd.DataFrame):
+        raise NotImplementedError("anemotron_parse_page_elements currently only supports pandas.DataFrame input.")
+
+    wanted_labels: set[str] = set()
+    if extract_tables:
+        wanted_labels.add("table")
+    if extract_charts:
+        wanted_labels.add("chart")
+    if extract_infographics:
+        wanted_labels.add("infographic")
+
+    all_table: List[List[Dict[str, Any]]] = []
+    all_chart: List[List[Dict[str, Any]]] = []
+    all_infographic: List[List[Dict[str, Any]]] = []
+    all_text: List[str] = []
+    all_meta: List[Dict[str, Any]] = []
+
+    t0_total = time.perf_counter()
+
+    for row in batch_df.itertuples(index=False):
+        table_items: List[Dict[str, Any]] = []
+        chart_items: List[Dict[str, Any]] = []
+        infographic_items: List[Dict[str, Any]] = []
+        row_text: Optional[str] = None
+        row_error: Any = None
+
+        try:
+            pe = getattr(row, "page_elements_v3", None)
+            dets_list: List[Dict[str, Any]] = []
+            if isinstance(pe, dict):
+                dets_list = pe.get("detections") or []
+            if not isinstance(dets_list, list):
+                dets_list = []
+
+            page_image = getattr(row, "page_image", None) or {}
+            page_image_b64 = page_image.get("image_b64") if isinstance(page_image, dict) else None
+            if not isinstance(page_image_b64, str) or not page_image_b64:
+                all_table.append(table_items)
+                all_chart.append(chart_items)
+                all_infographic.append(infographic_items)
+                all_text.append(None)
+                all_meta.append({"timing": None, "error": None})
+                continue
+
+            crops = _crop_all_from_page(page_image_b64, dets_list, wanted_labels, as_b64=True)
+            if not crops and wanted_labels:
+                crops = [("full_page", [0.0, 0.0, 1.0, 1.0], page_image_b64)]
+
+            crop_b64s: List[str] = [b64 for _label, _bbox, b64 in crops]
+            crop_meta_items: List[Tuple[str, List[float]]] = [(label, bbox) for label, bbox, _b64 in crops]
+
+            if crop_b64s:
+                response_items = await ainvoke_image_inference_batches(
+                    invoke_url=invoke_url_resolved,
+                    image_b64_list=crop_b64s,
+                    api_key=api_key,
+                    timeout_s=float(request_timeout_s),
+                    max_batch_size=int(kwargs.get("inference_batch_size", 8)),
+                    max_concurrency=int(retry.remote_max_pool_workers),
+                    max_retries=int(retry.remote_max_retries),
+                    max_429_retries=int(retry.remote_max_429_retries),
+                )
+                if len(response_items) != len(crop_meta_items):
+                    raise RuntimeError(f"Expected {len(crop_meta_items)} Parse responses, got {len(response_items)}")
+
+                for i, (label_name, bbox) in enumerate(crop_meta_items):
+                    text = _extract_parse_text(response_items[i])
+                    entry = {"bbox_xyxy_norm": bbox, "text": text}
+                    if label_name == "table":
+                        table_items.append(entry)
+                    elif label_name == "chart":
+                        chart_items.append(entry)
+                    elif label_name == "infographic":
+                        infographic_items.append(entry)
+                    elif label_name == "full_page":
+                        if extract_tables:
+                            table_items.append(dict(entry))
+                        if extract_charts:
+                            chart_items.append(dict(entry))
+                        if extract_infographics:
+                            infographic_items.append(dict(entry))
+
+            meta_row = getattr(row, "metadata", None) or {}
+            needs_ocr = meta_row.get("needs_ocr_for_text", False) if isinstance(meta_row, dict) else False
+            if extract_text and needs_ocr:
+                try:
+                    resp = await ainvoke_image_inference_batches(
+                        invoke_url=invoke_url_resolved,
+                        image_b64_list=[page_image_b64],
+                        api_key=api_key,
+                        timeout_s=float(request_timeout_s),
+                        max_batch_size=1,
+                        max_concurrency=int(retry.remote_max_pool_workers),
+                        max_retries=int(retry.remote_max_retries),
+                        max_429_retries=int(retry.remote_max_429_retries),
+                    )
+                    row_text = _extract_parse_text(resp[0]) if resp else ""
+                except Exception:
+                    row_text = ""
+
+        except BaseException as e:
+            print(f"Warning: Nemotron Parse failed: {type(e).__name__}: {e}")
+            row_error = {
+                "stage": "nemotron_parse_page_elements",
+                "type": e.__class__.__name__,
+                "message": str(e),
+                "traceback": "".join(traceback.format_exception(type(e), e, e.__traceback__)),
+            }
+
+        all_text.append(row_text)
+        all_table.append(table_items)
+        all_chart.append(chart_items)
+        all_infographic.append(infographic_items)
+        all_meta.append({"timing": None, "error": row_error})
+
+    elapsed = time.perf_counter() - t0_total
+    for meta in all_meta:
+        meta["timing"] = {"seconds": float(elapsed)}
+
+    out = batch_df.copy()
+    if extract_text and "text" in out.columns:
+        for i, parse_text in enumerate(all_text):
+            if parse_text is not None:
+                out.iat[i, out.columns.get_loc("text")] = parse_text
+    elif extract_text:
+        out["text"] = [t if t is not None else "" for t in all_text]
+    out["table"] = all_table
+    out["chart"] = all_chart
+    out["infographic"] = all_infographic
     out["table_parse"] = all_table
     out["chart_parse"] = all_chart
     out["infographic_parse"] = all_infographic

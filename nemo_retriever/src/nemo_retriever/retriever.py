@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, Optional, Sequence
 from tqdm import tqdm
@@ -93,6 +93,16 @@ class Retriever:
     _reranker_model: Any = field(default=None, init=False, repr=False, compare=False)
     # Internal cache for local HF embedders, keyed by model name.
     _embedder_cache: dict = field(default_factory=dict, init=False, repr=False, compare=False)
+
+    def __str__(self) -> str:
+        lines = [f"{self.__class__.__name__}("]
+        for f in fields(self):
+            if f.name.startswith("_"):
+                continue
+            val = getattr(self, f.name)
+            lines.append(f"  {f.name}={val!r},")
+        lines.append(")")
+        return "\n".join(lines)
 
     def _resolve_embedding_endpoint(self) -> Optional[str]:
         http_ep = self.embedding_http_endpoint.strip() if isinstance(self.embedding_http_endpoint, str) else None

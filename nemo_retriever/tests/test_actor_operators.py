@@ -4,13 +4,23 @@
 
 """Unit tests verifying all pipeline actors inherit from AbstractOperator."""
 
+import asyncio
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pandas as pd
 import pytest
 
 from nemo_retriever.graph.abstract_operator import AbstractOperator
+
+
+def _run(coro):
+    """Run a coroutine synchronously in tests."""
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 # ---------------------------------------------------------------------------
@@ -52,7 +62,7 @@ class TestPDFSplitActor:
         expected = pd.DataFrame({"page": [1]})
         mock_fn.return_value = expected
         actor = self._make()
-        result = actor(pd.DataFrame({"bytes": [b"x"]}))
+        result = _run(actor(pd.DataFrame({"bytes": [b"x"]})))
         pd.testing.assert_frame_equal(result, expected)
 
 
@@ -89,14 +99,14 @@ class TestPDFExtractionActor:
         expected = pd.DataFrame({"text": ["hello"]})
         mock_fn.return_value = expected
         actor = self._make()
-        result = actor(pd.DataFrame({"bytes": [b"x"]}))
+        result = _run(actor(pd.DataFrame({"bytes": [b"x"]})))
         pd.testing.assert_frame_equal(result, expected)
 
     @patch("nemo_retriever.pdf.extract.pdf_extraction", side_effect=RuntimeError("boom"))
     def test_call_error_handling(self, mock_fn):
         actor = self._make()
         df = pd.DataFrame({"bytes": [b"x"], "path": ["/tmp/a.pdf"]})
-        result = actor(df)
+        result = _run(actor(df))
         assert isinstance(result, list)
         record = result[0]
         assert record["metadata"]["error"]["type"] == "RuntimeError"
@@ -110,15 +120,17 @@ class TestPDFExtractionActor:
             pytest.skip(f"External regression fixture not available: {pdf_path}")
 
         source_df = pd.DataFrame({"path": [str(pdf_path)], "bytes": [pdf_path.read_bytes()]})
-        split_df = PDFSplitActor()(source_df)
+        split_df = _run(PDFSplitActor()(source_df))
 
-        result = PDFExtractionActor(
-            method="pdfium",
-            extract_text=True,
-            extract_tables=True,
-            extract_charts=True,
-            extract_infographics=True,
-        )(split_df.head(5))
+        result = _run(
+            PDFExtractionActor(
+                method="pdfium",
+                extract_text=True,
+                extract_tables=True,
+                extract_charts=True,
+                extract_infographics=True,
+            )(split_df.head(5))
+        )
 
         first_page = result[result["page_number"] == 1].iloc[0]
         metadata = first_page["metadata"]
@@ -157,19 +169,23 @@ class TestPageElementDetectionActor:
         mock_fn.assert_called_once()
         pd.testing.assert_frame_equal(result, expected)
 
-    @patch("nemo_retriever.page_elements.cpu_actor.detect_page_elements_v3")
+    @patch("nemo_retriever.page_elements.cpu_actor.adetect_page_elements_v3", new_callable=AsyncMock)
     def test_call_delegates(self, mock_fn):
         expected = pd.DataFrame({"page_elements_v3": ["det"]})
         mock_fn.return_value = expected
         actor = self._make()
-        result = actor(pd.DataFrame({"page_image": ["x"]}))
+        result = _run(actor(pd.DataFrame({"page_image": ["x"]})))
         pd.testing.assert_frame_equal(result, expected)
 
-    @patch("nemo_retriever.page_elements.cpu_actor.detect_page_elements_v3", side_effect=RuntimeError("boom"))
+    @patch(
+        "nemo_retriever.page_elements.cpu_actor.adetect_page_elements_v3",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("boom"),
+    )
     def test_call_error_handling(self, mock_fn):
         actor = self._make()
         df = pd.DataFrame({"page_image": ["x"]})
-        result = actor(df)
+        result = _run(actor(df))
         assert isinstance(result, pd.DataFrame)
         assert "page_elements_v3" in result.columns
 
@@ -205,11 +221,15 @@ class TestGraphicElementsActor:
         mock_fn.assert_called_once()
         pd.testing.assert_frame_equal(result, expected)
 
-    @patch("nemo_retriever.chart.cpu_actor.graphic_elements_ocr_page_elements", side_effect=RuntimeError("boom"))
+    @patch(
+        "nemo_retriever.chart.cpu_actor.agraphic_elements_ocr_page_elements",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("boom"),
+    )
     def test_call_error_handling(self, mock_fn):
         actor = self._make()
         df = pd.DataFrame({"page_image": ["x"]})
-        result = actor(df)
+        result = _run(actor(df))
         assert isinstance(result, pd.DataFrame)
         assert "graphic_elements_ocr_v1" in result.columns
 
@@ -242,11 +262,15 @@ class TestTableStructureActor:
         mock_fn.assert_called_once()
         pd.testing.assert_frame_equal(result, expected)
 
-    @patch("nemo_retriever.table.cpu_actor.table_structure_ocr_page_elements", side_effect=RuntimeError("boom"))
+    @patch(
+        "nemo_retriever.table.cpu_actor.atable_structure_ocr_page_elements",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("boom"),
+    )
     def test_call_error_handling(self, mock_fn):
         actor = self._make()
         df = pd.DataFrame({"page_image": ["x"]})
-        result = actor(df)
+        result = _run(actor(df))
         assert isinstance(result, pd.DataFrame)
         assert "table_structure_ocr_v1" in result.columns
 
@@ -279,11 +303,11 @@ class TestOCRActor:
         mock_fn.assert_called_once()
         pd.testing.assert_frame_equal(result, expected)
 
-    @patch("nemo_retriever.ocr.cpu_ocr.ocr_page_elements", side_effect=RuntimeError("boom"))
+    @patch("nemo_retriever.ocr.cpu_ocr.aocr_page_elements", new_callable=AsyncMock, side_effect=RuntimeError("boom"))
     def test_call_error_handling(self, mock_fn):
         actor = self._make()
         df = pd.DataFrame({"page_image": ["x"]})
-        result = actor(df)
+        result = _run(actor(df))
         assert isinstance(result, pd.DataFrame)
         assert "ocr_v1" in result.columns
 
@@ -320,7 +344,7 @@ class TestNemotronParseActor:
     def test_call_error_handling(self, mock_fn):
         actor = self._make()
         df = pd.DataFrame({"page_image": ["x"]})
-        result = actor(df)
+        result = _run(actor(df))
         assert isinstance(result, pd.DataFrame)
         assert "nemotron_parse_v1_2" in result.columns
 
@@ -360,7 +384,7 @@ class TestTextChunkActor:
         expected = pd.DataFrame({"text": ["chunk1"]})
         mock_fn.return_value = expected
         actor = self._make()
-        result = actor(pd.DataFrame({"text": ["hello world"]}))
+        result = _run(actor(pd.DataFrame({"text": ["hello world"]})))
         pd.testing.assert_frame_equal(result, expected)
 
 
@@ -403,7 +427,7 @@ class TestImageLoadActor:
         expected = pd.DataFrame({"path": ["/tmp/a.png"], "page_number": [0]})
         mock_fn.return_value = expected
         actor = self._make()
-        result = actor(pd.DataFrame({"bytes": [b"img"], "path": ["/tmp/a.png"]}))
+        result = _run(actor(pd.DataFrame({"bytes": [b"img"], "path": ["/tmp/a.png"]})))
         pd.testing.assert_frame_equal(result, expected)
 
 
@@ -446,7 +470,7 @@ class TestTxtSplitActor:
         expected = pd.DataFrame({"text": ["chunk"], "path": ["/a.txt"], "page_number": [0], "metadata": [{}]})
         mock_fn.return_value = expected
         actor = self._make()
-        result = actor(pd.DataFrame({"bytes": [b"hello"], "path": ["/a.txt"]}))
+        result = _run(actor(pd.DataFrame({"bytes": [b"hello"], "path": ["/a.txt"]})))
         pd.testing.assert_frame_equal(result, expected)
 
 
@@ -484,25 +508,25 @@ class TestHtmlSplitActor:
         expected = pd.DataFrame({"text": ["chunk"], "path": ["/a.html"], "page_number": [0], "metadata": [{}]})
         mock_fn.return_value = expected
         actor = self._make()
-        result = actor(pd.DataFrame({"bytes": [b"<p>hi</p>"], "path": ["/a.html"]}))
+        result = _run(actor(pd.DataFrame({"bytes": [b"<p>hi</p>"], "path": ["/a.html"]})))
         pd.testing.assert_frame_equal(result, expected)
 
 
 # ---------------------------------------------------------------------------
-# 12. _BatchEmbedActor
+# 12. BatchEmbedActor
 # ---------------------------------------------------------------------------
 class TestBatchEmbedActor:
     def _make(self):
         from nemo_retriever.params import EmbedParams
-        from nemo_retriever.text_embed.operators import _BatchEmbedActor
+        from nemo_retriever.text_embed.operators import BatchEmbedActor
 
         params = EmbedParams(model_name="test-model", embed_invoke_url="http://fake")
-        return _BatchEmbedActor(params=params)
+        return BatchEmbedActor(params=params)
 
     def test_inherits(self):
-        from nemo_retriever.text_embed.operators import _BatchEmbedActor
+        from nemo_retriever.text_embed.operators import BatchEmbedActor
 
-        assert issubclass(_BatchEmbedActor, AbstractOperator)
+        assert issubclass(BatchEmbedActor, AbstractOperator)
 
     def test_preprocess_passthrough(self):
         actor = self._make()
@@ -528,5 +552,5 @@ class TestBatchEmbedActor:
         expected = pd.DataFrame({"text": ["hello"], "embedding": [[0.1, 0.2]]})
         mock_fn.return_value = expected
         actor = self._make()
-        result = actor(pd.DataFrame({"text": ["hello"]}))
+        result = _run(actor(pd.DataFrame({"text": ["hello"]})))
         pd.testing.assert_frame_equal(result, expected)

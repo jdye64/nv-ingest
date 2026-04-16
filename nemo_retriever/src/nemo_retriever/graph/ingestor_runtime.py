@@ -22,7 +22,7 @@ from nemo_retriever.graph.content_transforms import (
     explode_content_to_rows,
 )
 from nemo_retriever.graph.multi_type_extract_operator import MultiTypeExtractOperator
-from nemo_retriever.text_embed.operators import _BatchEmbedActor
+from nemo_retriever.text_embed.operators import BatchEmbedActor
 from nemo_retriever.ocr.ocr import OCRActor
 from nemo_retriever.parse.nemotron_parse import NemotronParseActor
 from nemo_retriever.page_elements.page_elements import PageElementDetectionActor
@@ -107,9 +107,9 @@ def batch_tuning_to_node_overrides(
         embed_invoke_url = _positive(getattr(embed_params, "embed_invoke_url", None))
         explicit_bs = getattr(embed_tuning, "embed_batch_size", None) if embed_tuning is not None else None
         embed_bs = _positive(explicit_bs) or (plan.embed_batch_size if plan else None)
-        _set(_BatchEmbedActor.__name__, "batch_size", embed_bs)
+        _set(BatchEmbedActor.__name__, "batch_size", embed_bs)
         if embed_bs:
-            overrides.setdefault(_BatchEmbedActor.__name__, {})["target_num_rows_per_block"] = embed_bs
+            overrides.setdefault(BatchEmbedActor.__name__, {})["target_num_rows_per_block"] = embed_bs
         embed_concurrency = (
             _resolve(
                 getattr(embed_tuning, "embed_workers", None) if embed_tuning is not None else None,
@@ -117,19 +117,19 @@ def batch_tuning_to_node_overrides(
             )
             or 0
         )
-        _set(_BatchEmbedActor.__name__, "concurrency", embed_concurrency or None)
+        _set(BatchEmbedActor.__name__, "concurrency", embed_concurrency or None)
         embed_cpus = (
             _resolve(
                 getattr(embed_tuning, "embed_cpus_per_actor", None) if embed_tuning is not None else None,
             )
             or 1.0
         )
-        _set(_BatchEmbedActor.__name__, "num_cpus", embed_cpus if embed_cpus != 1.0 else None)
+        _set(BatchEmbedActor.__name__, "num_cpus", embed_cpus if embed_cpus != 1.0 else None)
         if effective_allow_no_gpu:
-            _force_cpu_only(_BatchEmbedActor.__name__)
+            _force_cpu_only(BatchEmbedActor.__name__)
         elif not embed_invoke_url:
             _set_gpu(
-                _BatchEmbedActor.__name__,
+                BatchEmbedActor.__name__,
                 getattr(embed_tuning, "gpu_embed", None) if embed_tuning is not None else None,
                 plan.embed_gpus_per_actor if plan else None,
             )
@@ -416,7 +416,7 @@ def _append_ordered_transform_stages(
                         ),
                         name="ExplodeContentToRows",
                     )
-            graph = graph >> _BatchEmbedActor(params=embed_params)
+            graph = graph >> BatchEmbedActor(params=embed_params)
 
     return graph
 

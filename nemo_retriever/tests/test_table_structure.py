@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import importlib
 import io
@@ -15,6 +16,11 @@ import pandas as pd
 import pytest
 
 from nemo_retriever.utils.table_and_chart import join_table_structure_and_ocr_output
+
+
+def _run(coro):
+    """Run a coroutine synchronously in tests."""
+    return asyncio.get_event_loop().run_until_complete(coro)
 
 
 def _can_import(mod: str) -> bool:
@@ -313,7 +319,7 @@ class TestTableStructureActor:
 
             df = _make_page_df()
             # This will fail because both models are None and no URLs set.
-            result = actor(df)
+            result = _run(actor(df))
             assert "table" in result.columns
             assert "table_structure_ocr_v1" in result.columns
             meta = result.iloc[0]["table_structure_ocr_v1"]

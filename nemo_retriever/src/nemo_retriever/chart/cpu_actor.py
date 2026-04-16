@@ -11,7 +11,7 @@ import pandas as pd
 from nemo_retriever.graph.abstract_operator import AbstractOperator
 from nemo_retriever.graph.cpu_operator import CPUOperator
 from nemo_retriever.params import RemoteRetryParams
-from nemo_retriever.chart.shared import graphic_elements_ocr_page_elements
+from nemo_retriever.chart.shared import agraphic_elements_ocr_page_elements, graphic_elements_ocr_page_elements
 
 
 class GraphicElementsCPUActor(AbstractOperator, CPUOperator):
@@ -73,9 +73,23 @@ class GraphicElementsCPUActor(AbstractOperator, CPUOperator):
     def postprocess(self, data: Any, **kwargs: Any) -> Any:
         return data
 
-    def __call__(self, batch_df: Any, **override_kwargs: Any) -> Any:
+    async def aprocess(self, data: Any, **kwargs: Any) -> Any:
+        return await agraphic_elements_ocr_page_elements(
+            data,
+            graphic_elements_model=self._graphic_elements_model,
+            ocr_model=self._ocr_model,
+            graphic_elements_invoke_url=self._graphic_elements_invoke_url,
+            ocr_invoke_url=self._ocr_invoke_url,
+            api_key=self._api_key,
+            request_timeout_s=self._request_timeout_s,
+            remote_retry=self._remote_retry,
+            inference_batch_size=self._inference_batch_size,
+            **kwargs,
+        )
+
+    async def __call__(self, batch_df: Any, **override_kwargs: Any) -> Any:
         try:
-            return self.run(batch_df, **override_kwargs)
+            return await self.arun(batch_df, **override_kwargs)
         except BaseException as exc:
             if isinstance(batch_df, pd.DataFrame):
                 out = batch_df.copy()

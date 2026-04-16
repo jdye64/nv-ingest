@@ -6,6 +6,7 @@
 Unit tests for nemo_retriever.audio: MediaChunkActor and audio_path_to_chunks_df.
 """
 
+import asyncio
 import wave
 from pathlib import Path
 
@@ -17,6 +18,11 @@ from nemo_retriever.audio.chunk_actor import MediaChunkActor
 from nemo_retriever.audio.chunk_actor import audio_path_to_chunks_df
 from nemo_retriever.audio.media_interface import is_media_available
 from nemo_retriever.params import AudioChunkParams
+
+
+def _run(coro):
+    """Run a coroutine synchronously in tests."""
+    return asyncio.get_event_loop().run_until_complete(coro)
 
 
 def _make_small_wav(path: Path, duration_sec: float = 0.5, sample_rate: int = 8000) -> None:
@@ -36,7 +42,7 @@ def test_media_chunk_actor_empty_batch():
     params = AudioChunkParams(split_type="size", split_interval=1000)
     actor = MediaChunkActor(params=params)
     empty = pd.DataFrame(columns=["path", "bytes"])
-    out = actor(empty)
+    out = _run(actor(empty))
     assert isinstance(out, pd.DataFrame)
     assert list(out.columns) == CHUNK_COLUMNS
     assert len(out) == 0
@@ -54,7 +60,7 @@ def test_media_chunk_actor_single_small_file(tmp_path: Path):
     params = AudioChunkParams(split_type="size", split_interval=1_000_000)
     actor = MediaChunkActor(params=params)
     batch = pd.DataFrame([{"path": str(wav.resolve()), "bytes": body}])
-    out = actor(batch)
+    out = _run(actor(batch))
 
     assert isinstance(out, pd.DataFrame)
     for col in ["path", "source_path", "duration", "chunk_index", "metadata", "page_number", "bytes"]:

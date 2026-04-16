@@ -11,7 +11,7 @@ import pandas as pd
 from nemo_retriever.graph.abstract_operator import AbstractOperator
 from nemo_retriever.graph.gpu_operator import GPUOperator
 from nemo_retriever.params import RemoteRetryParams
-from nemo_retriever.ocr.shared import _error_payload, nemotron_parse_page_elements
+from nemo_retriever.ocr.shared import _error_payload, anemotron_parse_page_elements, nemotron_parse_page_elements
 
 
 class NemotronParseActor(AbstractOperator, GPUOperator):
@@ -76,9 +76,25 @@ class NemotronParseActor(AbstractOperator, GPUOperator):
     def postprocess(self, data: Any, **kwargs: Any) -> Any:
         return data
 
-    def __call__(self, batch_df: Any, **override_kwargs: Any) -> Any:
+    async def aprocess(self, data: Any, **kwargs: Any) -> Any:
+        return await anemotron_parse_page_elements(
+            data,
+            model=self._model,
+            invoke_url=self._invoke_url,
+            api_key=self._api_key,
+            request_timeout_s=self._request_timeout_s,
+            task_prompt=self._task_prompt,
+            extract_text=self._extract_text,
+            extract_tables=self._extract_tables,
+            extract_charts=self._extract_charts,
+            extract_infographics=self._extract_infographics,
+            remote_retry=self._remote_retry,
+            **kwargs,
+        )
+
+    async def __call__(self, batch_df: Any, **override_kwargs: Any) -> Any:
         try:
-            return self.run(batch_df, **override_kwargs)
+            return await self.arun(batch_df, **override_kwargs)
         except BaseException as exc:
             if isinstance(batch_df, pd.DataFrame):
                 out = batch_df.copy()

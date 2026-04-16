@@ -4,11 +4,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+import aiohttp
 import requests
 
 logger = logging.getLogger(__name__)
@@ -269,6 +271,211 @@ def invoke_page_elements_batches(
         timeout_s=timeout_s,
         max_batch_size=max_batch_size,
         max_pool_workers=max_pool_workers,
+        max_retries=max_retries,
+        max_429_retries=max_429_retries,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Async variants (aiohttp)
+# ---------------------------------------------------------------------------
+
+
+async def _apost_with_retries(
+    *,
+    session: aiohttp.ClientSession,
+    invoke_url: str,
+    payload: Dict[str, Any],
+    headers: Dict[str, str],
+    timeout_s: float,
+    max_retries: int,
+    max_429_retries: int,
+) -> Any:
+    base_delay = 2.0
+    attempt = 0
+    retries_429 = 0
+    timeout = aiohttp.ClientTimeout(total=float(timeout_s))
+
+    while attempt < int(max_retries):
+        try:
+            async with session.post(invoke_url, json=payload, headers=headers, timeout=timeout) as response:
+                status_code = response.status
+
+                if status_code == 429:
+                    retries_429 += 1
+                    if retries_429 >= int(max_429_retries):
+                        response.raise_for_status()
+                    backoff_time = base_delay * (2**retries_429)
+                    logger.warning(
+                        "NIM endpoint %s returned 429 (rate limited). Retry %d/%d after %.1fs backoff.",
+                        invoke_url,
+                        retries_429,
+                        max_429_retries,
+                        backoff_time,
+                    )
+                    await asyncio.sleep(backoff_time)
+                    continue
+
+                if status_code == 503 or (500 <= status_code < 600):
+                    if attempt == int(max_retries) - 1:
+                        response.raise_for_status()
+                    backoff_time = base_delay * (2**attempt)
+                    logger.warning(
+                        "NIM endpoint %s returned %d. Retry %d/%d after %.1fs backoff.",
+                        invoke_url,
+                        status_code,
+                        attempt + 1,
+                        max_retries,
+                        backoff_time,
+                    )
+                    await asyncio.sleep(backoff_time)
+                    attempt += 1
+                    continue
+
+                if 400 <= status_code < 500:
+                    body = await response.text()
+                    raise aiohttp.ClientResponseError(
+                        response.request_info,
+                        response.history,
+                        status=status_code,
+                        message=f"HTTP {status_code} from {invoke_url}: {body}",
+                    )
+
+                response.raise_for_status()
+                return await response.json()
+
+        except asyncio.TimeoutError as exc:
+            if attempt == int(max_retries) - 1:
+                raise TimeoutError(f"Request timed out after {attempt + 1} attempts.") from exc
+            backoff_time = base_delay * (2**attempt)
+            logger.warning(
+                "NIM endpoint %s timed out (%.1fs). Retry %d/%d after %.1fs backoff.",
+                invoke_url,
+                timeout_s,
+                attempt + 1,
+                max_retries,
+                backoff_time,
+            )
+            await asyncio.sleep(backoff_time)
+            attempt += 1
+        except aiohttp.ClientError as exc:
+            resp_status = getattr(exc, "status", None)
+            if resp_status is not None and 400 <= resp_status < 500:
+                raise
+            if attempt == int(max_retries) - 1:
+                raise
+            backoff_time = base_delay * (2**attempt)
+            logger.warning(
+                "NIM endpoint %s request failed: %s. Retry %d/%d after %.1fs backoff.",
+                invoke_url,
+                exc,
+                attempt + 1,
+                max_retries,
+                backoff_time,
+            )
+            await asyncio.sleep(backoff_time)
+            attempt += 1
+
+    raise RuntimeError(f"Failed to get a successful response after {max_retries} retries.")
+
+
+async def ainvoke_image_inference_batches(
+    *,
+    invoke_url: str,
+    image_b64_list: Sequence[str],
+    merge_levels: Optional[Sequence[str]] = None,
+    api_key: Optional[str] = None,
+    timeout_s: float = 60.0,
+    max_batch_size: int = 8,
+    max_concurrency: int = 8,
+    max_retries: int = 5,
+    max_429_retries: int = 3,
+) -> List[Any]:
+    """Async version of :func:`invoke_image_inference_batches` using aiohttp."""
+    invoke_urls = _parse_invoke_urls(invoke_url)
+
+    token = (api_key or "").strip()
+    headers: Dict[str, str] = {"Accept": "application/json", "Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    n = len(image_b64_list)
+    if n == 0:
+        return []
+
+    if merge_levels is not None and len(merge_levels) != n:
+        raise ValueError(f"merge_levels length ({len(merge_levels)}) must match image_b64_list length ({n})")
+
+    ranges = _chunk_ranges(n, int(max_batch_size))
+    flattened: List[Optional[Any]] = [None] * n
+
+    async def _invoke_one_batch(
+        session: aiohttp.ClientSession,
+        start: int,
+        end: int,
+        endpoint_url: str,
+    ) -> Tuple[int, int, List[Any]]:
+        inputs = [
+            {
+                "type": "image_url",
+                "url": f"data:{_mime_from_b64(b64)};base64,{b64}",
+            }
+            for b64 in image_b64_list[start:end]
+        ]
+        payload: Dict[str, Any] = {"input": inputs}
+        if merge_levels is not None:
+            payload["merge_levels"] = list(merge_levels[start:end])
+        response_json = await _apost_with_retries(
+            session=session,
+            invoke_url=endpoint_url,
+            payload=payload,
+            headers=headers,
+            timeout_s=float(timeout_s),
+            max_retries=int(max_retries),
+            max_429_retries=int(max_429_retries),
+        )
+        per_image = _normalize_batch_response(response_json, end - start)
+        return start, end, per_image
+
+    connector = aiohttp.TCPConnector(limit=max(1, int(max_concurrency)))
+    async with aiohttp.ClientSession(connector=connector) as session:
+        tasks = [
+            _invoke_one_batch(session, start, end, invoke_urls[idx % len(invoke_urls)])
+            for idx, (start, end) in enumerate(ranges)
+        ]
+        results = await asyncio.gather(*tasks)
+
+    for start, end, per_image in results:
+        for i, item in enumerate(per_image):
+            flattened[start + i] = item
+
+    out: List[Any] = []
+    for idx, item in enumerate(flattened):
+        if item is None:
+            raise RuntimeError(f"Missing response for item index {idx}")
+        out.append(item)
+    return out
+
+
+async def ainvoke_page_elements_batches(
+    *,
+    invoke_url: str,
+    image_b64_list: Sequence[str],
+    api_key: Optional[str] = None,
+    timeout_s: float = 60.0,
+    max_batch_size: int = 8,
+    max_concurrency: int = 8,
+    max_retries: int = 5,
+    max_429_retries: int = 3,
+) -> List[Any]:
+    """Async backward-compatible alias for page-elements callers."""
+    return await ainvoke_image_inference_batches(
+        invoke_url=invoke_url,
+        image_b64_list=image_b64_list,
+        api_key=api_key,
+        timeout_s=timeout_s,
+        max_batch_size=max_batch_size,
+        max_concurrency=max_concurrency,
         max_retries=max_retries,
         max_429_retries=max_429_retries,
     )

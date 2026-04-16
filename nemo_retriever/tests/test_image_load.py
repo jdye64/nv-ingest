@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from io import BytesIO
 from unittest.mock import patch
@@ -22,6 +23,12 @@ from nemo_retriever.image.load import (  # noqa: E402
     image_file_to_pages_df,
 )
 from nemo_retriever.image.ray_data import ImageLoadActor  # noqa: E402
+
+
+def _run(coro):
+    """Run a coroutine synchronously in tests."""
+    return asyncio.get_event_loop().run_until_complete(coro)
+
 
 # -- Helpers ------------------------------------------------------------------
 
@@ -175,7 +182,7 @@ class TestImageLoadActor:
                 {"bytes": img2, "path": "/b/img2.png"},
             ]
         )
-        result = actor(batch)
+        result = _run(actor(batch))
         assert isinstance(result, pd.DataFrame)
         assert len(result) == 2
         assert list(result["path"]) == ["/a/img1.png", "/b/img2.png"]
@@ -184,14 +191,14 @@ class TestImageLoadActor:
 
     def test_empty_batch(self) -> None:
         actor = ImageLoadActor()
-        result = actor(pd.DataFrame())
+        result = _run(actor(pd.DataFrame()))
         assert isinstance(result, pd.DataFrame)
         assert len(result) == 0
 
     def test_missing_columns_skipped(self) -> None:
         actor = ImageLoadActor()
         batch = pd.DataFrame([{"bytes": b"data"}])  # no 'path' column
-        result = actor(batch)
+        result = _run(actor(batch))
         assert len(result) == 0
 
     def test_corrupt_row_skipped(self) -> None:
@@ -203,7 +210,7 @@ class TestImageLoadActor:
                 {"bytes": good, "path": "/good.png"},
             ]
         )
-        result = actor(batch)
+        result = _run(actor(batch))
         # Corrupt row produces an error record, good row succeeds.
         assert len(result) == 2
 

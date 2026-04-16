@@ -393,4 +393,4 @@ def apply_asr_to_df(
     """
     params = ASRParams(**(asr_params or {}))
     actor = ASRActor(params=params)
-    return actor(batch_df)
+    return actor.run(batch_df)

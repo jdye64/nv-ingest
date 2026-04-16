@@ -11,11 +11,17 @@ are stubbed via sys.modules injection so no GPU or model download is required.
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from types import ModuleType
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+
+def _run(coro):
+    """Run a coroutine synchronously in tests."""
+    return asyncio.get_event_loop().run_until_complete(coro)
 
 
 # ---------------------------------------------------------------------------
@@ -539,7 +545,7 @@ class TestNemotronRerankActor:
         ]
 
         with patch("requests.post", return_value=mock_resp):
-            out = actor(df)
+            out = _run(actor(df))
 
         assert "rerank_score" in out.columns
         assert len(out) == 2
@@ -559,7 +565,7 @@ class TestNemotronRerankActor:
         ]
 
         with patch("requests.post", return_value=mock_resp):
-            out = actor(df)
+            out = _run(actor(df))
 
         scores = out["rerank_score"].tolist()
         assert scores == sorted(scores, reverse=True)
@@ -572,7 +578,7 @@ class TestNemotronRerankActor:
         df = pd.DataFrame({"query": ["q"], "text": ["doc"]})
 
         with patch("requests.post", side_effect=RuntimeError("connection failed")):
-            out = actor(df)
+            out = _run(actor(df))
 
         # Should not raise; should return a DataFrame with error payload
         assert isinstance(out, pd.DataFrame)
@@ -592,6 +598,6 @@ class TestNemotronRerankActor:
         mock_resp.json.return_value = {"rankings": [{"index": 0, "logit": 0.7}]}
 
         with patch("requests.post", return_value=mock_resp):
-            out = actor(df)
+            out = _run(actor(df))
 
         assert "my_score" in out.columns

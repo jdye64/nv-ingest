@@ -22,7 +22,7 @@ class TabularFetchEmbeddingsOp(AbstractOperator, CPUOperator):
     ``text``, ``_embed_modality``, ``path``, ``page_number``, ``metadata``.
 
     The output schema matches the format produced by the unstructured pipeline,
-    so the standard :class:`~nemo_retriever.text_embed.operators._BatchEmbedActor`
+    so the standard :class:`~nemo_retriever.text_embed.operators.BatchEmbedActor`
     can be chained directly after this operator.
     """
 

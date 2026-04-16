@@ -2,6 +2,7 @@
 # All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 from unittest.mock import patch
 
 import pandas as pd
@@ -9,6 +10,11 @@ import pytest
 
 from nemo_retriever.graph.abstract_operator import AbstractOperator
 from nemo_retriever.utils.convert.to_pdf import DocToPdfConversionActor, convert_to_pdf_bytes, convert_batch_to_pdf
+
+
+def _run(coro):
+    """Run a coroutine synchronously in tests."""
+    return asyncio.get_event_loop().run_until_complete(coro)
 
 
 class TestConvertToPdfBytes:
@@ -79,6 +85,6 @@ class TestDocToPdfConversionActor:
         mock_convert.return_value = expected
         actor = DocToPdfConversionActor()
         df = pd.DataFrame({"bytes": [b"docx"], "path": ["/tmp/test.docx"]})
-        result = actor(df)
+        result = _run(actor(df))
         mock_convert.assert_called_once_with(df)
         pd.testing.assert_frame_equal(result, expected)

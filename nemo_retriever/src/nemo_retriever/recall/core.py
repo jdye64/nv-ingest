@@ -522,7 +522,7 @@ def retrieve_and_score(
         lancedb_uri=cfg.lancedb_uri,
         lancedb_table=cfg.lancedb_table,
         embedder=cfg.embedding_model or VL_EMBED_MODEL,
-        embedding_http_endpoint=cfg.embedding_http_endpoint,
+        embedding_http_endpoint=endpoint,
         embedding_api_key=cfg.embedding_api_key,
         top_k=cfg.top_k,
         nprobes=cfg.nprobes,

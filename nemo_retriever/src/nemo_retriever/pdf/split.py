@@ -186,8 +186,8 @@ class PDFSplitCPUActor(AbstractOperator, CPUOperator):
     def postprocess(self, data: Any, **kwargs: Any) -> Any:
         return data
 
-    def __call__(self, pdf_batch: Any) -> Any:
-        return self.run(pdf_batch)
+    async def __call__(self, pdf_batch: Any) -> Any:
+        return await self.arun(pdf_batch)
 
 
 class PDFSplitActor(ArchetypeOperator):

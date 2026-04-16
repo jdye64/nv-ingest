@@ -10,6 +10,7 @@ the model package; local-ASR tests inject a fake nemo_retriever.model.local
 into sys.modules so the real module is never loaded.
 """
 
+import asyncio
 import base64
 import sys
 from unittest.mock import MagicMock
@@ -20,6 +21,11 @@ import pandas as pd
 from nemo_retriever.audio.asr_actor import ASRActor, ASRCPUActor
 from nemo_retriever.audio.asr_actor import apply_asr_to_df
 from nemo_retriever.params import ASRParams
+
+
+def _run(coro):
+    """Run a coroutine synchronously in tests."""
+    return asyncio.get_event_loop().run_until_complete(coro)
 
 
 def test_strip_pad_from_transcript():
@@ -49,7 +55,7 @@ def test_asr_actor_empty_batch():
         params = ASRParams(audio_endpoints=("localhost:50051", None))
         actor = ASRActor(params=params)
         empty = pd.DataFrame(columns=["path", "bytes"])
-        out = actor(empty)
+        out = _run(actor(empty))
 
         assert isinstance(out, pd.DataFrame)
         assert "text" in out.columns
@@ -79,7 +85,7 @@ def test_asr_actor_mock_transcribe():
                 }
             ]
         )
-        out = actor(batch)
+        out = _run(actor(batch))
 
         assert len(out) == 1
         assert out["text"].iloc[0] == "hello world transcript"
@@ -142,7 +148,7 @@ def test_asr_actor_remote_segment_audio():
                 }
             ]
         )
-        out = actor(batch)
+        out = _run(actor(batch))
 
         assert len(out) == 2
         assert out["text"].tolist() == ["Hello world.", "How are you?"]
@@ -223,7 +229,7 @@ def test_local_asr_does_not_call_get_client():
                     }
                 ]
             )
-            out = actor(batch)
+            out = _run(actor(batch))
 
             assert len(out) == 1
             assert out["text"].iloc[0] == "mocked local transcript"

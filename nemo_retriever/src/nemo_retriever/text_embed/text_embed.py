@@ -215,9 +215,9 @@ class TextEmbedGPUActor(AbstractOperator, GPUOperator):
     def postprocess(self, data: Any, **kwargs: Any) -> Any:
         return data
 
-    def __call__(self, batch_df: Any, **override_kwargs: Any) -> Any:
+    async def __call__(self, batch_df: Any, **override_kwargs: Any) -> Any:
         try:
-            return self.run(batch_df, **override_kwargs)
+            return await self.arun(batch_df, **override_kwargs)
         except BaseException as e:
             if isinstance(batch_df, pd.DataFrame):
                 out = batch_df.copy()

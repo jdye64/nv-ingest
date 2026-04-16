@@ -11,7 +11,7 @@ import pandas as pd
 from nemo_retriever.graph.abstract_operator import AbstractOperator
 from nemo_retriever.graph.gpu_operator import GPUOperator
 from nemo_retriever.params import RemoteRetryParams
-from nemo_retriever.ocr.shared import Image, _error_payload, ocr_page_elements
+from nemo_retriever.ocr.shared import Image, _error_payload, aocr_page_elements, ocr_page_elements
 
 
 class OCRActor(AbstractOperator, GPUOperator):
@@ -64,9 +64,18 @@ class OCRActor(AbstractOperator, GPUOperator):
     def postprocess(self, data: Any, **kwargs: Any) -> Any:
         return data
 
-    def __call__(self, batch_df: Any, **override_kwargs: Any) -> Any:
+    async def aprocess(self, data: Any, **kwargs: Any) -> Any:
+        return await aocr_page_elements(
+            data,
+            model=self._model,
+            remote_retry=self._remote_retry,
+            **self.ocr_kwargs,
+            **kwargs,
+        )
+
+    async def __call__(self, batch_df: Any, **override_kwargs: Any) -> Any:
         try:
-            return self.run(batch_df, **override_kwargs)
+            return await self.arun(batch_df, **override_kwargs)
         except BaseException as exc:
             if isinstance(batch_df, pd.DataFrame):
                 out = batch_df.copy()

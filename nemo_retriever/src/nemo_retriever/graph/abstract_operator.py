@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 import inspect
 from typing import Any, TYPE_CHECKING
@@ -35,9 +36,26 @@ class AbstractOperator(ABC):
         data = self.postprocess(data, **kwargs)
         return data
 
-    def __call__(self, data: Any, **kwargs: Any) -> Any:
-        """Make operators directly usable as Ray ``map_batches`` callables."""
-        return self.run(data, **kwargs)
+    async def aprocess(self, data: Any, **kwargs: Any) -> Any:
+        """Async version of :meth:`process`.
+
+        Default wraps the synchronous ``process`` in a thread so
+        compute-bound subclasses work without modification.  I/O-bound
+        subclasses should override this with a proper ``await``-based
+        implementation.
+        """
+        return await asyncio.to_thread(self.process, data, **kwargs)
+
+    async def arun(self, data: Any, **kwargs: Any) -> Any:
+        """Async version of :meth:`run`."""
+        data = self.preprocess(data, **kwargs)
+        data = await self.aprocess(data, **kwargs)
+        data = self.postprocess(data, **kwargs)
+        return data
+
+    async def __call__(self, data: Any, **kwargs: Any) -> Any:
+        """Make operators directly usable as Ray ``map_batches`` async callables."""
+        return await self.arun(data, **kwargs)
 
     def get_constructor_kwargs(self) -> dict[str, Any]:
         """Best-effort constructor kwargs for executor-side reconstruction."""
