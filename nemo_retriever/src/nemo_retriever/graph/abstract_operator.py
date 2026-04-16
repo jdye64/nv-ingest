@@ -13,32 +13,32 @@ if TYPE_CHECKING:
     from nemo_retriever.graph.pipeline_graph import Graph, Node
 
 
-_policy_checked = False
-
-
-def _ensure_event_loop_policy() -> None:
-    """Reset to the default asyncio policy if the current one prevents loop creation.
+def _ensure_event_loop() -> None:
+    """Guarantee an asyncio event loop exists for the current thread.
 
     uvloop >= 0.22's ``get_event_loop()`` raises ``RuntimeError`` when no loop
-    is *running* (not merely *set*), which breaks Ray Data's async-actor
-    initialisation in freshly spawned worker processes.  Falling back to the
-    default policy lets ``get_event_loop()`` create a loop implicitly.
+    is *running*, which breaks Ray Data's async-actor initialisation in freshly
+    spawned worker processes.  We fall back to the default asyncio policy (which
+    allows implicit loop creation) and explicitly create + set a loop so that
+    Ray's ``get_or_create_event_loop()`` finds one immediately.
     """
-    global _policy_checked
-    if _policy_checked:
-        return
-    _policy_checked = True
     try:
-        asyncio.get_event_loop_policy().get_event_loop()
+        loop = asyncio.get_event_loop_policy().get_event_loop()
+        if loop.is_closed():
+            raise RuntimeError("closed")
     except RuntimeError:
         asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
+
+# Run at import time so the loop exists before Ray's _init_async() runs.
+_ensure_event_loop()
 
 
 class AbstractOperator(ABC):
     """Base class for all pipeline operators."""
 
     def __init__(self, **kwargs: Any) -> None:
-        _ensure_event_loop_policy()
         self._graph_init_kwargs = dict(kwargs)
         for key, value in kwargs.items():
             setattr(self, key, value)
@@ -61,12 +61,17 @@ class AbstractOperator(ABC):
     async def aprocess(self, data: Any, **kwargs: Any) -> Any:
         """Async version of :meth:`process`.
 
-        Default wraps the synchronous ``process`` in a thread so
-        compute-bound subclasses work without modification.  I/O-bound
-        subclasses should override this with a proper ``await``-based
-        implementation.
+        The default calls ``process()`` synchronously on the event-loop
+        thread.  This is intentional: most operators use C extensions
+        (pypdfium2, OpenCV, torch, …) that are **not** thread-safe, so
+        ``asyncio.to_thread`` would allow Ray Data to run multiple
+        batches in parallel threads inside the same actor, causing
+        memory corruption.
+
+        I/O-bound subclasses that call remote endpoints should override
+        this with a proper ``await``-based implementation.
         """
-        return await asyncio.to_thread(self.process, data, **kwargs)
+        return self.process(data, **kwargs)
 
     async def arun(self, data: Any, **kwargs: Any) -> Any:
         """Async version of :meth:`run`."""
