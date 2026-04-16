@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 import time
@@ -217,8 +216,40 @@ def _extract_remote_pred_item(response_item: Any) -> Any:
     return response_item
 
 
+def _count_structure_labels(structure_dets: List[Dict[str, Any]]) -> Dict[str, int]:
+    counts = {"cell": 0, "row": 0, "column": 0}
+    for det in structure_dets:
+        label_name = str(det.get("label_name") or "")
+        if label_name in counts:
+            counts[label_name] += 1
+    return counts
+
+
+def _render_structure_only_text(structure_dets: List[Dict[str, Any]], *, table_output_format: Optional[str]) -> str:
+    counts = _count_structure_labels(structure_dets)
+    output_format = str(table_output_format or "markdown").strip().lower()
+
+    if output_format == "markdown" and counts["row"] > 0 and counts["column"] > 0:
+        from nemo_retriever.utils.table_and_chart import display_markdown
+
+        blank_matrix = [["" for _ in range(counts["column"])] for _ in range(counts["row"])]
+        return display_markdown(blank_matrix, use_header=True)
+
+    parts: List[str] = []
+    for label_name in ("row", "column", "cell"):
+        count = counts[label_name]
+        if count:
+            suffix = "" if count == 1 else "s"
+            parts.append(f"{count} {label_name}{suffix}")
+
+    if not parts:
+        return ""
+
+    return "Table structure detected: " + ", ".join(parts) + "."
+
+
 # ---------------------------------------------------------------------------
-# Combined table-structure + OCR core function
+# Combined table-structure core function
 # ---------------------------------------------------------------------------
 
 
@@ -226,9 +257,7 @@ def table_structure_ocr_page_elements(
     batch_df: Any,
     *,
     table_structure_model: Any = None,
-    ocr_model: Any = None,
     table_structure_invoke_url: str = "",
-    ocr_invoke_url: str = "",
     api_key: str = "",
     request_timeout_s: float = 120.0,
     inference_batch_size: int = 8,
@@ -237,16 +266,14 @@ def table_structure_ocr_page_elements(
     **kwargs: Any,
 ) -> Any:
     """
-    Run table-structure + OCR on table crops and produce structure-aware markdown.
+    Run table-structure inference on table crops and produce structure-only output.
 
     For each row (page) in ``batch_df``:
     1. Read ``page_elements_v3`` detections and ``page_image["image_b64"]``.
     2. Crop all table detections from the page image.
     3. Run table-structure model on each crop to get cell/row/column bboxes.
-    4. Run OCR on each crop to get text with bboxes.
-    5. Join the two outputs using ``join_table_structure_and_ocr_output()``
-       to produce properly-structured markdown tables.
-    6. Fall back to OCR-only pseudo-markdown if table-structure returns no cells.
+    4. Render a structure-only summary or blank markdown skeleton from the
+       detected rows/columns/cells.
 
     Parameters
     ----------
@@ -254,28 +281,16 @@ def table_structure_ocr_page_elements(
         Ray Data batch with ``page_elements_v3`` and ``page_image`` columns.
     table_structure_model : NemotronTableStructureV1 | None
         Local table-structure model, or None for remote inference.
-    ocr_model : NemotronOCRV1 | None
-        Local OCR model, or None for remote inference.
     table_structure_invoke_url : str
         Remote NIM endpoint for table-structure inference.
-    ocr_invoke_url : str
-        Remote NIM endpoint for OCR inference.
 
     Returns
     -------
     pandas.DataFrame
         Original columns plus ``table`` and ``table_structure_ocr_v1``.
     """
-    from nemo_retriever.nim.nim import NIMClient, invoke_image_inference_batches
-    from nemo_retriever.ocr.ocr import (
-        _blocks_to_pseudo_markdown,
-        _blocks_to_text,
-        _crop_all_from_page,
-        _extract_remote_ocr_item,
-        _np_rgb_to_b64_png,
-        _parse_ocr_result,
-    )
-    from nemo_retriever.utils.table_and_chart import join_table_structure_and_ocr_output
+    from nemo_retriever.nim.nim import invoke_image_inference_batches
+    from nemo_retriever.ocr.ocr import _crop_all_from_page, _np_rgb_to_b64_png
 
     retry = remote_retry or RemoteRetryParams(
         remote_max_pool_workers=int(kwargs.get("remote_max_pool_workers", 16)),
@@ -287,14 +302,11 @@ def table_structure_ocr_page_elements(
         raise NotImplementedError("table_structure_ocr_page_elements currently only supports pandas.DataFrame input.")
 
     ts_url = (table_structure_invoke_url or kwargs.get("table_structure_invoke_url") or "").strip()
-    ocr_url = (ocr_invoke_url or kwargs.get("ocr_invoke_url") or "").strip()
     use_remote_ts = bool(ts_url)
-    use_remote_ocr = bool(ocr_url)
+    table_output_format = kwargs.get("table_output_format")
 
     if not use_remote_ts and table_structure_model is None:
         raise ValueError("A local `table_structure_model` is required when `table_structure_invoke_url` is not set.")
-    if not use_remote_ocr and ocr_model is None:
-        raise ValueError("A local `ocr_model` is required when `ocr_invoke_url` is not set.")
 
     label_names = _labels_from_model(table_structure_model) if table_structure_model is not None else []
     if not label_names:
@@ -312,9 +324,9 @@ def table_structure_ocr_page_elements(
     # batch.  Track which row each crop belongs to so we can stitch
     # results back later.
     # ---------------------------------------------------------------
-    flat_crops: List[Any] = []          # (label_name, bbox, crop_array)
-    flat_crop_b64s: List[str] = []      # parallel list of base64 PNGs (remote only)
-    crop_row_indices: List[int] = []    # row index each crop belongs to
+    flat_crops: List[Any] = []  # (label_name, bbox, crop_array)
+    flat_crop_b64s: List[str] = []  # parallel list of base64 PNGs (remote only)
+    crop_row_indices: List[int] = []  # row index each crop belongs to
 
     for row_i, row in enumerate(batch_df.itertuples(index=False)):
         try:
@@ -338,7 +350,7 @@ def table_structure_ocr_page_elements(
             for crop in crops:
                 flat_crops.append(crop)
                 crop_row_indices.append(row_i)
-                if use_remote_ts or use_remote_ocr:
+                if use_remote_ts:
                     flat_crop_b64s.append(_np_rgb_to_b64_png(crop[2]))
 
         except BaseException as e:
@@ -363,12 +375,9 @@ def table_structure_ocr_page_elements(
     n_crops = len(flat_crops)
 
     # ---------------------------------------------------------------
-    # Pass 2 & 3: Run table-structure and OCR on ALL crops.
-    # When both use remote endpoints, fire them in parallel so the
-    # two independent HTTP round-trips overlap.
+    # Pass 2: Run table-structure inference on all crops.
     # ---------------------------------------------------------------
     structure_results: List[List[Dict[str, Any]]] = [[] for _ in range(n_crops)]
-    ocr_results: List[Any] = [None] * n_crops
 
     def _run_remote_ts() -> List[Any]:
         _ts_kw = dict(
@@ -387,32 +396,9 @@ def table_structure_ocr_page_elements(
             max_pool_workers=int(retry.remote_max_pool_workers),
         )
 
-    def _run_remote_ocr() -> List[Any]:
-        _ocr_kw = dict(
-            invoke_url=ocr_url,
-            image_b64_list=flat_crop_b64s,
-            api_key=api_key or None,
-            timeout_s=float(request_timeout_s),
-            max_batch_size=inference_batch_size,
-            max_retries=int(retry.remote_max_retries),
-            max_429_retries=int(retry.remote_max_429_retries),
-        )
-        if nim_client is not None:
-            return nim_client.invoke_image_inference_batches(**_ocr_kw)
-        return invoke_image_inference_batches(
-            **_ocr_kw,
-            max_pool_workers=int(retry.remote_max_pool_workers),
-        )
-
-    # When both endpoints are remote, overlap the two HTTP passes.
-    if use_remote_ts and use_remote_ocr:
-        _parallel_pool = ThreadPoolExecutor(max_workers=2)
-        ts_future: Future[List[Any]] = _parallel_pool.submit(_run_remote_ts)
-        ocr_future: Future[List[Any]] = _parallel_pool.submit(_run_remote_ocr)
-        _parallel_pool.shutdown(wait=False)
-
-        try:
-            response_items = ts_future.result()
+    try:
+        if use_remote_ts:
+            response_items = _run_remote_ts()
             if len(response_items) != n_crops:
                 raise RuntimeError(f"Expected {n_crops} table-structure responses, got {len(response_items)}")
             for ci, resp in enumerate(response_items):
@@ -421,113 +407,49 @@ def table_structure_ocr_page_elements(
                     pred_item = _extract_remote_pred_item(resp)
                     parsed = _prediction_to_detections(pred_item, label_names=label_names)
                 structure_results[ci] = [d for d in parsed if (d.get("score") or 0.0) >= YOLOX_TABLE_MIN_SCORE]
-        except BaseException as e:
-            print(f"Warning: table-structure batch inference failed: {type(e).__name__}: {e}")
-            err_payload = {
-                "stage": "table_structure_ocr_page_elements:table_structure",
-                "type": e.__class__.__name__,
-                "message": str(e),
-                "traceback": "".join(traceback.format_exception(type(e), e, e.__traceback__)),
-            }
-            for row_i in set(crop_row_indices):
-                all_meta[row_i]["error"] = err_payload
-
-        try:
-            ocr_response_items = ocr_future.result()
-            if len(ocr_response_items) != n_crops:
-                raise RuntimeError(f"Expected {n_crops} OCR responses, got {len(ocr_response_items)}")
-            for ci, resp in enumerate(ocr_response_items):
-                ocr_results[ci] = _extract_remote_ocr_item(resp)
-        except BaseException as e:
-            print(f"Warning: table OCR batch inference failed: {type(e).__name__}: {e}")
-            err_payload = {
-                "stage": "table_structure_ocr_page_elements:ocr",
-                "type": e.__class__.__name__,
-                "message": str(e),
-                "traceback": "".join(traceback.format_exception(type(e), e, e.__traceback__)),
-            }
-            for row_i in set(crop_row_indices):
-                if all_meta[row_i]["error"] is None:
-                    all_meta[row_i]["error"] = err_payload
-    else:
-        # Sequential path: at least one model is local.
-        try:
-            if use_remote_ts:
-                response_items = _run_remote_ts()
-                if len(response_items) != n_crops:
-                    raise RuntimeError(f"Expected {n_crops} table-structure responses, got {len(response_items)}")
-                for ci, resp in enumerate(response_items):
-                    parsed = _parse_nim_bounding_boxes(resp)
-                    if not parsed:
-                        pred_item = _extract_remote_pred_item(resp)
-                        parsed = _prediction_to_detections(pred_item, label_names=label_names)
-                    structure_results[ci] = [d for d in parsed if (d.get("score") or 0.0) >= YOLOX_TABLE_MIN_SCORE]
-            else:
-                for ci, (_, _, crop_array) in enumerate(flat_crops):
-                    chw = torch.from_numpy(crop_array).permute(2, 0, 1).contiguous().to(dtype=torch.float32)
-                    h, w = crop_array.shape[:2]
-                    x = chw.unsqueeze(0)
-                    try:
-                        pre = table_structure_model.preprocess(x, (h, w))
-                    except TypeError:
-                        pre = table_structure_model.preprocess(x)
-                    if isinstance(pre, torch.Tensor) and pre.ndim == 3:
-                        pre = pre.unsqueeze(0)
-                    pred = table_structure_model.invoke(pre, (h, w))
-                    dets_local = _prediction_to_detections(pred, label_names=label_names)
-                    structure_results[ci] = [d for d in dets_local if (d.get("score") or 0.0) >= YOLOX_TABLE_MIN_SCORE]
-        except BaseException as e:
-            print(f"Warning: table-structure batch inference failed: {type(e).__name__}: {e}")
-            err_payload = {
-                "stage": "table_structure_ocr_page_elements:table_structure",
-                "type": e.__class__.__name__,
-                "message": str(e),
-                "traceback": "".join(traceback.format_exception(type(e), e, e.__traceback__)),
-            }
-            for row_i in set(crop_row_indices):
-                all_meta[row_i]["error"] = err_payload
-
-        try:
-            if use_remote_ocr:
-                ocr_response_items = _run_remote_ocr()
-                if len(ocr_response_items) != n_crops:
-                    raise RuntimeError(f"Expected {n_crops} OCR responses, got {len(ocr_response_items)}")
-                for ci, resp in enumerate(ocr_response_items):
-                    ocr_results[ci] = _extract_remote_ocr_item(resp)
-            else:
-                for ci, (_, _, crop_array) in enumerate(flat_crops):
-                    ocr_results[ci] = ocr_model.invoke(crop_array, merge_level="word")
-        except BaseException as e:
-            print(f"Warning: table OCR batch inference failed: {type(e).__name__}: {e}")
-            err_payload = {
-                "stage": "table_structure_ocr_page_elements:ocr",
-                "type": e.__class__.__name__,
-                "message": str(e),
-                "traceback": "".join(traceback.format_exception(type(e), e, e.__traceback__)),
-            }
-            for row_i in set(crop_row_indices):
-                if all_meta[row_i]["error"] is None:
-                    all_meta[row_i]["error"] = err_payload
+        else:
+            for ci, (_, _, crop_array) in enumerate(flat_crops):
+                chw = torch.from_numpy(crop_array).permute(2, 0, 1).contiguous().to(dtype=torch.float32)
+                h, w = crop_array.shape[:2]
+                x = chw.unsqueeze(0)
+                try:
+                    pre = table_structure_model.preprocess(x, (h, w))
+                except TypeError:
+                    pre = table_structure_model.preprocess(x)
+                if isinstance(pre, torch.Tensor) and pre.ndim == 3:
+                    pre = pre.unsqueeze(0)
+                pred = table_structure_model.invoke(pre, (h, w))
+                dets = _prediction_to_detections(pred, label_names=label_names)
+                structure_results[ci] = [d for d in dets if (d.get("score") or 0.0) >= YOLOX_TABLE_MIN_SCORE]
+    except BaseException as e:
+        print(f"Warning: table-structure failed: {type(e).__name__}: {e}")
+        err_payload = {
+            "stage": "table_structure_ocr_page_elements",
+            "type": e.__class__.__name__,
+            "message": str(e),
+            "traceback": "".join(traceback.format_exception(type(e), e, e.__traceback__)),
+        }
+        for row_i in set(crop_row_indices):
+            all_meta[row_i]["error"] = err_payload
 
     # ---------------------------------------------------------------
-    # Pass 4: Stitch results back to the correct rows.
+    # Pass 3: Stitch structure-only results back to the correct rows.
     # ---------------------------------------------------------------
     for ci in range(n_crops):
         row_i = crop_row_indices[ci]
-        label_name, bbox, crop_array = flat_crops[ci]
-        crop_hw = (int(crop_array.shape[0]), int(crop_array.shape[1]))
+        _, bbox, _ = flat_crops[ci]
         structure_dets = structure_results[ci]
-        ocr_preds = ocr_results[ci]
-
-        markdown = join_table_structure_and_ocr_output(structure_dets, ocr_preds, crop_hw)
-
-        if not markdown:
-            blocks = _parse_ocr_result(ocr_preds)
-            markdown = _blocks_to_pseudo_markdown(blocks)
-            if not markdown:
-                markdown = _blocks_to_text(blocks)
-
-        all_table[row_i].append({"bbox_xyxy_norm": bbox, "text": markdown})
+        all_table[row_i].append(
+            {
+                "bbox_xyxy_norm": bbox,
+                "text": _render_structure_only_text(
+                    structure_dets,
+                    table_output_format=table_output_format,
+                ),
+                "structure_detections": structure_dets,
+                "structure_counts": _count_structure_labels(structure_dets),
+            }
+        )
 
     elapsed = time.perf_counter() - t0_total
     for meta in all_meta:
