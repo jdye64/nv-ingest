@@ -56,6 +56,9 @@ function Sidebar({ activeView, onNavigate, alertBadgeCount, githubRepoUrl }) {
         <div className={`nav-item ${activeView==='settings'?'active':''}`} onClick={()=>onNavigate('settings')}>
           <IconSettings /><span>Settings</span>
         </div>
+        <div className={`nav-item ${activeView==='mcp'?'active':''}`} onClick={()=>onNavigate('mcp')}>
+          <IconLink /><span>MCP</span>
+        </div>
       </nav>
       <div className="sidebar-bottom">
         <div style={{fontSize:'11px',color:'var(--nv-text-dim)',marginBottom:'4px'}}>nemo_retriever harness</div>
