@@ -15,10 +15,7 @@ every call.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence, Tuple
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
-from nemo_retriever.nim.nim import _parse_invoke_urls, _post_with_retries, _mime_from_b64
+from typing import Any, Dict, List, Optional, Sequence
 
 
 def extract_chat_completion_text(response_json: Any) -> str:
