@@ -287,7 +287,13 @@ def table_structure_ocr_page_elements(
     Returns
     -------
     pandas.DataFrame
-        Original columns plus ``table`` and ``table_structure_ocr_v1``.
+        Original columns plus:
+
+        - ``table``: list of per-crop dicts with structure-only ``text`` fallback
+          (overwritten by the OCR stage when it runs with ``use_table_structure=True``).
+        - ``table_structure_v1``: page-level ``{regions, timing, error}`` payload
+          consumed by the OCR stage to join OCR text with structure detections.
+        - ``table_structure_ocr_v1``: per-row timing/error metadata.
     """
     from nemo_retriever.nim.nim import invoke_image_inference_batches
     from nemo_retriever.ocr.ocr import _crop_all_from_page, _np_rgb_to_b64_png
@@ -315,6 +321,7 @@ def table_structure_ocr_page_elements(
 
     num_rows = len(batch_df)
     all_table: List[List[Dict[str, Any]]] = [[] for _ in range(num_rows)]
+    all_ts_payloads: List[Dict[str, Any]] = [{"regions": [], "timing": None, "error": None} for _ in range(num_rows)]
     all_meta: List[Dict[str, Any]] = [{"timing": None, "error": None} for _ in range(num_rows)]
 
     t0_total = time.perf_counter()
@@ -367,8 +374,11 @@ def table_structure_ocr_page_elements(
         elapsed = time.perf_counter() - t0_total
         for meta in all_meta:
             meta["timing"] = {"seconds": float(elapsed)}
+        for payload in all_ts_payloads:
+            payload["timing"] = {"seconds": float(elapsed)}
         out = batch_df.copy()
         out["table"] = all_table
+        out["table_structure_v1"] = all_ts_payloads
         out["table_structure_ocr_v1"] = all_meta
         return out
 
@@ -437,8 +447,10 @@ def table_structure_ocr_page_elements(
     # ---------------------------------------------------------------
     for ci in range(n_crops):
         row_i = crop_row_indices[ci]
-        _, bbox, _ = flat_crops[ci]
+        _, bbox, crop_array = flat_crops[ci]
         structure_dets = structure_results[ci]
+        counts = _count_structure_labels(structure_dets)
+        crop_hw = (int(crop_array.shape[0]), int(crop_array.shape[1]))
         all_table[row_i].append(
             {
                 "bbox_xyxy_norm": bbox,
@@ -447,16 +459,28 @@ def table_structure_ocr_page_elements(
                     table_output_format=table_output_format,
                 ),
                 "structure_detections": structure_dets,
-                "structure_counts": _count_structure_labels(structure_dets),
+                "structure_counts": counts,
+            }
+        )
+        all_ts_payloads[row_i]["regions"].append(
+            {
+                "bbox_xyxy_norm": [float(x) for x in bbox],
+                "label_name": "table",
+                "detections": structure_dets,
+                "orig_shape_hw": [crop_hw[0], crop_hw[1]],
+                "structure_counts": counts,
             }
         )
 
     elapsed = time.perf_counter() - t0_total
     for meta in all_meta:
         meta["timing"] = {"seconds": float(elapsed)}
+    for payload in all_ts_payloads:
+        payload["timing"] = {"seconds": float(elapsed)}
 
     out = batch_df.copy()
     out["table"] = all_table
+    out["table_structure_v1"] = all_ts_payloads
     out["table_structure_ocr_v1"] = all_meta
     return out
 
