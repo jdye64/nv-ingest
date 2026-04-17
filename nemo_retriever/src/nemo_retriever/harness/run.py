@@ -447,8 +447,6 @@ def _build_command(
         run_id,
         "--detection-summary-file",
         str(detection_summary_file),
-        "--metrics-output-file",
-        str(metrics_output_file),
         "--lancedb-uri",
         _resolve_lancedb_uri(cfg, artifact_dir),
     ]
