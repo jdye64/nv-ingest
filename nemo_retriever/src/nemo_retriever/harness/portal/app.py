@@ -144,6 +144,7 @@ async def _runner_health_check_loop():
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     _seed_default_run_code_ref()
+    _init_mcp_server()
     sched_module.start_scheduler()
     global _runner_health_task
     _runner_health_task = asyncio.create_task(_runner_health_check_loop())
@@ -166,7 +167,42 @@ def _seed_default_run_code_ref() -> None:
             logger.info("Auto-configured run_code_ref to %s", default_ref)
 
 
-app = FastAPI(title="Harness Portal", docs_url="/api/docs", redoc_url=None, lifespan=_lifespan)
+def _init_mcp_server() -> None:
+    """Discover @portal_tool functions and register them with the MCP server."""
+    if history.get_portal_setting("mcp_enabled") != "true":
+        logger.info("MCP server is disabled via portal settings")
+        return
+    try:
+        _scan_nemo_retriever_package()
+        import nemo_retriever.harness.portal.mcp_tools  # noqa: F401 — triggers @portal_tool registrations
+
+        from nemo_retriever.harness.portal.mcp_server import register_resources, register_tools_from_registry
+
+        register_tools_from_registry()
+        register_resources()
+        logger.info("MCP server initialised — tools registered")
+    except Exception:
+        logger.exception("Failed to initialise MCP server")
+
+
+_combined_lifespan = _lifespan
+try:
+    from fastmcp.utilities.lifespan import combine_lifespans
+
+    from nemo_retriever.harness.portal.mcp_server import build_mcp_app
+
+    _mcp_asgi_app = build_mcp_app()
+    _combined_lifespan = combine_lifespans(_lifespan, _mcp_asgi_app.lifespan)
+except Exception:
+    _mcp_asgi_app = None
+    logger.warning("fastmcp not available — MCP server will not be mounted", exc_info=True)
+
+app = FastAPI(title="Harness Portal", docs_url="/api/docs", redoc_url=None, lifespan=_combined_lifespan)
+
+if _mcp_asgi_app is not None:
+    app.mount("/mcp", _mcp_asgi_app)
+    logger.info("MCP server mounted at /mcp")
+
 if STATIC_DIR.is_dir():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 else:
@@ -2853,13 +2889,138 @@ async def get_portal_settings():
 
 class PortalSettingsUpdateRequest(BaseModel):
     run_code_ref: str | None = None
+    mcp_enabled: str | None = None
+    mcp_disabled_tools: str | None = None
+    mcp_rate_limit: str | None = None
+    mcp_allowed_origins: str | None = None
 
 
 @app.put("/api/portal-settings")
 async def update_portal_settings(req: PortalSettingsUpdateRequest):
-    if req.run_code_ref is not None:
-        history.set_portal_setting("run_code_ref", req.run_code_ref)
+    for key in ("run_code_ref", "mcp_enabled", "mcp_disabled_tools", "mcp_rate_limit", "mcp_allowed_origins"):
+        value = getattr(req, key, None)
+        if value is not None:
+            history.set_portal_setting(key, value)
     return history.get_all_portal_settings()
+
+
+# ---------------------------------------------------------------------------
+# MCP management endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/mcp/tools")
+async def list_mcp_tools():
+    """Return all registered MCP tools with their enabled/disabled status."""
+    from nemo_retriever.harness.portal.mcp_registry import get_tool_registry
+
+    registry = get_tool_registry()
+    disabled_raw = history.get_portal_setting("mcp_disabled_tools") or "[]"
+    try:
+        disabled = set(json_module.loads(disabled_raw))
+    except (json_module.JSONDecodeError, TypeError):
+        disabled = set()
+
+    tools = []
+    for key, entry in registry.items():
+        tools.append(
+            {
+                "key": key,
+                "name": entry["name"],
+                "category": entry["category"],
+                "description": entry["description"],
+                "tags": entry.get("tags", []),
+                "enabled": key not in disabled,
+            }
+        )
+    tools.sort(key=lambda t: (t["category"], t["name"]))
+    return tools
+
+
+class MCPToolToggleRequest(BaseModel):
+    enabled: bool
+
+
+@app.put("/api/mcp/tools/{tool_key:path}/toggle")
+async def toggle_mcp_tool(tool_key: str, req: MCPToolToggleRequest):
+    """Enable or disable a specific MCP tool."""
+    disabled_raw = history.get_portal_setting("mcp_disabled_tools") or "[]"
+    try:
+        disabled = set(json_module.loads(disabled_raw))
+    except (json_module.JSONDecodeError, TypeError):
+        disabled = set()
+
+    if req.enabled:
+        disabled.discard(tool_key)
+    else:
+        disabled.add(tool_key)
+
+    history.set_portal_setting("mcp_disabled_tools", json_module.dumps(sorted(disabled)))
+    return {"tool_key": tool_key, "enabled": req.enabled}
+
+
+@app.get("/api/mcp/config")
+async def get_mcp_config():
+    """Return current MCP server configuration."""
+    return {
+        "mcp_enabled": history.get_portal_setting("mcp_enabled"),
+        "mcp_disabled_tools": history.get_portal_setting("mcp_disabled_tools"),
+        "mcp_rate_limit": history.get_portal_setting("mcp_rate_limit"),
+        "mcp_allowed_origins": history.get_portal_setting("mcp_allowed_origins"),
+    }
+
+
+class MCPConfigUpdateRequest(BaseModel):
+    mcp_enabled: str | None = None
+    mcp_rate_limit: str | None = None
+    mcp_allowed_origins: str | None = None
+
+
+@app.put("/api/mcp/config")
+async def update_mcp_config(req: MCPConfigUpdateRequest):
+    """Update MCP server configuration."""
+    for key in ("mcp_enabled", "mcp_rate_limit", "mcp_allowed_origins"):
+        value = getattr(req, key, None)
+        if value is not None:
+            history.set_portal_setting(key, value)
+    return {
+        "mcp_enabled": history.get_portal_setting("mcp_enabled"),
+        "mcp_rate_limit": history.get_portal_setting("mcp_rate_limit"),
+        "mcp_allowed_origins": history.get_portal_setting("mcp_allowed_origins"),
+    }
+
+
+@app.get("/api/mcp/audit-log")
+async def get_mcp_audit_log(
+    limit: int = Query(200, ge=1, le=5000),
+    offset: int = Query(0, ge=0),
+    tool_name: str | None = Query(None),
+    agent_name: str | None = Query(None),
+    success: bool | None = Query(None),
+):
+    """Return paginated MCP audit log entries."""
+    return history.get_mcp_audit_entries(
+        limit=limit,
+        offset=offset,
+        tool_name=tool_name,
+        agent_name=agent_name,
+        success=success,
+    )
+
+
+@app.get("/api/mcp/audit-log/stats")
+async def get_mcp_audit_stats():
+    """Return aggregated MCP audit log statistics."""
+    return history.get_mcp_audit_stats()
+
+
+@app.get("/api/mcp/cursor-config")
+async def get_cursor_config(request: Request):
+    """Return a ready-to-use .cursor/mcp.json snippet for connecting to this portal."""
+    host = request.headers.get("host", "localhost:8100")
+    scheme = request.url.scheme
+    base_url = f"{scheme}://{host}"
+    return {"mcpServers": {"harness-portal": {"url": f"{base_url}/mcp/sse"}}}
 
 
 # ---------------------------------------------------------------------------

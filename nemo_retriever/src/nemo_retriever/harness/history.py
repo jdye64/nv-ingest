@@ -215,6 +215,23 @@ CREATE TABLE IF NOT EXISTS graphs (
 );
 """
 
+CREATE_MCP_AUDIT_LOG_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS mcp_audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    agent_id TEXT,
+    agent_name TEXT,
+    tool_name TEXT NOT NULL,
+    arguments TEXT,
+    result_summary TEXT,
+    duration_ms REAL,
+    success INTEGER,
+    error TEXT,
+    ip_address TEXT,
+    user_agent TEXT
+);
+"""
+
 _MIGRATIONS = [
     "ALTER TABLE runs ADD COLUMN hostname TEXT",
     "ALTER TABLE runs ADD COLUMN gpu_type TEXT",
@@ -304,6 +321,7 @@ def _connect(db_path: str | None = None) -> sqlite3.Connection:
     conn.execute(CREATE_PORTAL_SETTINGS_TABLE_SQL)
     conn.execute(CREATE_PRESET_MATRICES_TABLE_SQL)
     conn.execute(CREATE_GRAPHS_TABLE_SQL)
+    conn.execute(CREATE_MCP_AUDIT_LOG_TABLE_SQL)
     conn.execute(CREATE_INDEX_SQL)
     for stmt in _MIGRATIONS:
         try:
@@ -1302,6 +1320,10 @@ def clear_pending_update(runner_id: int, db_path: str | None = None) -> None:
 
 _PORTAL_SETTINGS_DEFAULTS: dict[str, str] = {
     "run_code_ref": "nvidia/main",
+    "mcp_enabled": "true",
+    "mcp_disabled_tools": "[]",
+    "mcp_rate_limit": "60",
+    "mcp_allowed_origins": "*",
 }
 
 
@@ -2410,5 +2432,123 @@ def delete_graph(graph_id: int, db_path: str | None = None) -> bool:
         cur = conn.execute("DELETE FROM graphs WHERE id = ?", (graph_id,))
         conn.commit()
         return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# MCP audit log
+# ---------------------------------------------------------------------------
+
+
+def insert_mcp_audit_entry(
+    *,
+    tool_name: str,
+    agent_id: str | None = None,
+    agent_name: str | None = None,
+    arguments: str | None = None,
+    result_summary: str | None = None,
+    duration_ms: float | None = None,
+    success: bool = True,
+    error: str | None = None,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
+    db_path: str | None = None,
+) -> int:
+    """Insert an MCP tool invocation audit record and return its id."""
+    conn = _connect(db_path)
+    try:
+        cur = conn.execute(
+            "INSERT INTO mcp_audit_log "
+            "(timestamp, agent_id, agent_name, tool_name, arguments, result_summary, "
+            "duration_ms, success, error, ip_address, user_agent) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                _now_iso(),
+                agent_id,
+                agent_name,
+                tool_name,
+                arguments,
+                result_summary,
+                duration_ms,
+                int(success),
+                error,
+                ip_address,
+                user_agent,
+            ),
+        )
+        conn.commit()
+        return cur.lastrowid or 0
+    finally:
+        conn.close()
+
+
+def get_mcp_audit_entries(
+    *,
+    limit: int = 200,
+    offset: int = 0,
+    tool_name: str | None = None,
+    agent_name: str | None = None,
+    success: bool | None = None,
+    db_path: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return MCP audit log entries, newest first."""
+    conn = _connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        query = "SELECT * FROM mcp_audit_log"
+        conditions: list[str] = []
+        params: list[Any] = []
+        if tool_name is not None:
+            conditions.append("tool_name = ?")
+            params.append(tool_name)
+        if agent_name is not None:
+            conditions.append("agent_name = ?")
+            params.append(agent_name)
+        if success is not None:
+            conditions.append("success = ?")
+            params.append(int(success))
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY id DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        rows = conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_mcp_audit_stats(db_path: str | None = None) -> dict[str, Any]:
+    """Return aggregate statistics from the MCP audit log."""
+    conn = _connect(db_path)
+    try:
+        total = conn.execute("SELECT COUNT(*) FROM mcp_audit_log").fetchone()[0]
+        success_count = conn.execute("SELECT COUNT(*) FROM mcp_audit_log WHERE success = 1").fetchone()[0]
+        error_count = total - success_count
+
+        tool_rows = conn.execute(
+            "SELECT tool_name, COUNT(*) as cnt FROM mcp_audit_log " "GROUP BY tool_name ORDER BY cnt DESC LIMIT 10"
+        ).fetchall()
+        top_tools = [{"tool_name": r[0], "count": r[1]} for r in tool_rows]
+
+        agent_rows = conn.execute(
+            "SELECT COALESCE(agent_name, 'unknown'), COUNT(*) as cnt FROM mcp_audit_log "
+            "GROUP BY agent_name ORDER BY cnt DESC LIMIT 10"
+        ).fetchall()
+        top_agents = [{"agent_name": r[0], "count": r[1]} for r in agent_rows]
+
+        unique_agents = conn.execute(
+            "SELECT COUNT(DISTINCT COALESCE(agent_name, agent_id)) FROM mcp_audit_log"
+        ).fetchone()[0]
+
+        return {
+            "total_requests": total,
+            "success_count": success_count,
+            "error_count": error_count,
+            "error_rate": round(error_count / total, 4) if total > 0 else 0,
+            "unique_agents": unique_agents,
+            "top_tools": top_tools,
+            "top_agents": top_agents,
+        }
     finally:
         conn.close()
