@@ -34,27 +34,35 @@ def _probe_endpoint(url: str, *, name: str, timeout: float = 5.0) -> None:
             elapsed_ms = (time.perf_counter() - t0) * 1000
             logger.info(
                 "GraphicElementsCPUActor: %s endpoint %s responded %d in %.0fms",
-                name, probe_url, resp.status_code, elapsed_ms,
+                name,
+                probe_url,
+                resp.status_code,
+                elapsed_ms,
             )
             return
         except requests.ConnectionError:
             logger.warning(
                 "GraphicElementsCPUActor: %s endpoint %s is UNREACHABLE (connection refused). "
                 "Processing will stall until this endpoint becomes available.",
-                name, probe_url,
+                name,
+                probe_url,
             )
             return
         except requests.Timeout:
             logger.warning(
                 "GraphicElementsCPUActor: %s endpoint %s timed out after %.1fs. "
                 "The endpoint may be overloaded or not ready.",
-                name, probe_url, timeout,
+                name,
+                probe_url,
+                timeout,
             )
             return
         except Exception as exc:
             logger.debug(
                 "GraphicElementsCPUActor: %s endpoint probe %s failed: %s",
-                name, probe_url, exc,
+                name,
+                probe_url,
+                exc,
             )
 
 
