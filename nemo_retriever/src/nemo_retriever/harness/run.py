@@ -509,16 +509,6 @@ def _build_command(
         cmd += ["--extract-infographics"]
     if cfg.embed_modality:
         cmd += ["--structured-elements-modality", cfg.embed_modality]
-    if cfg.page_elements_invoke_url:
-        cmd += ["--page-elements-invoke-url", cfg.page_elements_invoke_url]
-    if cfg.ocr_invoke_url:
-        cmd += ["--ocr-invoke-url", cfg.ocr_invoke_url]
-    if cfg.graphic_elements_invoke_url:
-        cmd += ["--graphic-elements-invoke-url", cfg.graphic_elements_invoke_url]
-    if cfg.table_structure_invoke_url:
-        cmd += ["--table-structure-invoke-url", cfg.table_structure_invoke_url]
-    if cfg.embed_invoke_url:
-        cmd += ["--embed-invoke-url", cfg.embed_invoke_url]
     env_extra: dict[str, str] = {}
     if cfg.api_key:
         env_extra["NVIDIA_API_KEY"] = cfg.api_key
