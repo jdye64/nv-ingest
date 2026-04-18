@@ -232,6 +232,19 @@ CREATE TABLE IF NOT EXISTS mcp_audit_log (
 );
 """
 
+CREATE_BACKUPS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS backups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    label TEXT,
+    storage_type TEXT NOT NULL,
+    path TEXT NOT NULL,
+    size_bytes INTEGER,
+    db_stats TEXT,
+    created_at TEXT NOT NULL
+);
+"""
+
 _MIGRATIONS = [
     "ALTER TABLE runs ADD COLUMN hostname TEXT",
     "ALTER TABLE runs ADD COLUMN gpu_type TEXT",
@@ -283,6 +296,7 @@ _MIGRATIONS = [
     "ALTER TABLE runs ADD COLUMN nsys_profile INTEGER DEFAULT 0",
     "ALTER TABLE jobs ADD COLUMN graph_id INTEGER",
     "ALTER TABLE jobs ADD COLUMN pip_list TEXT",
+    "ALTER TABLE alert_rules ADD COLUMN slack_notify INTEGER DEFAULT 0",
 ]
 
 RUNNER_MISSED_HEARTBEATS_THRESHOLD = 4
@@ -322,6 +336,7 @@ def _connect(db_path: str | None = None) -> sqlite3.Connection:
     conn.execute(CREATE_PRESET_MATRICES_TABLE_SQL)
     conn.execute(CREATE_GRAPHS_TABLE_SQL)
     conn.execute(CREATE_MCP_AUDIT_LOG_TABLE_SQL)
+    conn.execute(CREATE_BACKUPS_TABLE_SQL)
     conn.execute(CREATE_INDEX_SQL)
     for stmt in _MIGRATIONS:
         try:
@@ -1324,6 +1339,8 @@ _PORTAL_SETTINGS_DEFAULTS: dict[str, str] = {
     "mcp_disabled_tools": "[]",
     "mcp_rate_limit": "60",
     "mcp_allowed_origins": "*",
+    "slack_webhook_url": "",
+    "portal_base_url": "http://localhost:8100",
 }
 
 
@@ -2052,6 +2069,7 @@ VALID_ALERT_OPERATORS = ["<", "<=", ">", ">=", "==", "!="]
 def _deserialize_alert_rule(row: sqlite3.Row | dict) -> dict[str, Any]:
     d = dict(row)
     d["enabled"] = bool(d.get("enabled"))
+    d["slack_notify"] = bool(d.get("slack_notify"))
     return d
 
 
@@ -2061,8 +2079,8 @@ def create_alert_rule(data: dict[str, Any], db_path: str | None = None) -> dict[
         now = _now_iso()
         conn.execute(
             "INSERT INTO alert_rules (name,description,metric,operator,threshold,"
-            "dataset_filter,preset_filter,enabled,created_at,updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "dataset_filter,preset_filter,enabled,slack_notify,created_at,updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (
                 data["name"],
                 data.get("description"),
@@ -2072,6 +2090,7 @@ def create_alert_rule(data: dict[str, Any], db_path: str | None = None) -> dict[
                 data.get("dataset_filter"),
                 data.get("preset_filter"),
                 1 if data.get("enabled", True) else 0,
+                1 if data.get("slack_notify") else 0,
                 now,
                 now,
             ),
@@ -2131,6 +2150,9 @@ def update_alert_rule(rule_id: int, data: dict[str, Any], db_path: str | None = 
         if "enabled" in data:
             fields.append("enabled = ?")
             values.append(1 if data["enabled"] else 0)
+        if "slack_notify" in data:
+            fields.append("slack_notify = ?")
+            values.append(1 if data["slack_notify"] else 0)
         if fields:
             fields.append("updated_at = ?")
             values.append(_now_iso())
@@ -2246,6 +2268,113 @@ def acknowledge_all_alert_events(db_path: str | None = None) -> int:
         conn.close()
 
 
+def _build_alert_slack_payload(
+    run: dict[str, Any],
+    rule: dict[str, Any],
+    event: dict[str, Any],
+    portal_base_url: str,
+) -> dict[str, Any]:
+    """Build a compact Slack Block Kit payload for an alert notification."""
+    run_id = run.get("id")
+    run_url = f"{portal_base_url.rstrip('/')}/#runs/{run_id}"
+    metric_label = rule["metric"].replace("_", " ").title()
+    metric_value = event.get("metric_value")
+    threshold = rule["threshold"]
+    human_op = rule["operator"]
+
+    raw = run.get("raw_json") or {}
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            raw = {}
+    test_config = raw.get("test_config") or {}
+    run_metadata = raw.get("run_metadata") or {}
+
+    dataset = run.get("dataset") or "unknown"
+    preset = run.get("preset") or test_config.get("preset") or "—"
+    git_commit = run.get("git_commit") or "unknown"
+    git_short = git_commit[:8] if len(git_commit) > 8 else git_commit
+    execution_commit = run.get("execution_commit") or ""
+    exec_short = execution_commit[:8] if execution_commit else ""
+    hostname = run.get("hostname") or run_metadata.get("host") or "—"
+    gpu_type = run.get("gpu_type") or run_metadata.get("gpu_type") or ""
+
+    # Collect config details from test_config
+    config_parts: list[str] = []
+    for key in ("pipeline_config", "num_workers", "ray_cluster_mode", "batch_size"):
+        val = test_config.get(key)
+        if val is not None:
+            config_parts.append(f"{key}: {val}")
+
+    value_str = f"{metric_value:.4g}" if isinstance(metric_value, (int, float)) else str(metric_value)
+
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "header",
+            "text": {"type": "plain_text", "text": f":rotating_light: Alert: {rule['name']}"},
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": (f"*{metric_label}* is `{value_str}` — violates threshold" f" `{human_op} {threshold}`"),
+            },
+        },
+        {
+            "type": "section",
+            "fields": [
+                {"type": "mrkdwn", "text": f"*Dataset:*\n{dataset}"},
+                {"type": "mrkdwn", "text": f"*Preset:*\n{preset}"},
+                {"type": "mrkdwn", "text": f"*Git Commit:*\n`{git_short}`"},
+                {"type": "mrkdwn", "text": f"*Host:*\n{hostname}"},
+            ],
+        },
+    ]
+
+    if exec_short and exec_short != git_short:
+        blocks[-1]["fields"].append({"type": "mrkdwn", "text": f"*Execution Commit:*\n`{exec_short}`"})
+    if gpu_type:
+        blocks[-1]["fields"].append({"type": "mrkdwn", "text": f"*GPU:*\n{gpu_type}"})
+
+    if config_parts:
+        blocks.append(
+            {
+                "type": "context",
+                "elements": [
+                    {"type": "mrkdwn", "text": " | ".join(config_parts)},
+                ],
+            }
+        )
+
+    blocks.append({"type": "divider"})
+    blocks.append(
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"<{run_url}|View Run #{run_id} in Portal>"},
+        }
+    )
+
+    return {"blocks": blocks}
+
+
+def _post_alert_to_slack(
+    run: dict[str, Any],
+    rule: dict[str, Any],
+    event: dict[str, Any],
+    webhook_url: str,
+    portal_base_url: str,
+) -> None:
+    """Post an alert notification to Slack. Errors are logged, never raised."""
+    try:
+        from nemo_retriever.harness.slack import post_slack_payload
+
+        payload = _build_alert_slack_payload(run, rule, event, portal_base_url)
+        post_slack_payload(payload, webhook_url)
+    except Exception as exc:
+        logger.warning("Failed to post alert to Slack: %s", exc)
+
+
 def evaluate_alerts_for_run(run: dict[str, Any], db_path: str | None = None) -> list[dict[str, Any]]:
     """Check all enabled alert rules against a completed run. Returns created events."""
     rules = get_enabled_alert_rules(db_path)
@@ -2264,6 +2393,10 @@ def evaluate_alerts_for_run(run: dict[str, Any], db_path: str | None = None) -> 
         "==": op_mod.eq,
         "!=": op_mod.ne,
     }
+
+    slack_webhook: str | None = None
+    portal_base: str = "http://localhost:8100"
+    slack_checked = False
 
     for rule in rules:
         if rule.get("dataset_filter") and rule["dataset_filter"] != run.get("dataset"):
@@ -2305,6 +2438,14 @@ def evaluate_alerts_for_run(run: dict[str, Any], db_path: str | None = None) -> 
                 db_path,
             )
             events.append(event)
+
+            if rule.get("slack_notify"):
+                if not slack_checked:
+                    slack_webhook = get_portal_setting("slack_webhook_url", db_path) or ""
+                    portal_base = get_portal_setting("portal_base_url", db_path) or "http://localhost:8100"
+                    slack_checked = True
+                if slack_webhook:
+                    _post_alert_to_slack(run, rule, event, slack_webhook, portal_base)
 
     return events
 
@@ -2550,5 +2691,135 @@ def get_mcp_audit_stats(db_path: str | None = None) -> dict[str, Any]:
             "top_tools": top_tools,
             "top_agents": top_agents,
         }
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Database Backups
+# ---------------------------------------------------------------------------
+
+
+def get_database_info(db_path: str | None = None) -> dict[str, Any]:
+    """Return metadata about the current database: path, size, and row counts."""
+    path = db_path or _db_path()
+    p = Path(path)
+    size_bytes = p.stat().st_size if p.exists() else 0
+
+    conn = _connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        tables = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        ).fetchall()
+        table_counts: dict[str, int] = {}
+        for row in tables:
+            name = row[0]
+            cnt = conn.execute(f"SELECT COUNT(*) FROM [{name}]").fetchone()[0]  # noqa: S608
+            table_counts[name] = cnt
+        return {
+            "db_path": str(p.resolve()),
+            "size_bytes": size_bytes,
+            "table_counts": table_counts,
+        }
+    finally:
+        conn.close()
+
+
+def _collect_db_stats(db_path: str | None = None) -> dict[str, int]:
+    """Snapshot row counts for major tables (used when recording a backup)."""
+    info = get_database_info(db_path)
+    return info["table_counts"]
+
+
+def create_backup_record(
+    *,
+    label: str | None,
+    storage_type: str,
+    path: str,
+    size_bytes: int | None = None,
+    db_stats: dict[str, int] | None = None,
+    db_path: str | None = None,
+) -> dict[str, Any]:
+    now = _now_iso()
+    conn = _connect(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO backups (timestamp, label, storage_type, path, size_bytes, db_stats, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (now, label, storage_type, path, size_bytes, json.dumps(db_stats) if db_stats else None, now),
+        )
+        conn.commit()
+        row_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        return get_backup_by_id(row_id, db_path=db_path) or {"id": row_id}
+    finally:
+        conn.close()
+
+
+def get_all_backups(db_path: str | None = None) -> list[dict[str, Any]]:
+    conn = _connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute("SELECT * FROM backups ORDER BY timestamp DESC").fetchall()
+        results = []
+        for r in rows:
+            d = dict(r)
+            if d.get("db_stats"):
+                try:
+                    d["db_stats"] = json.loads(d["db_stats"])
+                except (json.JSONDecodeError, TypeError):
+                    d["db_stats"] = {}
+            else:
+                d["db_stats"] = {}
+            results.append(d)
+        return results
+    finally:
+        conn.close()
+
+
+def get_backup_by_id(backup_id: int, db_path: str | None = None) -> dict[str, Any] | None:
+    conn = _connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute("SELECT * FROM backups WHERE id = ?", (backup_id,)).fetchone()
+        if row is None:
+            return None
+        d = dict(row)
+        if d.get("db_stats"):
+            try:
+                d["db_stats"] = json.loads(d["db_stats"])
+            except (json.JSONDecodeError, TypeError):
+                d["db_stats"] = {}
+        else:
+            d["db_stats"] = {}
+        return d
+    finally:
+        conn.close()
+
+
+def delete_backup_record(backup_id: int, db_path: str | None = None) -> bool:
+    conn = _connect(db_path)
+    try:
+        cur = conn.execute("DELETE FROM backups WHERE id = ?", (backup_id,))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def export_all_tables_json(db_path: str | None = None) -> dict[str, Any]:
+    """Export every table in the database as a dict of table_name -> list[dict]."""
+    conn = _connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        tables = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        ).fetchall()
+        result: dict[str, Any] = {}
+        for tbl in tables:
+            name = tbl[0]
+            rows = conn.execute(f"SELECT * FROM [{name}]").fetchall()  # noqa: S608
+            result[name] = [dict(r) for r in rows]
+        return result
     finally:
         conn.close()

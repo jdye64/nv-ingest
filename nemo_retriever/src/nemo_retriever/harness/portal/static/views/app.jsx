@@ -203,7 +203,7 @@ function App() {
     } catch {}
   }
 
-  const viewTitles = { runs: "Runs", analytics: "Analytics", reporting: "Reporting", datasets: "Datasets", presets: "Presets", runners: "Runners", scheduling: "Scheduling", alerts: "Alerts", ingestion: "Ingestion", retrieval: "Retrieval", models: "Models", designer: "Pipeline Designer", settings: "Settings", mcp: "MCP" };
+  const viewTitles = { runs: "Runs", analytics: "Analytics", reporting: "Reporting", datasets: "Datasets", presets: "Presets", runners: "Runners", scheduling: "Scheduling", alerts: "Alerts", ingestion: "Ingestion", retrieval: "Retrieval", models: "Models", designer: "Pipeline Designer", settings: "Settings", database: "Database", mcp: "MCP" };
 
   const activeJobCount = jobs.filter(j => j.status==="running" || j.status==="pending" || j.status==="cancelling").length;
 
@@ -232,6 +232,9 @@ function App() {
     }
     if (activeView === "settings") {
       return "Manage portal deployment and system settings";
+    }
+    if (activeView === "database") {
+      return "Database backup, restore, and export management";
     }
     if (activeView === "mcp") {
       return "MCP server configuration, exposed tools, and agent activity";
@@ -317,6 +320,9 @@ function App() {
           )}
           {activeView==="settings" && (
             <SettingsView />
+          )}
+          {activeView==="database" && (
+            <DatabaseView />
           )}
           {activeView==="mcp" && (
             <McpView />

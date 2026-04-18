@@ -15,6 +15,7 @@ import mimetypes
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import tempfile
 import uuid
@@ -432,6 +433,7 @@ class AlertRuleCreateRequest(BaseModel):
     dataset_filter: str | None = None
     preset_filter: str | None = None
     enabled: bool = True
+    slack_notify: bool = False
 
 
 class AlertRuleUpdateRequest(BaseModel):
@@ -443,6 +445,7 @@ class AlertRuleUpdateRequest(BaseModel):
     dataset_filter: str | None = None
     preset_filter: str | None = None
     enabled: bool | None = None
+    slack_notify: bool | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -2804,6 +2807,51 @@ async def get_alert_metrics():
     return {"metrics": history.VALID_ALERT_METRICS, "operators": history.VALID_ALERT_OPERATORS}
 
 
+@app.post("/api/alerts/test-slack")
+async def test_slack_notification():
+    """Send a test message to the configured Slack webhook URL."""
+    webhook_url = history.get_portal_setting("slack_webhook_url") or ""
+    if not webhook_url:
+        raise HTTPException(status_code=400, detail="No Slack webhook URL configured. Set it in Settings first.")
+    portal_base = history.get_portal_setting("portal_base_url") or "http://localhost:8100"
+
+    payload = {
+        "blocks": [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": ":white_check_mark: Harness Portal — Slack Test"},
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        "This is a test message from the nemo_retriever Harness Portal.\n"
+                        "Alert notifications are working correctly."
+                    ),
+                },
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {"type": "mrkdwn", "text": f"Portal: {portal_base}"},
+                ],
+            },
+        ],
+    }
+
+    try:
+        from nemo_retriever.harness.slack import post_slack_payload
+
+        post_slack_payload(payload, webhook_url)
+    except ImportError:
+        raise HTTPException(status_code=500, detail="requests library is not installed")
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Slack post failed: {exc}")
+
+    return {"ok": True, "message": "Test message sent to Slack"}
+
+
 # ---------------------------------------------------------------------------
 # System / Settings
 # ---------------------------------------------------------------------------
@@ -2893,11 +2941,21 @@ class PortalSettingsUpdateRequest(BaseModel):
     mcp_disabled_tools: str | None = None
     mcp_rate_limit: str | None = None
     mcp_allowed_origins: str | None = None
+    slack_webhook_url: str | None = None
+    portal_base_url: str | None = None
 
 
 @app.put("/api/portal-settings")
 async def update_portal_settings(req: PortalSettingsUpdateRequest):
-    for key in ("run_code_ref", "mcp_enabled", "mcp_disabled_tools", "mcp_rate_limit", "mcp_allowed_origins"):
+    for key in (
+        "run_code_ref",
+        "mcp_enabled",
+        "mcp_disabled_tools",
+        "mcp_rate_limit",
+        "mcp_allowed_origins",
+        "slack_webhook_url",
+        "portal_base_url",
+    ):
         value = getattr(req, key, None)
         if value is not None:
             history.set_portal_setting(key, value)
@@ -3358,6 +3416,225 @@ async def export_runs_json(
         content=content,
         media_type="application/json",
         headers={"Content-Disposition": f'attachment; filename="harness_runs_export_{ts}.json"'},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Database Management
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/database/info")
+async def get_database_info():
+    """Return current database path, size, and per-table row counts."""
+    return history.get_database_info()
+
+
+@app.get("/api/database/backups")
+async def list_database_backups():
+    return history.get_all_backups()
+
+
+class DatabaseBackupRequest(BaseModel):
+    label: str | None = None
+    storage_type: str = "local"
+    destination: str
+
+
+@app.post("/api/database/backup")
+async def create_database_backup(req: DatabaseBackupRequest):
+    """Create a backup of the current database.
+
+    ``storage_type`` must be ``"local"`` or ``"s3"``.  For local backups
+    *destination* is a directory path.  For S3 it is a URI like
+    ``s3://bucket/prefix``.
+    """
+    src = history._db_path()
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    safe_label = re.sub(r"[^\w\-.]", "_", req.label or "backup")
+    filename = f"{ts}_{safe_label}.db"
+    stats = history._collect_db_stats()
+
+    if req.storage_type == "local":
+        dest_dir = Path(req.destination)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest_file = dest_dir / filename
+        conn = sqlite3.connect(src, timeout=30.0)
+        try:
+            conn.execute(f"VACUUM INTO '{dest_file}'")
+        finally:
+            conn.close()
+        size = dest_file.stat().st_size
+        record = history.create_backup_record(
+            label=req.label,
+            storage_type="local",
+            path=str(dest_file.resolve()),
+            size_bytes=size,
+            db_stats=stats,
+        )
+        return record
+
+    if req.storage_type == "s3":
+        try:
+            import boto3  # type: ignore[import-untyped]
+        except ImportError:
+            raise HTTPException(
+                status_code=400,
+                detail="boto3 is not installed. Install it with: pip install boto3",
+            )
+        dest_uri = req.destination.rstrip("/")
+        s3_key = f"{dest_uri.split('/', 3)[-1]}/{filename}" if "/" in dest_uri.split("//", 1)[-1] else filename
+        bucket = dest_uri.split("//", 1)[-1].split("/", 1)[0]
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            tmp_path = tmp.name
+        try:
+            conn = sqlite3.connect(src, timeout=30.0)
+            try:
+                conn.execute(f"VACUUM INTO '{tmp_path}'")
+            finally:
+                conn.close()
+            size = Path(tmp_path).stat().st_size
+            s3 = boto3.client("s3")
+            s3.upload_file(tmp_path, bucket, s3_key)
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+
+        full_uri = f"s3://{bucket}/{s3_key}"
+        record = history.create_backup_record(
+            label=req.label,
+            storage_type="s3",
+            path=full_uri,
+            size_bytes=size,
+            db_stats=stats,
+        )
+        return record
+
+    raise HTTPException(status_code=400, detail=f"Unknown storage_type: {req.storage_type}")
+
+
+class DatabaseRestoreRequest(BaseModel):
+    backup_id: int | None = None
+    source_path: str | None = None
+
+
+@app.post("/api/database/restore")
+async def restore_database(req: DatabaseRestoreRequest):
+    """Restore the database from a backup.
+
+    A safety backup is automatically created before overwriting the
+    current database file.
+    """
+    if req.backup_id is None and req.source_path is None:
+        raise HTTPException(status_code=400, detail="Provide backup_id or source_path")
+
+    current_db = history._db_path()
+
+    if req.backup_id is not None:
+        backup = history.get_backup_by_id(req.backup_id)
+        if not backup:
+            raise HTTPException(status_code=404, detail="Backup not found")
+        storage_type = backup["storage_type"]
+        source = backup["path"]
+    else:
+        source = req.source_path  # type: ignore[assignment]
+        storage_type = "s3" if source.startswith("s3://") else "local"
+
+    # Safety backup of the current DB
+    safety_dir = Path(current_db).parent / "safety_backups"
+    safety_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    safety_path = safety_dir / f"pre_restore_{ts}.db"
+    shutil.copy2(current_db, safety_path)
+
+    if storage_type == "local":
+        src_path = Path(source)
+        if not src_path.exists():
+            raise HTTPException(status_code=404, detail=f"Backup file not found: {source}")
+        shutil.copy2(str(src_path), current_db)
+    elif storage_type == "s3":
+        try:
+            import boto3  # type: ignore[import-untyped]
+        except ImportError:
+            raise HTTPException(status_code=400, detail="boto3 is not installed")
+        parts = source.replace("s3://", "").split("/", 1)
+        bucket = parts[0]
+        key = parts[1] if len(parts) > 1 else ""
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            tmp_path = tmp.name
+        try:
+            s3 = boto3.client("s3")
+            s3.download_file(bucket, key, tmp_path)
+            shutil.copy2(tmp_path, current_db)
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown storage type: {storage_type}")
+
+    return {
+        "message": "Database restored successfully",
+        "safety_backup": str(safety_path),
+        "restored_from": source,
+    }
+
+
+@app.delete("/api/database/backups/{backup_id}")
+async def delete_database_backup(backup_id: int, delete_file: bool = Query(False)):
+    """Delete a backup record and optionally the underlying file."""
+    backup = history.get_backup_by_id(backup_id)
+    if not backup:
+        raise HTTPException(status_code=404, detail="Backup not found")
+
+    if delete_file and backup["storage_type"] == "local":
+        p = Path(backup["path"])
+        if p.exists():
+            p.unlink()
+
+    deleted = history.delete_backup_record(backup_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Backup not found")
+    return {"deleted": True, "id": backup_id}
+
+
+@app.get("/api/database/export-json")
+async def export_database_json(
+    source: str = Query("current"),
+    backup_id: int | None = Query(None),
+):
+    """Export all raw data from the database as a downloadable JSON file.
+
+    ``source=current`` exports the live database.  ``source=backup``
+    together with ``backup_id`` exports from a specific backup file.
+    """
+    target_path: str | None = None
+
+    if source == "backup":
+        if backup_id is None:
+            raise HTTPException(status_code=400, detail="backup_id required when source=backup")
+        backup = history.get_backup_by_id(backup_id)
+        if not backup:
+            raise HTTPException(status_code=404, detail="Backup not found")
+        if backup["storage_type"] != "local":
+            raise HTTPException(status_code=400, detail="JSON export is only supported for local backups")
+        target_path = backup["path"]
+        if not Path(target_path).exists():
+            raise HTTPException(status_code=404, detail="Backup file not found on disk")
+    elif source != "current":
+        raise HTTPException(status_code=400, detail="source must be 'current' or 'backup'")
+
+    data = history.export_all_tables_json(db_path=target_path)
+    payload = {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "source": source,
+        "backup_id": backup_id,
+        "tables": data,
+    }
+    content = json_module.dumps(payload, indent=2, default=str)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    return Response(
+        content=content,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="harness_db_export_{ts}.json"'},
     )
 
 
