@@ -846,6 +846,10 @@ _runner_ray_address: str | None = None
 _runner_run_code_ref: str | None = None
 _runner_num_gpus: int | None = None
 
+DATASET_CACHE_DIR = Path(
+    os.environ.get("HARNESS_DATASET_CACHE_DIR", str(Path.home() / ".cache" / "harness" / "datasets"))
+)
+
 
 class _TeeWriter:
     """Wraps a file-like writer, teeing output to the job tracker log buffer."""
@@ -960,6 +964,113 @@ def _download_playground_files(base_url: str, job: dict[str, Any]) -> str | None
         return None
 
 
+def _ensure_dataset_cached(base_url: str, job: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+    """Download a distributable dataset from the portal if not already cached.
+
+    Returns ``(local_dir, override_rewrites)`` on success, or ``None`` if the
+    dataset is not distributable (so the caller can fall through to the
+    existing path-must-exist behaviour).
+    """
+    if _is_playground_job(job):
+        return None
+
+    dataset_name = job.get("dataset")
+    if not dataset_name:
+        return None
+
+    cache_dir = DATASET_CACHE_DIR / dataset_name
+    meta_file = cache_dir / ".dataset_meta.json"
+
+    # Ask the portal for the current hash (also confirms distribute=true)
+    hash_url = f"{base_url}/api/managed-datasets/by-name/{urllib.request.quote(dataset_name, safe='')}/hash"
+    try:
+        hash_resp = _get_json(hash_url, timeout=15)
+    except Exception:
+        # 404 / 403 / network error — dataset is not distributable
+        return None
+
+    if not hash_resp or not isinstance(hash_resp, dict) or "hash" not in hash_resp:
+        return None
+
+    remote_hash = hash_resp["hash"]
+
+    # Check local cache validity
+    if cache_dir.is_dir() and meta_file.is_file():
+        try:
+            local_meta = json_module.loads(meta_file.read_text())
+            if local_meta.get("hash") == remote_hash:
+                logger.info(
+                    "Dataset %s cache hit at %s (hash %s)",
+                    dataset_name,
+                    cache_dir,
+                    remote_hash[:12],
+                )
+                rewrites: dict[str, Any] = {"dataset_dir": str(cache_dir)}
+                if local_meta.get("query_csv_bundled"):
+                    bundled_dir = cache_dir / "_query_csv"
+                    if bundled_dir.is_dir():
+                        csv_files = list(bundled_dir.iterdir())
+                        if csv_files:
+                            rewrites["query_csv"] = str(csv_files[0])
+                return str(cache_dir), rewrites
+        except Exception:
+            pass
+
+    # Download the dataset archive
+    dl_url = f"{base_url}/api/managed-datasets/by-name/{urllib.request.quote(dataset_name, safe='')}/download"
+    logger.info("Downloading dataset %s from %s", dataset_name, dl_url)
+    try:
+        req = urllib.request.Request(dl_url)
+        with urllib.request.urlopen(req, timeout=600) as resp:
+            resp_hash = resp.headers.get("X-Dataset-Hash", remote_hash)
+            query_csv_bundled = resp.headers.get("X-Query-Csv-Bundled", "false") == "true"
+            zip_bytes = resp.read()
+    except Exception as exc:
+        logger.error("Failed to download dataset %s: %s", dataset_name, exc)
+        return None
+
+    # Extract into cache dir (replace any stale cache)
+    import io
+    import zipfile
+
+    if cache_dir.exists():
+        shutil.rmtree(cache_dir, ignore_errors=True)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+            zf.extractall(cache_dir)
+    except Exception as exc:
+        logger.error("Failed to extract dataset zip for %s: %s", dataset_name, exc)
+        shutil.rmtree(cache_dir, ignore_errors=True)
+        return None
+
+    # Write sidecar metadata
+    from datetime import datetime, timezone
+
+    meta = {
+        "dataset_name": dataset_name,
+        "hash": resp_hash,
+        "downloaded_at": datetime.now(timezone.utc).isoformat(),
+        "portal_url": base_url,
+        "query_csv_bundled": query_csv_bundled,
+    }
+    meta_file.write_text(json_module.dumps(meta, indent=2))
+
+    file_count = sum(1 for _ in cache_dir.rglob("*") if _.is_file())
+    logger.info("Cached dataset %s at %s (%d files, hash %s)", dataset_name, cache_dir, file_count, resp_hash[:12])
+
+    rewrites = {"dataset_dir": str(cache_dir)}
+    if query_csv_bundled:
+        bundled_dir = cache_dir / "_query_csv"
+        if bundled_dir.is_dir():
+            csv_files = list(bundled_dir.iterdir())
+            if csv_files:
+                rewrites["query_csv"] = str(csv_files[0])
+
+    return str(cache_dir), rewrites
+
+
 def _validate_dataset_path(job: dict[str, Any]) -> str | None:
     """Check if the dataset directory exists locally.
 
@@ -1037,6 +1148,27 @@ def _execute_job_on_runner(base_url: str, job: dict[str, Any], runner_id: int = 
     print(f"\n===== RAW JOB PAYLOAD (job {job_id}) =====")
     print(_payload_dump)
     print("===== END RAW JOB PAYLOAD =====\n", flush=True)
+
+    # Try to download a distributable dataset before validating paths.
+    # If the dataset is cached/downloaded, rewrite the job's paths so
+    # _validate_dataset_path sees the local cache dir instead of the
+    # portal's path (which doesn't exist on this runner).
+    _dist_cached = None
+    if not _is_playground_job(job):
+        _dist_cached = _ensure_dataset_cached(base_url, job)
+        if _dist_cached is not None:
+            cached_path, cached_rewrites = _dist_cached
+            job = dict(job)
+            job["dataset_path"] = cached_path
+            job_overrides = job.get("dataset_overrides") or {}
+            if isinstance(job_overrides, str):
+                try:
+                    job_overrides = json_module.loads(job_overrides)
+                except (json_module.JSONDecodeError, TypeError):
+                    job_overrides = {}
+            job_overrides.update(cached_rewrites)
+            job["dataset_overrides"] = job_overrides
+            logger.info("Job %s: dataset %s cached at %s", job_id, job.get("dataset"), cached_path)
 
     dataset_error = _validate_dataset_path(job)
     if dataset_error:

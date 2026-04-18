@@ -93,7 +93,19 @@ function DatasetsView({ managedDatasets, loading, onRefresh, runners }) {
                 </td></tr>
               ) : pg.pageData.map(ds => (
                 <tr key={ds.id}>
-                  <td style={{color:'#fff',fontWeight:600}}>{ds.name}</td>
+                  <td>
+                    <div style={{display:'flex',alignItems:'center',gap:'6px'}}>
+                      <span style={{color:'#fff',fontWeight:600}}>{ds.name}</span>
+                      {ds.distribute && (
+                        <span title="Distributed to runners" style={{
+                          padding:'1px 6px',borderRadius:'4px',fontSize:'9px',fontWeight:700,
+                          textTransform:'uppercase',letterSpacing:'0.05em',
+                          background:'rgba(100,180,255,0.12)',color:'rgb(100,180,255)',
+                          border:'1px solid rgba(100,180,255,0.25)',
+                        }}>Dist</span>
+                      )}
+                    </div>
+                  </td>
                   <td className="mono" style={{fontSize:'12px',color:'var(--nv-text-muted)',maxWidth:'250px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={ds.path}>{ds.path}</td>
                   <td><span className="badge badge-na">{ds.input_type}</span></td>
                   <td><span className="badge" style={{background: ds.evaluation_mode==='beir' ? 'rgba(118,185,0,0.15)' : 'rgba(100,180,255,0.1)', color: ds.evaluation_mode==='beir' ? 'var(--nv-green)' : 'rgb(100,180,255)', border: ds.evaluation_mode==='beir' ? '1px solid rgba(118,185,0,0.3)' : '1px solid rgba(100,180,255,0.2)'}}>{ds.evaluation_mode || "recall"}</span></td>
@@ -157,6 +169,7 @@ function DatasetFormModal({ dataset, runners, onClose, onSaved }) {
     embed_granularity: dataset?.embed_granularity || "element",
     extract_page_as_image: dataset?.extract_page_as_image || false,
     extract_infographics: dataset?.extract_infographics || false,
+    distribute: dataset?.distribute || false,
     description: dataset?.description || "",
     tags: (dataset?.tags || []).join(", "),
     runner_ids: dataset?.runner_ids || [],
@@ -365,6 +378,19 @@ function DatasetFormModal({ dataset, runners, onClose, onSaved }) {
                     <input type="checkbox" checked={form.extract_infographics} onChange={e=>set('extract_infographics',e.target.checked)} />
                     {form.extract_infographics ? "Yes" : "No"}
                   </label>
+                </div>
+              </div>
+            </div>
+
+            <div style={{display:'flex',alignItems:'center',gap:'12px',borderTop:'1px solid var(--nv-border)',paddingTop:'16px'}}>
+              <label className="toggle">
+                <input type="checkbox" checked={form.distribute} onChange={e=>set('distribute',e.target.checked)} />
+                <span className="toggle-slider"></span>
+              </label>
+              <div>
+                <span style={{fontSize:'14px',color:'var(--nv-text)'}}>Distribute to runners</span>
+                <div style={{fontSize:'11px',color:'var(--nv-text-dim)',marginTop:'2px'}}>
+                  When enabled, runners will automatically download this dataset from the portal instead of requiring it to exist locally.
                 </div>
               </div>
             </div>

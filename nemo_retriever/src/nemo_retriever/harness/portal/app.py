@@ -394,6 +394,7 @@ class DatasetCreateRequest(BaseModel):
     embed_granularity: str = "element"
     extract_page_as_image: bool = False
     extract_infographics: bool = False
+    distribute: bool = False
     description: str | None = None
     tags: list[str] | None = None
     runner_ids: list[int] | None = None
@@ -419,6 +420,7 @@ class DatasetUpdateRequest(BaseModel):
     embed_granularity: str | None = None
     extract_page_as_image: bool | None = None
     extract_infographics: bool | None = None
+    distribute: bool | None = None
     description: str | None = None
     tags: list[str] | None = None
     runner_ids: list[int] | None = None
@@ -1656,6 +1658,105 @@ async def delete_managed_dataset(dataset_id: int):
     if not history.delete_dataset(dataset_id):
         raise HTTPException(status_code=404, detail="Dataset not found")
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Dataset distribution (download / hash)
+# ---------------------------------------------------------------------------
+
+
+def _zip_dataset_directory(dataset_path: str, query_csv: str | None) -> tuple[io.BytesIO, bool]:
+    """Create an in-memory zip of a dataset directory, optionally bundling query_csv.
+
+    Returns ``(buf, query_csv_bundled)``.
+    """
+    import zipfile
+
+    root = Path(dataset_path)
+    buf = io.BytesIO()
+    query_csv_bundled = False
+
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        if root.is_dir():
+            for f in sorted(root.rglob("*")):
+                if f.is_file():
+                    zf.write(f, f.relative_to(root))
+
+        if query_csv:
+            qp = Path(query_csv)
+            if qp.is_file():
+                try:
+                    qp.relative_to(root)
+                except ValueError:
+                    zf.write(qp, Path("_query_csv") / qp.name)
+                    query_csv_bundled = True
+
+    buf.seek(0)
+    return buf, query_csv_bundled
+
+
+@app.get("/api/managed-datasets/by-name/{name}/hash")
+async def get_dataset_hash_by_name(name: str):
+    """Return the lightweight hash for a distributable dataset."""
+    managed = history.get_dataset_by_name(name)
+    if not managed:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    if not managed.get("distribute"):
+        raise HTTPException(status_code=403, detail="Dataset is not enabled for distribution")
+    ds_path = managed.get("path", "")
+    if not ds_path or not Path(ds_path).is_dir():
+        raise HTTPException(status_code=404, detail="Dataset directory not found on portal")
+    ds_hash = history.compute_dataset_hash(ds_path, managed.get("query_csv"))
+    return {"name": name, "hash": ds_hash}
+
+
+@app.get("/api/managed-datasets/by-name/{name}/download")
+async def download_dataset_by_name(name: str):
+    """Download a distributable dataset as a zip archive."""
+    managed = history.get_dataset_by_name(name)
+    if not managed:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    if not managed.get("distribute"):
+        raise HTTPException(status_code=403, detail="Dataset is not enabled for distribution")
+    ds_path = managed.get("path", "")
+    if not ds_path or not Path(ds_path).is_dir():
+        raise HTTPException(status_code=404, detail="Dataset directory not found on portal")
+
+    query_csv = managed.get("query_csv") or None
+    ds_hash = history.compute_dataset_hash(ds_path, query_csv)
+    buf, query_csv_bundled = _zip_dataset_directory(ds_path, query_csv)
+
+    headers = {
+        "Content-Disposition": f'attachment; filename="{name}.zip"',
+        "X-Dataset-Hash": ds_hash,
+        "X-Query-Csv-Bundled": "true" if query_csv_bundled else "false",
+    }
+    return StreamingResponse(buf, media_type="application/zip", headers=headers)
+
+
+@app.get("/api/managed-datasets/{dataset_id}/download")
+async def download_dataset_by_id(dataset_id: int):
+    """Download a distributable dataset by ID as a zip archive."""
+    managed = history.get_dataset_by_id(dataset_id)
+    if not managed:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    if not managed.get("distribute"):
+        raise HTTPException(status_code=403, detail="Dataset is not enabled for distribution")
+    ds_path = managed.get("path", "")
+    if not ds_path or not Path(ds_path).is_dir():
+        raise HTTPException(status_code=404, detail="Dataset directory not found on portal")
+
+    name = managed.get("name", f"dataset_{dataset_id}")
+    query_csv = managed.get("query_csv") or None
+    ds_hash = history.compute_dataset_hash(ds_path, query_csv)
+    buf, query_csv_bundled = _zip_dataset_directory(ds_path, query_csv)
+
+    headers = {
+        "Content-Disposition": f'attachment; filename="{name}.zip"',
+        "X-Dataset-Hash": ds_hash,
+        "X-Query-Csv-Bundled": "true" if query_csv_bundled else "false",
+    }
+    return StreamingResponse(buf, media_type="application/zip", headers=headers)
 
 
 # ---------------------------------------------------------------------------
@@ -3139,6 +3240,12 @@ async def get_git_info():
 
         is_dirty = bool(_git_run("status", "--porcelain", cwd=repo_root))
 
+        tracking_remote = ""
+        try:
+            tracking_remote = _git_run("config", f"branch.{current_branch}.remote", cwd=repo_root)
+        except Exception:
+            pass
+
         last_commits_raw = _git_run("log", "--oneline", "-10", "--format=%H|%h|%s|%ci", cwd=repo_root)
         recent_commits: list[dict[str, str]] = []
         for line in last_commits_raw.splitlines():
@@ -3160,6 +3267,7 @@ async def get_git_info():
             "current_sha": current_sha,
             "current_short_sha": current_short,
             "is_dirty": is_dirty,
+            "tracking_remote": tracking_remote,
             "remotes": remotes,
             "remote_branches": remote_branches,
             "local_branches": local_branches,

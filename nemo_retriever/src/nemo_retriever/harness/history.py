@@ -297,6 +297,7 @@ _MIGRATIONS = [
     "ALTER TABLE jobs ADD COLUMN graph_id INTEGER",
     "ALTER TABLE jobs ADD COLUMN pip_list TEXT",
     "ALTER TABLE alert_rules ADD COLUMN slack_notify INTEGER DEFAULT 0",
+    "ALTER TABLE datasets ADD COLUMN distribute INTEGER DEFAULT 0",
 ]
 
 RUNNER_MISSED_HEARTBEATS_THRESHOLD = 4
@@ -866,6 +867,7 @@ _DATASET_FIELDS = (
     "embed_granularity",
     "extract_page_as_image",
     "extract_infographics",
+    "distribute",
     "description",
 )
 
@@ -875,6 +877,7 @@ def _deserialize_dataset_row(row: sqlite3.Row) -> dict[str, Any]:
     d["recall_required"] = bool(d.get("recall_required"))
     d["extract_page_as_image"] = bool(d.get("extract_page_as_image"))
     d["extract_infographics"] = bool(d.get("extract_infographics"))
+    d["distribute"] = bool(d.get("distribute"))
     if d.get("beir_ks"):
         try:
             d["beir_ks"] = json.loads(d["beir_ks"])
@@ -904,9 +907,9 @@ def create_dataset(data: dict[str, Any], db_path: str | None = None) -> dict[str
             " recall_match_mode, recall_adapter, evaluation_mode, beir_loader,"
             " beir_dataset_name, beir_split, beir_query_language, beir_doc_id_field,"
             " beir_ks, embed_model_name, embed_modality, embed_granularity,"
-            " extract_page_as_image, extract_infographics,"
+            " extract_page_as_image, extract_infographics, distribute,"
             " description, tags, created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 data["name"],
                 data["path"],
@@ -927,6 +930,7 @@ def create_dataset(data: dict[str, Any], db_path: str | None = None) -> dict[str
                 data.get("embed_granularity", "element"),
                 1 if data.get("extract_page_as_image") else 0,
                 1 if data.get("extract_infographics") else 0,
+                1 if data.get("distribute") else 0,
                 data.get("description") or None,
                 tags,
                 now,
@@ -970,7 +974,7 @@ def get_dataset_by_id(dataset_id: int, db_path: str | None = None) -> dict[str, 
 
 
 def update_dataset(dataset_id: int, data: dict[str, Any], db_path: str | None = None) -> dict[str, Any] | None:
-    _BOOL_DATASET_FIELDS = {"recall_required", "extract_page_as_image", "extract_infographics"}
+    _BOOL_DATASET_FIELDS = {"recall_required", "extract_page_as_image", "extract_infographics", "distribute"}
     conn = _connect(db_path)
     try:
         sets: list[str] = []
@@ -1078,6 +1082,34 @@ def get_runner_ids_for_dataset_name(dataset_name: str, db_path: str | None = Non
         return None
     ids = get_dataset_runner_ids(ds["id"], db_path)
     return ids if ids else None
+
+
+def compute_dataset_hash(dataset_path: str, query_csv: str | None = None) -> str:
+    """Compute a lightweight fingerprint of a dataset directory.
+
+    Hashes (relative_path, size, mtime_int) for each file — fast even for
+    large datasets because it never reads file contents.
+    """
+    import hashlib
+
+    h = hashlib.sha256()
+    root = Path(dataset_path)
+    if root.is_dir():
+        entries: list[tuple[str, int, int]] = []
+        for f in sorted(root.rglob("*")):
+            if f.is_file():
+                st = f.stat()
+                entries.append((str(f.relative_to(root)), st.st_size, int(st.st_mtime)))
+        for rel, size, mtime in entries:
+            h.update(f"{rel}|{size}|{mtime}".encode())
+
+    if query_csv:
+        qp = Path(query_csv)
+        if qp.is_file():
+            st = qp.stat()
+            h.update(f"__query_csv__|{st.st_size}|{int(st.st_mtime)}".encode())
+
+    return h.hexdigest()
 
 
 def import_yaml_datasets(yaml_datasets: dict[str, dict[str, Any]], db_path: str | None = None) -> int:

@@ -105,12 +105,16 @@ function SettingsView() {
       const res = await fetch("/api/settings/git-info");
       const data = await res.json();
       setGitInfo(data);
-      if (data.available && data.remotes?.length) {
-        const nvidiaR = data.remotes.find(r => r.url && (r.url.includes("NVIDIA/") || r.url.includes("nvidia/")));
-        setDeployRemote(nvidiaR ? nvidiaR.name : data.remotes[0].name);
-      }
       if (data.available && data.current_branch) {
         setDeployBranch(data.current_branch);
+      }
+      if (data.available && data.remotes?.length) {
+        if (data.tracking_remote) {
+          setDeployRemote(data.tracking_remote);
+        } else {
+          const nvidiaR = data.remotes.find(r => r.url && (r.url.includes("NVIDIA/") || r.url.includes("nvidia/")));
+          setDeployRemote(nvidiaR ? nvidiaR.name : data.remotes[0].name);
+        }
       }
     } catch (err) {
       setGitInfo({ available: false, error: err.message });
