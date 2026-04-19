@@ -1,5 +1,5 @@
 /* ===== Datasets View ===== */
-function DatasetsView({ managedDatasets, loading, onRefresh, runners }) {
+function DatasetsView({ managedDatasets, loading, onRefresh }) {
   const [showForm, setShowForm] = useState(false);
   const [editDataset, setEditDataset] = useState(null);
   const [importing, setImporting] = useState(false);
@@ -7,12 +7,6 @@ function DatasetsView({ managedDatasets, loading, onRefresh, runners }) {
   const [inactiveDatasets, setInactiveDatasets] = useState([]);
   const [inactiveLoading, setInactiveLoading] = useState(false);
   const pg = usePagination(tab === "active" ? managedDatasets : inactiveDatasets, 25);
-
-  const runnerMap = useMemo(() => {
-    const m = {};
-    (runners || []).forEach(r => { m[r.id] = r; });
-    return m;
-  }, [runners]);
 
   const fetchInactive = useCallback(async () => {
     setInactiveLoading(true);
@@ -76,11 +70,6 @@ function DatasetsView({ managedDatasets, loading, onRefresh, runners }) {
     input.click();
   }
 
-  function runnerLabel(rid) {
-    const r = runnerMap[rid];
-    return r ? (r.name || r.hostname || `#${rid}`) : `#${rid}`;
-  }
-
   const tabBtnStyle = (active) => ({
     padding:'6px 16px',borderRadius:'6px',fontSize:'13px',fontWeight:600,cursor:'pointer',border:'none',
     background: active ? 'rgba(118,185,0,0.15)' : 'transparent',
@@ -119,16 +108,16 @@ function DatasetsView({ managedDatasets, loading, onRefresh, runners }) {
             <thead>
               <tr>
                 <th>Name</th><th>Path</th><th>Input Type</th><th>Eval Mode</th><th>Query CSV</th>
-                <th>Recall</th><th>Runners</th><th>Actions</th>
+                <th>Recall</th><th>Actions</th>
               </tr>
             </thead>
             <tbody>
               {isLoading ? (
-                <tr><td colSpan="8" style={{textAlign:'center',padding:'60px',color:'var(--nv-text-muted)'}}>
+                <tr><td colSpan="7" style={{textAlign:'center',padding:'60px',color:'var(--nv-text-muted)'}}>
                   <div className="spinner spinner-lg" style={{margin:'0 auto 12px'}}></div><div>Loading datasets…</div>
                 </td></tr>
               ) : displayData.length === 0 ? (
-                <tr><td colSpan="8" style={{textAlign:'center',padding:'40px',color:'var(--nv-text-muted)'}}>
+                <tr><td colSpan="7" style={{textAlign:'center',padding:'40px',color:'var(--nv-text-muted)'}}>
                   {isActive ? <>
                     <div style={{marginBottom:'8px',fontSize:'15px'}}>No datasets configured</div>
                     <div style={{fontSize:'12px',color:'var(--nv-text-dim)'}}>Click "Add Dataset" to register one. Datasets from test_configs.yaml are imported automatically on startup.</div>
@@ -165,15 +154,6 @@ function DatasetsView({ managedDatasets, loading, onRefresh, runners }) {
                   <td><span className="badge" style={{background: ds.evaluation_mode==='beir' ? 'rgba(118,185,0,0.15)' : 'rgba(100,180,255,0.1)', color: ds.evaluation_mode==='beir' ? 'var(--nv-green)' : 'rgb(100,180,255)', border: ds.evaluation_mode==='beir' ? '1px solid rgba(118,185,0,0.3)' : '1px solid rgba(100,180,255,0.2)'}}>{ds.evaluation_mode || "recall"}</span></td>
                   <td className="mono" style={{fontSize:'11px',color:'var(--nv-text-dim)',maxWidth:'200px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={ds.query_csv||''}>{ds.query_csv || "\u2014"}</td>
                   <td>{ds.recall_required ? <span className="badge badge-pass">Yes</span> : <span className="badge badge-na">No</span>}</td>
-                  <td style={{fontSize:'12px'}}>
-                    {(ds.runner_ids||[]).length === 0
-                      ? <span style={{color:'var(--nv-text-dim)',fontStyle:'italic'}}>All runners</span>
-                      : <div style={{display:'flex',gap:'4px',flexWrap:'wrap'}}>
-                          {(ds.runner_ids||[]).map(rid => (
-                            <span key={rid} className="badge badge-na" style={{fontSize:'10px'}}>{runnerLabel(rid)}</span>
-                          ))}
-                        </div>}
-                  </td>
                   <td>
                     {isActive ? (
                       <div style={{display:'flex',gap:'6px',flexWrap:'nowrap'}}>
@@ -198,7 +178,6 @@ function DatasetsView({ managedDatasets, loading, onRefresh, runners }) {
       {showForm && (
         <DatasetFormModal
           dataset={editDataset}
-          runners={runners || []}
           onClose={()=>setShowForm(false)}
           onSaved={()=>{setShowForm(false);onRefresh();}}
         />
@@ -207,7 +186,7 @@ function DatasetsView({ managedDatasets, loading, onRefresh, runners }) {
   );
 }
 
-function DatasetFormModal({ dataset, runners, onClose, onSaved }) {
+function DatasetFormModal({ dataset, onClose, onSaved }) {
   const isEdit = !!dataset;
   const [form, setForm] = useState({
     name: dataset?.name || "",
@@ -232,7 +211,6 @@ function DatasetFormModal({ dataset, runners, onClose, onSaved }) {
     distribute: dataset ? (dataset.distribute ?? true) : true,
     description: dataset?.description || "",
     tags: (dataset?.tags || []).join(", "),
-    runner_ids: dataset?.runner_ids || [],
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -240,13 +218,6 @@ function DatasetFormModal({ dataset, runners, onClose, onSaved }) {
   const isBeir = form.evaluation_mode === "beir";
 
   function set(field, val) { setForm(f=>({...f,[field]:val})); }
-
-  function toggleRunner(rid) {
-    setForm(f => {
-      const cur = f.runner_ids || [];
-      return {...f, runner_ids: cur.includes(rid) ? cur.filter(id=>id!==rid) : [...cur, rid]};
-    });
-  }
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -263,7 +234,6 @@ function DatasetFormModal({ dataset, runners, onClose, onSaved }) {
       embed_model_name: form.embed_model_name || null,
       description: form.description || null,
       tags: form.tags ? form.tags.split(",").map(t=>t.trim()).filter(Boolean) : [],
-      runner_ids: form.runner_ids.length > 0 ? form.runner_ids : [],
     };
     try {
       const url = isEdit ? `/api/managed-datasets/${dataset.id}` : "/api/managed-datasets";
@@ -455,25 +425,6 @@ function DatasetFormModal({ dataset, runners, onClose, onSaved }) {
               </div>
             </div>
 
-            {runners.length > 0 && (
-              <div>
-                <label style={labelStyle}>Available On Runners</label>
-                <div style={{fontSize:'11px',color:'var(--nv-text-dim)',marginBottom:'8px'}}>
-                  Select which runners have this dataset. Leave all unchecked to allow any runner.
-                </div>
-                <div style={{display:'flex',flexDirection:'column',gap:'6px',maxHeight:'140px',overflowY:'auto',
-                  padding:'10px',borderRadius:'8px',background:'var(--nv-bg)',border:'1px solid var(--nv-border)'}}>
-                  {runners.map(r => (
-                    <label key={r.id} style={{display:'flex',alignItems:'center',gap:'8px',cursor:'pointer',fontSize:'13px',color:'#fff'}}>
-                      <input type="checkbox" checked={(form.runner_ids||[]).includes(r.id)}
-                        onChange={()=>toggleRunner(r.id)} />
-                      <span style={{fontWeight:500}}>{r.name || r.hostname}</span>
-                      <span style={{fontSize:'11px',color:'var(--nv-text-dim)'}}>({r.hostname})</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-            )}
             <div>
               <label style={labelStyle}>Description</label>
               <input className="input" style={{width:'100%'}} value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Optional description" />

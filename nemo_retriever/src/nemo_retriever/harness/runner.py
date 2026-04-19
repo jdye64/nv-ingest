@@ -1048,7 +1048,48 @@ def _ensure_dataset_cached(base_url: str, job: dict[str, Any]) -> tuple[str, dic
         with urllib.request.urlopen(req, timeout=600) as resp:
             resp_hash = resp.headers.get("X-Dataset-Hash", job_hash)
             query_csv_bundled = resp.headers.get("X-Query-Csv-Bundled", "false") == "true"
-            zip_bytes = resp.read()
+            content_length = resp.headers.get("Content-Length")
+            total_size = int(content_length) if content_length else None
+
+            chunks: list[bytes] = []
+            downloaded = 0
+            chunk_size = 256 * 1024  # 256 KB
+            last_pct = -1
+            while True:
+                chunk = resp.read(chunk_size)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                downloaded += len(chunk)
+                if total_size and total_size > 0:
+                    pct = int(downloaded * 100 / total_size)
+                    if pct >= last_pct + 5:
+                        mb_done = downloaded / (1024 * 1024)
+                        mb_total = total_size / (1024 * 1024)
+                        bar_len = 30
+                        filled = int(bar_len * downloaded / total_size)
+                        bar = "█" * filled + "░" * (bar_len - filled)
+                        logger.info(
+                            "  %s  %3d%%  %.1f / %.1f MB  [%s]",
+                            dataset_name,
+                            pct,
+                            mb_done,
+                            mb_total,
+                            bar,
+                        )
+                        last_pct = pct
+                else:
+                    mb_done = downloaded / (1024 * 1024)
+                    if downloaded == len(chunks[-1]) or downloaded % (5 * 1024 * 1024) < chunk_size:
+                        logger.info("  %s  %.1f MB downloaded ...", dataset_name, mb_done)
+
+            zip_bytes = b"".join(chunks)
+            if total_size:
+                logger.info(
+                    "Download complete: %s (%.1f MB)",
+                    dataset_name,
+                    len(zip_bytes) / (1024 * 1024),
+                )
     except Exception as exc:
         logger.error("Failed to download dataset %s: %s", dataset_name, exc)
         return None
@@ -1668,6 +1709,7 @@ def runner_start_command(
     typer.echo(f"  Python   : {meta.get('python_version')}")
     typer.echo(f"  Git      : {current_commit[:12] if current_commit else 'unknown'}")
     typer.echo(f"  Ray      : {ray_address or 'local (embedded)'}")
+    typer.echo(f"  Dataset$ : {DATASET_CACHE_DIR}")
 
     global _runner_ray_address  # noqa: PLW0603
     _runner_ray_address = _resolve_ray_address(ray_address)

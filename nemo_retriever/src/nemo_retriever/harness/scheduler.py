@@ -36,7 +36,6 @@ def match_runner(
     min_memory_gb: float | None = None,
     preferred_runner_id: int | None = None,
     preferred_runner_ids: list[int] | None = None,
-    dataset_name: str | None = None,
 ) -> dict[str, Any] | None:
     """Find the best matching online runner for the given resource requirements.
 
@@ -52,12 +51,6 @@ def match_runner(
     runners = history.get_runners()
     online = [r for r in runners if r.get("status") == "online"]
 
-    allowed_runner_ids: set[int] | None = None
-    if dataset_name:
-        ids = history.get_runner_ids_for_dataset_name(dataset_name)
-        if ids is not None:
-            allowed_runner_ids = set(ids)
-
     pref_set: set[int] | None = None
     if preferred_runner_ids:
         pref_set = set(preferred_runner_ids)
@@ -65,13 +58,7 @@ def match_runner(
         pref_set = {preferred_runner_id}
 
     if pref_set:
-        pref_candidates = []
-        for r in online:
-            if r["id"] not in pref_set:
-                continue
-            if allowed_runner_ids is not None and r["id"] not in allowed_runner_ids:
-                continue
-            pref_candidates.append(r)
+        pref_candidates = [r for r in online if r["id"] in pref_set]
         if pref_candidates:
             pref_candidates.sort(key=lambda r: r.get("id", 0))
             chosen = pref_candidates[_round_robin_index % len(pref_candidates)]
@@ -80,8 +67,6 @@ def match_runner(
 
     candidates = []
     for r in online:
-        if allowed_runner_ids is not None and r["id"] not in allowed_runner_ids:
-            continue
         if min_gpu_count and (r.get("gpu_count") or 0) < min_gpu_count:
             continue
         if gpu_type_pattern and gpu_type_pattern.lower() not in (r.get("gpu_type") or "").lower():
@@ -291,7 +276,6 @@ def _dispatch_schedule(
         min_memory_gb=schedule.get("min_memory_gb"),
         preferred_runner_id=schedule.get("preferred_runner_id"),
         preferred_runner_ids=schedule.get("preferred_runner_ids"),
-        dataset_name=schedule.get("dataset"),
     )
 
     dataset_path, dataset_overrides, dataset_meta = _resolve_dataset_config(schedule.get("dataset", ""))
@@ -389,7 +373,6 @@ def _dispatch_schedule_matrix(
                 min_memory_gb=schedule.get("min_memory_gb"),
                 preferred_runner_id=effective_preferred_runner,
                 preferred_runner_ids=effective_preferred_runners or None,
-                dataset_name=ds_name,
             )
             preset_overrides = _resolve_preset_overrides(pr_name)
             merged_overrides = {**(dataset_overrides or {}), **preset_overrides}

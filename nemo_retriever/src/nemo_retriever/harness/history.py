@@ -959,11 +959,7 @@ def get_all_datasets(db_path: str | None = None) -> list[dict[str, Any]]:
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute("SELECT * FROM datasets WHERE active = 1 ORDER BY name").fetchall()
-        datasets = [_deserialize_dataset_row(r) for r in rows]
-        for ds in datasets:
-            rids = conn.execute("SELECT runner_id FROM dataset_runners WHERE dataset_id = ?", (ds["id"],)).fetchall()
-            ds["runner_ids"] = [r[0] for r in rids]
-        return datasets
+        return [_deserialize_dataset_row(r) for r in rows]
     finally:
         conn.close()
 
@@ -975,10 +971,7 @@ def get_dataset_by_id(dataset_id: int, db_path: str | None = None) -> dict[str, 
         row = conn.execute("SELECT * FROM datasets WHERE id = ?", (dataset_id,)).fetchone()
         if row is None:
             return None
-        ds = _deserialize_dataset_row(row)
-        rids = conn.execute("SELECT runner_id FROM dataset_runners WHERE dataset_id = ?", (dataset_id,)).fetchall()
-        ds["runner_ids"] = [r[0] for r in rids]
-        return ds
+        return _deserialize_dataset_row(row)
     finally:
         conn.close()
 
@@ -1047,11 +1040,7 @@ def get_inactive_datasets(db_path: str | None = None) -> list[dict[str, Any]]:
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute("SELECT * FROM datasets WHERE active = 0 ORDER BY name").fetchall()
-        datasets = [_deserialize_dataset_row(r) for r in rows]
-        for ds in datasets:
-            rids = conn.execute("SELECT runner_id FROM dataset_runners WHERE dataset_id = ?", (ds["id"],)).fetchall()
-            ds["runner_ids"] = [r[0] for r in rids]
-        return datasets
+        return [_deserialize_dataset_row(r) for r in rows]
     finally:
         conn.close()
 
@@ -1074,57 +1063,9 @@ def get_dataset_by_name(name: str, db_path: str | None = None) -> dict[str, Any]
         row = conn.execute("SELECT * FROM datasets WHERE name = ?", (name,)).fetchone()
         if row is None:
             return None
-        ds = _deserialize_dataset_row(row)
-        rids = conn.execute("SELECT runner_id FROM dataset_runners WHERE dataset_id = ?", (ds["id"],)).fetchall()
-        ds["runner_ids"] = [r[0] for r in rids]
-        return ds
+        return _deserialize_dataset_row(row)
     finally:
         conn.close()
-
-
-# ---------------------------------------------------------------------------
-# Dataset ↔ Runner associations
-# ---------------------------------------------------------------------------
-
-
-def set_dataset_runners(dataset_id: int, runner_ids: list[int], db_path: str | None = None) -> None:
-    """Replace the set of runners associated with a dataset."""
-    conn = _connect(db_path)
-    try:
-        conn.execute("DELETE FROM dataset_runners WHERE dataset_id = ?", (dataset_id,))
-        for rid in runner_ids:
-            conn.execute(
-                "INSERT OR IGNORE INTO dataset_runners (dataset_id, runner_id) VALUES (?, ?)",
-                (dataset_id, rid),
-            )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def get_dataset_runner_ids(dataset_id: int, db_path: str | None = None) -> list[int]:
-    """Return runner IDs associated with a dataset."""
-    conn = _connect(db_path)
-    try:
-        rows = conn.execute("SELECT runner_id FROM dataset_runners WHERE dataset_id = ?", (dataset_id,)).fetchall()
-        return [r[0] for r in rows]
-    finally:
-        conn.close()
-
-
-def get_runner_ids_for_dataset_name(dataset_name: str, db_path: str | None = None) -> list[int] | None:
-    """Return runner IDs that have *dataset_name*, or ``None`` if no restriction.
-
-    If the dataset is not in the managed table, or if it exists but has no
-    runners explicitly associated, returns ``None`` (no restriction — any
-    runner may run it).  Only when runners are explicitly assigned does the
-    returned list restrict which runners are eligible.
-    """
-    ds = get_dataset_by_name(dataset_name, db_path)
-    if ds is None:
-        return None
-    ids = get_dataset_runner_ids(ds["id"], db_path)
-    return ids if ids else None
 
 
 def compute_dataset_hash(

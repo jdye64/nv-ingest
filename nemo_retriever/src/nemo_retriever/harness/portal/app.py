@@ -397,7 +397,6 @@ class DatasetCreateRequest(BaseModel):
     distribute: bool = True
     description: str | None = None
     tags: list[str] | None = None
-    runner_ids: list[int] | None = None
 
 
 class DatasetUpdateRequest(BaseModel):
@@ -423,7 +422,6 @@ class DatasetUpdateRequest(BaseModel):
     distribute: bool | None = None
     description: str | None = None
     tags: list[str] | None = None
-    runner_ids: list[int] | None = None
 
 
 class AlertRuleCreateRequest(BaseModel):
@@ -1548,18 +1546,13 @@ async def list_managed_datasets():
 
 @app.post("/api/managed-datasets")
 async def create_managed_dataset(req: DatasetCreateRequest):
-    runner_ids = req.runner_ids
     data = req.model_dump(exclude_none=True)
-    data.pop("runner_ids", None)
     try:
         ds = history.create_dataset(data)
     except Exception as exc:
         if "UNIQUE constraint" in str(exc):
             raise HTTPException(status_code=409, detail=f"Dataset '{req.name}' already exists")
         raise HTTPException(status_code=400, detail=str(exc))
-    if runner_ids is not None:
-        history.set_dataset_runners(ds["id"], runner_ids)
-        ds["runner_ids"] = runner_ids
     return ds
 
 
@@ -1570,7 +1563,7 @@ async def export_datasets_yaml():
 
     datasets = history.get_all_datasets()
     export: dict[str, Any] = {}
-    _SKIP = {"id", "created_at", "updated_at", "runner_ids"}
+    _SKIP = {"id", "created_at", "updated_at"}
     for ds in datasets:
         entry: dict[str, Any] = {}
         for k, v in ds.items():
@@ -1641,15 +1634,10 @@ async def get_managed_dataset(dataset_id: int):
 
 @app.put("/api/managed-datasets/{dataset_id}")
 async def update_managed_dataset(dataset_id: int, req: DatasetUpdateRequest):
-    runner_ids = req.runner_ids
     data = {k: v for k, v in req.model_dump().items() if v is not None}
-    data.pop("runner_ids", None)
     row = history.update_dataset(dataset_id, data)
     if row is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
-    if runner_ids is not None:
-        history.set_dataset_runners(dataset_id, runner_ids)
-        row["runner_ids"] = runner_ids
     return row
 
 
@@ -1970,7 +1958,6 @@ async def trigger_preset_matrix(matrix_id: int, req: MatrixTriggerRequest | None
             runner = match_runner(
                 gpu_type_pattern=gpu_type_filter,
                 preferred_runner_id=preferred_runner_id,
-                dataset_name=ds_name,
             )
             preset_overrides = _resolve_preset_overrides(pr_name)
             merged_overrides = {**(dataset_overrides or {}), **preset_overrides}
@@ -2177,7 +2164,6 @@ async def diagnose_job(job_id: str):
 
     assigned_id = job.get("assigned_runner_id")
     dataset_name = job.get("dataset")
-    allowed_runner_ids = history.get_runner_ids_for_dataset_name(dataset_name) if dataset_name else None
     rejected_runners = job.get("rejected_runners") or []
     rejected_set = {str(rid) for rid in rejected_runners}
 
@@ -2193,11 +2179,6 @@ async def diagnose_job(job_id: str):
 
         if assigned_id is not None and assigned_id != rid:
             blockers.append(f"Job is assigned to runner #{assigned_id}, not this runner")
-
-        if allowed_runner_ids is not None and rid not in allowed_runner_ids:
-            blockers.append(
-                f"Dataset '{dataset_name}' restricts eligible runners — this runner is not in the allowed list"
-            )
 
         if str(rid) in rejected_set:
             blockers.append("Runner previously rejected this job (e.g. missing dataset on disk)")
@@ -2240,7 +2221,6 @@ async def diagnose_job(job_id: str):
         "status": "pending",
         "dataset": dataset_name,
         "assigned_runner_id": assigned_id,
-        "allowed_runner_ids": allowed_runner_ids,
         "rejected_runners": rejected_runners,
         "runner_count": len(runners),
         "eligible_count": eligible_count,
@@ -2678,17 +2658,8 @@ async def runner_get_work(runner_id: int):
 
 
 def _pick_job_for_runner(jobs: list[dict[str, Any]], runner_id: int) -> dict[str, Any] | None:
-    """Select the first pending job this runner is allowed to run.
-
-    Respects dataset→runner associations: if a dataset restricts which
-    runners may use it, only those runners can pick up jobs for it.
-    """
+    """Select the first pending job this runner is allowed to run."""
     for job in jobs:
-        dataset_name = job.get("dataset")
-        if dataset_name:
-            allowed_runner_ids = history.get_runner_ids_for_dataset_name(dataset_name)
-            if allowed_runner_ids is not None and runner_id not in allowed_runner_ids:
-                continue
         if job.get("assigned_runner_id") is None:
             history.assign_job_to_runner(job["id"], runner_id)
         return job

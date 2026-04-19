@@ -303,7 +303,7 @@ function App() {
           )}
           {activeView==="datasets" && (
             <DatasetsView managedDatasets={managedDatasets}
-              loading={managedDatasetsLoading} onRefresh={fetchManagedDatasets} runners={runners} />
+              loading={managedDatasetsLoading} onRefresh={fetchManagedDatasets} />
           )}
           {activeView==="presets" && (
             <PresetsView managedPresets={managedPresets} yamlPresets={yamlPresets}
