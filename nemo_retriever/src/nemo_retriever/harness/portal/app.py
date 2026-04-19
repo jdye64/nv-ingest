@@ -1667,34 +1667,81 @@ async def restore_managed_dataset(dataset_id: int):
 # ---------------------------------------------------------------------------
 
 
-def _zip_dataset_directory(dataset_path: str, query_csv: str | None) -> tuple[io.BytesIO, bool]:
-    """Create an in-memory zip of a dataset directory, optionally bundling query_csv.
+def _zip_dataset_directory(
+    dataset_path: str,
+    query_csv: str | None,
+    ds_hash: str,
+) -> tuple[Path, bool]:
+    """Return the path to a cached zip of the dataset directory.
 
-    Returns ``(buf, query_csv_bundled)``.
+    On the first call for a given *ds_hash* the zip is created on disk under
+    ``<dataset_path>/../.dataset_zip_cache/<hash>.zip``.  Subsequent requests
+    with the same hash serve the cached file directly.  When the hash changes
+    (files or config updated) the stale zip is replaced automatically.
+
+    Returns ``(zip_path, query_csv_bundled)``.
     """
     import zipfile
 
     root = Path(dataset_path)
-    buf = io.BytesIO()
+    cache_dir = root.parent / ".dataset_zip_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    cached_zip = cache_dir / f"{ds_hash}.zip"
+    meta_file = cache_dir / f"{ds_hash}.meta.json"
+
+    if cached_zip.is_file() and meta_file.is_file():
+        try:
+            meta = json_module.loads(meta_file.read_text())
+            return cached_zip, bool(meta.get("query_csv_bundled", False))
+        except Exception:
+            pass
+
+    for old in cache_dir.glob("*.zip"):
+        if old.name != cached_zip.name:
+            old.unlink(missing_ok=True)
+    for old in cache_dir.glob("*.meta.json"):
+        if old.name != meta_file.name:
+            old.unlink(missing_ok=True)
+
     query_csv_bundled = False
+    tmp_zip = cache_dir / f"{ds_hash}.tmp.zip"
+    try:
+        with zipfile.ZipFile(tmp_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+            if root.is_dir():
+                for f in sorted(root.rglob("*")):
+                    if f.is_file():
+                        zf.write(f, f.relative_to(root))
 
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        if root.is_dir():
-            for f in sorted(root.rglob("*")):
-                if f.is_file():
-                    zf.write(f, f.relative_to(root))
+            if query_csv:
+                qp = Path(query_csv)
+                if qp.is_file():
+                    try:
+                        qp.relative_to(root)
+                    except ValueError:
+                        zf.write(qp, Path("_query_csv") / qp.name)
+                        query_csv_bundled = True
 
-        if query_csv:
-            qp = Path(query_csv)
-            if qp.is_file():
-                try:
-                    qp.relative_to(root)
-                except ValueError:
-                    zf.write(qp, Path("_query_csv") / qp.name)
-                    query_csv_bundled = True
+        tmp_zip.replace(cached_zip)
+        meta_file.write_text(
+            json_module.dumps(
+                {
+                    "query_csv_bundled": query_csv_bundled,
+                    "hash": ds_hash,
+                }
+            )
+        )
+        logger.info(
+            "Cached dataset zip for %s (%.1f MB, hash %s)",
+            dataset_path,
+            cached_zip.stat().st_size / (1024 * 1024),
+            ds_hash[:12],
+        )
+    except Exception:
+        tmp_zip.unlink(missing_ok=True)
+        raise
 
-    buf.seek(0)
-    return buf, query_csv_bundled
+    return cached_zip, query_csv_bundled
 
 
 @app.get("/api/managed-datasets/by-name/{name}/hash")
@@ -1726,14 +1773,18 @@ async def download_dataset_by_name(name: str):
 
     query_csv = managed.get("query_csv") or None
     ds_hash = history.compute_dataset_hash(ds_path, query_csv)
-    buf, query_csv_bundled = _zip_dataset_directory(ds_path, query_csv)
+    zip_path, query_csv_bundled = _zip_dataset_directory(ds_path, query_csv, ds_hash)
 
     headers = {
-        "Content-Disposition": f'attachment; filename="{name}.zip"',
         "X-Dataset-Hash": ds_hash,
         "X-Query-Csv-Bundled": "true" if query_csv_bundled else "false",
     }
-    return StreamingResponse(buf, media_type="application/zip", headers=headers)
+    return FileResponse(
+        str(zip_path),
+        media_type="application/zip",
+        filename=f"{name}.zip",
+        headers=headers,
+    )
 
 
 @app.get("/api/managed-datasets/{dataset_id}/download")
@@ -1751,14 +1802,18 @@ async def download_dataset_by_id(dataset_id: int):
     name = managed.get("name", f"dataset_{dataset_id}")
     query_csv = managed.get("query_csv") or None
     ds_hash = history.compute_dataset_hash(ds_path, query_csv)
-    buf, query_csv_bundled = _zip_dataset_directory(ds_path, query_csv)
+    zip_path, query_csv_bundled = _zip_dataset_directory(ds_path, query_csv, ds_hash)
 
     headers = {
-        "Content-Disposition": f'attachment; filename="{name}.zip"',
         "X-Dataset-Hash": ds_hash,
         "X-Query-Csv-Bundled": "true" if query_csv_bundled else "false",
     }
-    return StreamingResponse(buf, media_type="application/zip", headers=headers)
+    return FileResponse(
+        str(zip_path),
+        media_type="application/zip",
+        filename=f"{name}.zip",
+        headers=headers,
+    )
 
 
 # ---------------------------------------------------------------------------
