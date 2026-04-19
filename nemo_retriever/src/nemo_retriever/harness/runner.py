@@ -846,7 +846,7 @@ _runner_ray_address: str | None = None
 _runner_run_code_ref: str | None = None
 _runner_num_gpus: int | None = None
 
-DATASET_CACHE_DIR = Path(
+DATASET_CACHE_DIR: Path = Path(
     os.environ.get("HARNESS_DATASET_CACHE_DIR", str(Path.home() / ".cache" / "harness" / "datasets"))
 )
 
@@ -1692,8 +1692,18 @@ def runner_start_command(
         "--num-gpus",
         help="Number of GPUs to report for this runner. Overrides auto-detected count.",
     ),
+    dataset_cache_dir: str | None = typer.Option(
+        None,
+        "--dataset-cache-dir",
+        envvar="HARNESS_DATASET_CACHE_DIR",
+        help="Directory for caching downloaded datasets. Defaults to ~/.cache/harness/datasets.",
+    ),
 ) -> None:
     """Start a harness runner and optionally register with a portal manager."""
+    global DATASET_CACHE_DIR  # noqa: PLW0603
+    if dataset_cache_dir:
+        DATASET_CACHE_DIR = Path(dataset_cache_dir)
+
     from nemo_retriever.harness.run import _collect_run_metadata
 
     meta = _collect_run_metadata()
