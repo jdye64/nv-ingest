@@ -297,7 +297,12 @@ _MIGRATIONS = [
     "ALTER TABLE jobs ADD COLUMN graph_id INTEGER",
     "ALTER TABLE jobs ADD COLUMN pip_list TEXT",
     "ALTER TABLE alert_rules ADD COLUMN slack_notify INTEGER DEFAULT 0",
-    "ALTER TABLE datasets ADD COLUMN distribute INTEGER DEFAULT 0",
+    "ALTER TABLE datasets ADD COLUMN distribute INTEGER DEFAULT 1",
+    "ALTER TABLE datasets ADD COLUMN active INTEGER DEFAULT 1",
+    "ALTER TABLE jobs ADD COLUMN dataset_id INTEGER",
+    "ALTER TABLE jobs ADD COLUMN dataset_config_hash TEXT",
+    "ALTER TABLE runs ADD COLUMN dataset_id INTEGER",
+    "ALTER TABLE runs ADD COLUMN dataset_config_hash TEXT",
 ]
 
 RUNNER_MISSED_HEARTBEATS_THRESHOLD = 4
@@ -376,6 +381,8 @@ def record_run(
     num_gpus: int | None = None,
     job_id: str | None = None,
     nsys_profile: int = 0,
+    dataset_id: int | None = None,
+    dataset_config_hash: str | None = None,
 ) -> int:
     """Insert a single run result into the history database. Returns the row id."""
     conn = _connect(db_path)
@@ -412,6 +419,8 @@ def record_run(
             "num_gpus": num_gpus,
             "job_id": job_id,
             "nsys_profile": nsys_profile,
+            "dataset_id": dataset_id,
+            "dataset_config_hash": dataset_config_hash,
         }
 
         columns = ", ".join(row.keys())
@@ -878,6 +887,7 @@ def _deserialize_dataset_row(row: sqlite3.Row) -> dict[str, Any]:
     d["extract_page_as_image"] = bool(d.get("extract_page_as_image"))
     d["extract_infographics"] = bool(d.get("extract_infographics"))
     d["distribute"] = bool(d.get("distribute"))
+    d["active"] = bool(d.get("active", 1))
     if d.get("beir_ks"):
         try:
             d["beir_ks"] = json.loads(d["beir_ks"])
@@ -930,7 +940,7 @@ def create_dataset(data: dict[str, Any], db_path: str | None = None) -> dict[str
                 data.get("embed_granularity", "element"),
                 1 if data.get("extract_page_as_image") else 0,
                 1 if data.get("extract_infographics") else 0,
-                1 if data.get("distribute") else 0,
+                0 if data.get("distribute") is False else 1,
                 data.get("description") or None,
                 tags,
                 now,
@@ -948,7 +958,7 @@ def get_all_datasets(db_path: str | None = None) -> list[dict[str, Any]]:
     conn = _connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
-        rows = conn.execute("SELECT * FROM datasets ORDER BY name").fetchall()
+        rows = conn.execute("SELECT * FROM datasets WHERE active = 1 ORDER BY name").fetchall()
         datasets = [_deserialize_dataset_row(r) for r in rows]
         for ds in datasets:
             rids = conn.execute("SELECT runner_id FROM dataset_runners WHERE dataset_id = ?", (ds["id"],)).fetchall()
@@ -1004,20 +1014,53 @@ def update_dataset(dataset_id: int, data: dict[str, Any], db_path: str | None = 
 
 
 def delete_dataset(dataset_id: int, db_path: str | None = None) -> bool:
+    """Soft-delete: mark the dataset inactive instead of removing the row."""
     conn = _connect(db_path)
     try:
-        cur = conn.execute("DELETE FROM datasets WHERE id = ?", (dataset_id,))
+        cur = conn.execute(
+            "UPDATE datasets SET active = 0, updated_at = ? WHERE id = ?",
+            (_now_iso(), dataset_id),
+        )
         conn.commit()
         return cur.rowcount > 0
     finally:
         conn.close()
 
 
-def get_dataset_names(db_path: str | None = None) -> list[str]:
-    """Return all dataset names from the datasets table (managed datasets)."""
+def restore_dataset(dataset_id: int, db_path: str | None = None) -> bool:
+    """Re-activate a soft-deleted dataset."""
     conn = _connect(db_path)
     try:
-        rows = conn.execute("SELECT name FROM datasets ORDER BY name").fetchall()
+        cur = conn.execute(
+            "UPDATE datasets SET active = 1, updated_at = ? WHERE id = ?",
+            (_now_iso(), dataset_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def get_inactive_datasets(db_path: str | None = None) -> list[dict[str, Any]]:
+    """Return all soft-deleted (inactive) datasets."""
+    conn = _connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute("SELECT * FROM datasets WHERE active = 0 ORDER BY name").fetchall()
+        datasets = [_deserialize_dataset_row(r) for r in rows]
+        for ds in datasets:
+            rids = conn.execute("SELECT runner_id FROM dataset_runners WHERE dataset_id = ?", (ds["id"],)).fetchall()
+            ds["runner_ids"] = [r[0] for r in rids]
+        return datasets
+    finally:
+        conn.close()
+
+
+def get_dataset_names(db_path: str | None = None) -> list[str]:
+    """Return active dataset names from the datasets table (managed datasets)."""
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute("SELECT name FROM datasets WHERE active = 1 ORDER BY name").fetchall()
         return [row[0] for row in rows]
     finally:
         conn.close()
@@ -1084,11 +1127,17 @@ def get_runner_ids_for_dataset_name(dataset_name: str, db_path: str | None = Non
     return ids if ids else None
 
 
-def compute_dataset_hash(dataset_path: str, query_csv: str | None = None) -> str:
-    """Compute a lightweight fingerprint of a dataset directory.
+def compute_dataset_hash(
+    dataset_path: str,
+    query_csv: str | None = None,
+    config_fields: dict[str, Any] | None = None,
+) -> str:
+    """Compute a fingerprint of a dataset directory plus its configuration.
 
     Hashes (relative_path, size, mtime_int) for each file — fast even for
-    large datasets because it never reads file contents.
+    large datasets because it never reads file contents.  Also hashes all
+    config fields (input_type, evaluation_mode, etc.) so that configuration
+    changes invalidate the cache.
     """
     import hashlib
 
@@ -1108,6 +1157,9 @@ def compute_dataset_hash(dataset_path: str, query_csv: str | None = None) -> str
         if qp.is_file():
             st = qp.stat()
             h.update(f"__query_csv__|{st.st_size}|{int(st.st_mtime)}".encode())
+
+    if config_fields:
+        h.update(json.dumps(config_fields, sort_keys=True, default=str).encode())
 
     return h.hexdigest()
 
@@ -1728,6 +1780,8 @@ def create_job(data: dict[str, Any], db_path: str | None = None) -> dict[str, An
             "graph_code": data.get("graph_code"),
             "graph_id": data.get("graph_id"),
             "nsys_profile": data.get("nsys_profile", 0),
+            "dataset_id": data.get("dataset_id"),
+            "dataset_config_hash": data.get("dataset_config_hash"),
         }
         columns = ", ".join(row.keys())
         placeholders = ", ".join("?" * len(row))

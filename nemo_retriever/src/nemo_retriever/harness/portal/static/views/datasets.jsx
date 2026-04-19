@@ -3,7 +3,10 @@ function DatasetsView({ managedDatasets, loading, onRefresh, runners }) {
   const [showForm, setShowForm] = useState(false);
   const [editDataset, setEditDataset] = useState(null);
   const [importing, setImporting] = useState(false);
-  const pg = usePagination(managedDatasets, 25);
+  const [tab, setTab] = useState("active");
+  const [inactiveDatasets, setInactiveDatasets] = useState([]);
+  const [inactiveLoading, setInactiveLoading] = useState(false);
+  const pg = usePagination(tab === "active" ? managedDatasets : inactiveDatasets, 25);
 
   const runnerMap = useMemo(() => {
     const m = {};
@@ -11,12 +14,31 @@ function DatasetsView({ managedDatasets, loading, onRefresh, runners }) {
     return m;
   }, [runners]);
 
+  const fetchInactive = useCallback(async () => {
+    setInactiveLoading(true);
+    try {
+      const res = await fetch("/api/managed-datasets/inactive");
+      if (res.ok) setInactiveDatasets(await res.json());
+    } catch {} finally { setInactiveLoading(false); }
+  }, []);
+
+  useEffect(() => { if (tab === "inactive") fetchInactive(); }, [tab]);
+
   function handleCreate() { setEditDataset(null); setShowForm(true); }
   function handleEdit(ds) { setEditDataset(ds); setShowForm(true); }
   async function handleDelete(id, name) {
-    if (!confirm(`Delete dataset "${name}"? This cannot be undone.`)) return;
+    if (!confirm(`Delete dataset "${name}"? It will be moved to the Inactive tab and can be restored later.`)) return;
     try {
       await fetch(`/api/managed-datasets/${id}`, { method: "DELETE" });
+      onRefresh();
+      if (tab === "inactive") fetchInactive();
+    } catch {}
+  }
+  async function handleRestore(id, name) {
+    if (!confirm(`Restore dataset "${name}"?`)) return;
+    try {
+      await fetch(`/api/managed-datasets/${id}/restore`, { method: "POST" });
+      fetchInactive();
       onRefresh();
     } catch {}
   }
@@ -59,17 +81,36 @@ function DatasetsView({ managedDatasets, loading, onRefresh, runners }) {
     return r ? (r.name || r.hostname || `#${rid}`) : `#${rid}`;
   }
 
+  const tabBtnStyle = (active) => ({
+    padding:'6px 16px',borderRadius:'6px',fontSize:'13px',fontWeight:600,cursor:'pointer',border:'none',
+    background: active ? 'rgba(118,185,0,0.15)' : 'transparent',
+    color: active ? 'var(--nv-green)' : 'var(--nv-text-muted)',
+    transition:'all 0.15s',
+  });
+
+  const isActive = tab === "active";
+  const displayData = isActive ? managedDatasets : inactiveDatasets;
+  const isLoading = isActive ? loading : inactiveLoading;
+
   return (
     <>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'20px',flexWrap:'wrap',gap:'12px'}}>
-        <div style={{display:'flex',gap:'8px'}}>
-          <button className="btn btn-primary" onClick={handleCreate}><IconPlus /> Add Dataset</button>
-          <button className="btn btn-secondary" onClick={handleExport} disabled={managedDatasets.length===0} title="Export all datasets to YAML"><IconDownload /> Export YAML</button>
-          <button className="btn btn-secondary" onClick={handleImport} disabled={importing} title="Import datasets from a YAML file">
-            {importing ? <><span className="spinner" style={{marginRight:'6px'}}></span>Importing…</> : <><IconUpload /> Import YAML</>}
-          </button>
+        <div style={{display:'flex',gap:'8px',alignItems:'center'}}>
+          <div style={{display:'flex',gap:'4px',background:'var(--nv-surface)',borderRadius:'8px',padding:'3px',border:'1px solid var(--nv-border)'}}>
+            <button style={tabBtnStyle(isActive)} onClick={()=>setTab("active")}>Active</button>
+            <button style={tabBtnStyle(!isActive)} onClick={()=>setTab("inactive")}>
+              Inactive{inactiveDatasets.length > 0 ? ` (${inactiveDatasets.length})` : ''}
+            </button>
+          </div>
+          {isActive && <>
+            <button className="btn btn-primary" onClick={handleCreate}><IconPlus /> Add Dataset</button>
+            <button className="btn btn-secondary" onClick={handleExport} disabled={managedDatasets.length===0} title="Export all datasets to YAML"><IconDownload /> Export YAML</button>
+            <button className="btn btn-secondary" onClick={handleImport} disabled={importing} title="Import datasets from a YAML file">
+              {importing ? <><span className="spinner" style={{marginRight:'6px'}}></span>Importing…</> : <><IconUpload /> Import YAML</>}
+            </button>
+          </>}
         </div>
-        <button className="btn btn-secondary btn-icon" onClick={onRefresh} title="Refresh"><IconRefresh /></button>
+        <button className="btn btn-secondary btn-icon" onClick={()=>{onRefresh(); if(!isActive) fetchInactive();}} title="Refresh"><IconRefresh /></button>
       </div>
 
       <div className="card">
@@ -82,17 +123,22 @@ function DatasetsView({ managedDatasets, loading, onRefresh, runners }) {
               </tr>
             </thead>
             <tbody>
-              {loading ? (
+              {isLoading ? (
                 <tr><td colSpan="8" style={{textAlign:'center',padding:'60px',color:'var(--nv-text-muted)'}}>
                   <div className="spinner spinner-lg" style={{margin:'0 auto 12px'}}></div><div>Loading datasets…</div>
                 </td></tr>
-              ) : managedDatasets.length === 0 ? (
+              ) : displayData.length === 0 ? (
                 <tr><td colSpan="8" style={{textAlign:'center',padding:'40px',color:'var(--nv-text-muted)'}}>
-                  <div style={{marginBottom:'8px',fontSize:'15px'}}>No datasets configured</div>
-                  <div style={{fontSize:'12px',color:'var(--nv-text-dim)'}}>Click "Add Dataset" to register one. Datasets from test_configs.yaml are imported automatically on startup.</div>
+                  {isActive ? <>
+                    <div style={{marginBottom:'8px',fontSize:'15px'}}>No datasets configured</div>
+                    <div style={{fontSize:'12px',color:'var(--nv-text-dim)'}}>Click "Add Dataset" to register one. Datasets from test_configs.yaml are imported automatically on startup.</div>
+                  </> : <>
+                    <div style={{marginBottom:'8px',fontSize:'15px'}}>No inactive datasets</div>
+                    <div style={{fontSize:'12px',color:'var(--nv-text-dim)'}}>Deleted datasets appear here and can be restored.</div>
+                  </>}
                 </td></tr>
               ) : pg.pageData.map(ds => (
-                <tr key={ds.id}>
+                <tr key={ds.id} style={!isActive ? {opacity:0.7} : undefined}>
                   <td>
                     <div style={{display:'flex',alignItems:'center',gap:'6px'}}>
                       <span style={{color:'#fff',fontWeight:600}}>{ds.name}</span>
@@ -103,6 +149,14 @@ function DatasetsView({ managedDatasets, loading, onRefresh, runners }) {
                           background:'rgba(100,180,255,0.12)',color:'rgb(100,180,255)',
                           border:'1px solid rgba(100,180,255,0.25)',
                         }}>Dist</span>
+                      )}
+                      {!isActive && (
+                        <span style={{
+                          padding:'1px 6px',borderRadius:'4px',fontSize:'9px',fontWeight:700,
+                          textTransform:'uppercase',letterSpacing:'0.05em',
+                          background:'rgba(255,180,50,0.12)',color:'rgb(255,180,50)',
+                          border:'1px solid rgba(255,180,50,0.25)',
+                        }}>Inactive</span>
                       )}
                     </div>
                   </td>
@@ -121,10 +175,16 @@ function DatasetsView({ managedDatasets, loading, onRefresh, runners }) {
                         </div>}
                   </td>
                   <td>
-                    <div style={{display:'flex',gap:'6px',flexWrap:'nowrap'}}>
-                      <button className="btn btn-secondary btn-sm" onClick={()=>handleEdit(ds)} title="Edit"><IconEdit /> Edit</button>
-                      <button className="btn btn-sm" onClick={()=>handleDelete(ds.id,ds.name)} title="Delete" style={{background:'rgba(255,80,80,0.1)',color:'#ff5050',border:'1px solid rgba(255,80,80,0.2)'}}><IconTrash /> Delete</button>
-                    </div>
+                    {isActive ? (
+                      <div style={{display:'flex',gap:'6px',flexWrap:'nowrap'}}>
+                        <button className="btn btn-secondary btn-sm" onClick={()=>handleEdit(ds)} title="Edit"><IconEdit /> Edit</button>
+                        <button className="btn btn-sm" onClick={()=>handleDelete(ds.id,ds.name)} title="Delete" style={{background:'rgba(255,80,80,0.1)',color:'#ff5050',border:'1px solid rgba(255,80,80,0.2)'}}><IconTrash /> Delete</button>
+                      </div>
+                    ) : (
+                      <button className="btn btn-sm" onClick={()=>handleRestore(ds.id,ds.name)} title="Restore" style={{background:'rgba(118,185,0,0.1)',color:'var(--nv-green)',border:'1px solid rgba(118,185,0,0.2)'}}>
+                        <IconRefresh /> Restore
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -169,7 +229,7 @@ function DatasetFormModal({ dataset, runners, onClose, onSaved }) {
     embed_granularity: dataset?.embed_granularity || "element",
     extract_page_as_image: dataset?.extract_page_as_image || false,
     extract_infographics: dataset?.extract_infographics || false,
-    distribute: dataset?.distribute || false,
+    distribute: dataset ? (dataset.distribute ?? true) : true,
     description: dataset?.description || "",
     tags: (dataset?.tags || []).join(", "),
     runner_ids: dataset?.runner_ids || [],

@@ -394,7 +394,7 @@ class DatasetCreateRequest(BaseModel):
     embed_granularity: str = "element"
     extract_page_as_image: bool = False
     extract_infographics: bool = False
-    distribute: bool = False
+    distribute: bool = True
     description: str | None = None
     tags: list[str] | None = None
     runner_ids: list[int] | None = None
@@ -1660,6 +1660,20 @@ async def delete_managed_dataset(dataset_id: int):
     return {"ok": True}
 
 
+@app.get("/api/managed-datasets/inactive")
+async def list_inactive_datasets():
+    """Return all soft-deleted (inactive) datasets."""
+    return history.get_inactive_datasets()
+
+
+@app.post("/api/managed-datasets/{dataset_id}/restore")
+async def restore_managed_dataset(dataset_id: int):
+    """Re-activate a soft-deleted dataset."""
+    if not history.restore_dataset(dataset_id):
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    return {"ok": True}
+
+
 # ---------------------------------------------------------------------------
 # Dataset distribution (download / hash)
 # ---------------------------------------------------------------------------
@@ -1951,7 +1965,7 @@ async def trigger_preset_matrix(matrix_id: int, req: MatrixTriggerRequest | None
 
     job_ids: list[str] = []
     for ds_name in dataset_names:
-        dataset_path, dataset_overrides = _resolve_dataset_config(ds_name)
+        dataset_path, dataset_overrides, dataset_meta = _resolve_dataset_config(ds_name)
         for pr_name in preset_names:
             runner = match_runner(
                 gpu_type_pattern=gpu_type_filter,
@@ -1960,22 +1974,24 @@ async def trigger_preset_matrix(matrix_id: int, req: MatrixTriggerRequest | None
             )
             preset_overrides = _resolve_preset_overrides(pr_name)
             merged_overrides = {**(dataset_overrides or {}), **preset_overrides}
-            job = history.create_job(
-                {
-                    "trigger_source": "matrix",
-                    "dataset": ds_name,
-                    "dataset_path": dataset_path,
-                    "dataset_overrides": merged_overrides if merged_overrides else None,
-                    "preset": pr_name,
-                    "assigned_runner_id": runner["id"] if runner else None,
-                    "git_commit": pinned_sha,
-                    "git_ref": pinned_ref,
-                    "tags": matrix_tags,
-                    "matrix_run_id": matrix_run_id,
-                    "matrix_name": matrix["name"],
-                    "nsys_profile": nsys_val,
-                }
-            )
+            job_data: dict[str, Any] = {
+                "trigger_source": "matrix",
+                "dataset": ds_name,
+                "dataset_path": dataset_path,
+                "dataset_overrides": merged_overrides if merged_overrides else None,
+                "preset": pr_name,
+                "assigned_runner_id": runner["id"] if runner else None,
+                "git_commit": pinned_sha,
+                "git_ref": pinned_ref,
+                "tags": matrix_tags,
+                "matrix_run_id": matrix_run_id,
+                "matrix_name": matrix["name"],
+                "nsys_profile": nsys_val,
+            }
+            if dataset_meta:
+                job_data["dataset_id"] = dataset_meta["dataset_id"]
+                job_data["dataset_config_hash"] = dataset_meta["dataset_config_hash"]
+            job = history.create_job(job_data)
             job_ids.append(job["id"])
 
     return MatrixTriggerResponse(
@@ -1992,11 +2008,15 @@ async def trigger_preset_matrix(matrix_id: int, req: MatrixTriggerRequest | None
 # ---------------------------------------------------------------------------
 
 
-def _resolve_dataset_config(dataset_name: str) -> tuple[str | None, dict[str, Any] | None]:
+def _resolve_dataset_config(
+    dataset_name: str,
+) -> tuple[str | None, dict[str, Any] | None, dict[str, Any] | None]:
     """Look up the filesystem path and full config overrides for a dataset.
 
     Checks managed datasets first, then falls back to the YAML config.
-    Returns (dataset_path, overrides_dict) — either or both may be ``None``.
+    Returns ``(dataset_path, overrides_dict, dataset_meta)`` where
+    *dataset_meta* is ``{"dataset_id": id, "dataset_config_hash": hash}``
+    for managed datasets, or ``None`` for YAML/missing datasets.
     """
     managed = history.get_dataset_by_name(dataset_name)
     if managed and managed.get("path"):
@@ -2040,9 +2060,16 @@ def _resolve_dataset_config(dataset_name: str) -> tuple[str | None, dict[str, An
         if managed.get("extract_infographics") is not None:
             overrides["extract_infographics"] = managed["extract_infographics"]
 
-        return managed["path"], overrides
+        config_fields = {k: v for k, v in overrides.items() if k != "dataset_dir"}
+        config_hash = history.compute_dataset_hash(managed["path"], managed.get("query_csv"), config_fields)
+        dataset_meta = {
+            "dataset_id": managed["id"],
+            "dataset_config_hash": config_hash,
+        }
 
-    return None, None
+        return managed["path"], overrides, dataset_meta
+
+    return None, None, None
 
 
 def _resolve_preset_overrides(preset_name: str | None) -> dict[str, Any]:
@@ -2068,10 +2095,25 @@ def _resolve_preset_overrides(preset_name: str | None) -> dict[str, Any]:
 
 @app.post("/api/runs/trigger", response_model=TriggerResponse)
 async def trigger_run(req: TriggerRequest):
-    dataset_path, dataset_overrides = _resolve_dataset_config(req.dataset)
+    dataset_path, dataset_overrides, dataset_meta = _resolve_dataset_config(req.dataset)
     preset_overrides = _resolve_preset_overrides(req.preset)
     merged_overrides = {**(dataset_overrides or {}), **preset_overrides}
     pinned_sha, pinned_ref = _resolve_git_override(req.git_ref, req.git_commit)
+
+    base_job: dict[str, Any] = {
+        "dataset": req.dataset,
+        "dataset_path": dataset_path,
+        "dataset_overrides": merged_overrides if merged_overrides else None,
+        "preset": req.preset,
+        "config": req.config,
+        "assigned_runner_id": req.runner_id,
+        "git_commit": pinned_sha,
+        "git_ref": pinned_ref,
+        "nsys_profile": int(req.nsys_profile),
+    }
+    if dataset_meta:
+        base_job["dataset_id"] = dataset_meta["dataset_id"]
+        base_job["dataset_config_hash"] = dataset_meta["dataset_config_hash"]
 
     if req.graph_id is not None:
         graph = history.get_graph(req.graph_id)
@@ -2082,40 +2124,23 @@ async def trigger_run(req: TriggerRequest):
             raise HTTPException(400, "Graph has no generated code. Save the graph first.")
 
         graph_name = graph.get("name") or f"graph-{req.graph_id}"
-        job = history.create_job(
+        base_job.update(
             {
                 "trigger_source": "graph",
-                "dataset": req.dataset,
-                "dataset_path": dataset_path,
-                "dataset_overrides": merged_overrides if merged_overrides else None,
-                "preset": req.preset,
-                "config": req.config,
-                "assigned_runner_id": req.runner_id,
-                "git_commit": pinned_sha,
-                "git_ref": pinned_ref,
                 "tags": req.tags or ["graph-run", graph_name],
-                "nsys_profile": int(req.nsys_profile),
                 "graph_code": code,
                 "graph_id": req.graph_id,
             }
         )
     else:
-        job = history.create_job(
+        base_job.update(
             {
                 "trigger_source": "manual",
-                "dataset": req.dataset,
-                "dataset_path": dataset_path,
-                "dataset_overrides": merged_overrides if merged_overrides else None,
-                "preset": req.preset,
-                "config": req.config,
-                "assigned_runner_id": req.runner_id,
-                "git_commit": pinned_sha,
-                "git_ref": pinned_ref,
                 "tags": req.tags or [],
-                "nsys_profile": int(req.nsys_profile),
             }
         )
 
+    job = history.create_job(base_job)
     return TriggerResponse(job_id=job["id"], status="pending")
 
 
@@ -2463,6 +2488,8 @@ def _record_run_from_job(
             num_gpus=num_gpus,
             job_id=job.get("id"),
             nsys_profile=int(bool(job.get("nsys_profile"))),
+            dataset_id=job.get("dataset_id"),
+            dataset_config_hash=job.get("dataset_config_hash"),
         )
         if run_row_id:
             run_row = history.get_run_by_id(run_row_id)

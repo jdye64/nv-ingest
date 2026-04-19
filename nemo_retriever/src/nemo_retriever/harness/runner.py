@@ -964,8 +964,24 @@ def _download_playground_files(base_url: str, job: dict[str, Any]) -> str | None
         return None
 
 
+def _build_cache_rewrites(cache_dir: Path, query_csv_bundled: bool) -> dict[str, Any]:
+    """Build dataset_overrides pointing to a local cache directory."""
+    rewrites: dict[str, Any] = {"dataset_dir": str(cache_dir)}
+    if query_csv_bundled:
+        bundled_dir = cache_dir / "_query_csv"
+        if bundled_dir.is_dir():
+            csv_files = list(bundled_dir.iterdir())
+            if csv_files:
+                rewrites["query_csv"] = str(csv_files[0])
+    return rewrites
+
+
 def _ensure_dataset_cached(base_url: str, job: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
     """Download a distributable dataset from the portal if not already cached.
+
+    Uses ``dataset_config_hash`` from the job payload for exact cache
+    invalidation (covers file changes *and* config changes).  Falls back
+    to the portal ``/hash`` endpoint for legacy jobs without the field.
 
     Returns ``(local_dir, override_rewrites)`` on success, or ``None`` if the
     dataset is not distributable (so the caller can fall through to the
@@ -981,55 +997,62 @@ def _ensure_dataset_cached(base_url: str, job: dict[str, Any]) -> tuple[str, dic
     cache_dir = DATASET_CACHE_DIR / dataset_name
     meta_file = cache_dir / ".dataset_meta.json"
 
-    # Ask the portal for the current hash (also confirms distribute=true)
-    hash_url = f"{base_url}/api/managed-datasets/by-name/{urllib.request.quote(dataset_name, safe='')}/hash"
-    try:
-        hash_resp = _get_json(hash_url, timeout=15)
-    except Exception:
-        # 404 / 403 / network error — dataset is not distributable
-        return None
+    job_hash = job.get("dataset_config_hash")
 
-    if not hash_resp or not isinstance(hash_resp, dict) or "hash" not in hash_resp:
-        return None
-
-    remote_hash = hash_resp["hash"]
-
-    # Check local cache validity
     if cache_dir.is_dir() and meta_file.is_file():
         try:
             local_meta = json_module.loads(meta_file.read_text())
-            if local_meta.get("hash") == remote_hash:
-                logger.info(
-                    "Dataset %s cache hit at %s (hash %s)",
-                    dataset_name,
-                    cache_dir,
-                    remote_hash[:12],
-                )
-                rewrites: dict[str, Any] = {"dataset_dir": str(cache_dir)}
-                if local_meta.get("query_csv_bundled"):
-                    bundled_dir = cache_dir / "_query_csv"
-                    if bundled_dir.is_dir():
-                        csv_files = list(bundled_dir.iterdir())
-                        if csv_files:
-                            rewrites["query_csv"] = str(csv_files[0])
-                return str(cache_dir), rewrites
+            cached_hash = local_meta.get("hash")
+            if cached_hash:
+                if job_hash:
+                    if cached_hash == job_hash:
+                        logger.info(
+                            "Dataset %s cache hit (config hash match %s)",
+                            dataset_name,
+                            cached_hash[:12],
+                        )
+                        return str(cache_dir), _build_cache_rewrites(
+                            cache_dir, local_meta.get("query_csv_bundled", False)
+                        )
+                    logger.info(
+                        "Dataset %s cache stale (local %s != job %s) — re-downloading",
+                        dataset_name,
+                        cached_hash[:12],
+                        job_hash[:12],
+                    )
+                else:
+                    logger.info(
+                        "Dataset %s cache hit at %s (hash %s, no job hash to compare)",
+                        dataset_name,
+                        cache_dir,
+                        cached_hash[:12],
+                    )
+                    return str(cache_dir), _build_cache_rewrites(cache_dir, local_meta.get("query_csv_bundled", False))
         except Exception:
             pass
 
-    # Download the dataset archive
+    if not job_hash:
+        hash_url = f"{base_url}/api/managed-datasets/by-name/{urllib.request.quote(dataset_name, safe='')}/hash"
+        try:
+            hash_resp = _get_json(hash_url, timeout=15)
+        except Exception:
+            return None
+        if not hash_resp or not isinstance(hash_resp, dict) or "hash" not in hash_resp:
+            return None
+        job_hash = hash_resp["hash"]
+
     dl_url = f"{base_url}/api/managed-datasets/by-name/{urllib.request.quote(dataset_name, safe='')}/download"
     logger.info("Downloading dataset %s from %s", dataset_name, dl_url)
     try:
         req = urllib.request.Request(dl_url)
         with urllib.request.urlopen(req, timeout=600) as resp:
-            resp_hash = resp.headers.get("X-Dataset-Hash", remote_hash)
+            resp_hash = resp.headers.get("X-Dataset-Hash", job_hash)
             query_csv_bundled = resp.headers.get("X-Query-Csv-Bundled", "false") == "true"
             zip_bytes = resp.read()
     except Exception as exc:
         logger.error("Failed to download dataset %s: %s", dataset_name, exc)
         return None
 
-    # Extract into cache dir (replace any stale cache)
     import io
     import zipfile
 
@@ -1045,12 +1068,12 @@ def _ensure_dataset_cached(base_url: str, job: dict[str, Any]) -> tuple[str, dic
         shutil.rmtree(cache_dir, ignore_errors=True)
         return None
 
-    # Write sidecar metadata
     from datetime import datetime, timezone
 
+    effective_hash = job.get("dataset_config_hash") or resp_hash
     meta = {
         "dataset_name": dataset_name,
-        "hash": resp_hash,
+        "hash": effective_hash,
         "downloaded_at": datetime.now(timezone.utc).isoformat(),
         "portal_url": base_url,
         "query_csv_bundled": query_csv_bundled,
@@ -1058,17 +1081,15 @@ def _ensure_dataset_cached(base_url: str, job: dict[str, Any]) -> tuple[str, dic
     meta_file.write_text(json_module.dumps(meta, indent=2))
 
     file_count = sum(1 for _ in cache_dir.rglob("*") if _.is_file())
-    logger.info("Cached dataset %s at %s (%d files, hash %s)", dataset_name, cache_dir, file_count, resp_hash[:12])
+    logger.info(
+        "Cached dataset %s at %s (%d files, hash %s)",
+        dataset_name,
+        cache_dir,
+        file_count,
+        effective_hash[:12],
+    )
 
-    rewrites = {"dataset_dir": str(cache_dir)}
-    if query_csv_bundled:
-        bundled_dir = cache_dir / "_query_csv"
-        if bundled_dir.is_dir():
-            csv_files = list(bundled_dir.iterdir())
-            if csv_files:
-                rewrites["query_csv"] = str(csv_files[0])
-
-    return str(cache_dir), rewrites
+    return str(cache_dir), _build_cache_rewrites(cache_dir, query_csv_bundled)
 
 
 def _validate_dataset_path(job: dict[str, Any]) -> str | None:
