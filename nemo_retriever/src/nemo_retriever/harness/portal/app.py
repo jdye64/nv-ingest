@@ -1755,7 +1755,7 @@ async def get_dataset_hash_by_name(name: str):
     ds_path = managed.get("path", "")
     if not ds_path or not Path(ds_path).is_dir():
         raise HTTPException(status_code=404, detail="Dataset directory not found on portal")
-    ds_hash = history.compute_dataset_hash(ds_path, managed.get("query_csv"))
+    ds_hash = await asyncio.to_thread(history.compute_dataset_hash, ds_path, managed.get("query_csv"))
     return {"name": name, "hash": ds_hash}
 
 
@@ -1772,8 +1772,13 @@ async def download_dataset_by_name(name: str):
         raise HTTPException(status_code=404, detail="Dataset directory not found on portal")
 
     query_csv = managed.get("query_csv") or None
-    ds_hash = history.compute_dataset_hash(ds_path, query_csv)
-    zip_path, query_csv_bundled = _zip_dataset_directory(ds_path, query_csv, ds_hash)
+    ds_hash = await asyncio.to_thread(history.compute_dataset_hash, ds_path, query_csv)
+    zip_path, query_csv_bundled = await asyncio.to_thread(
+        _zip_dataset_directory,
+        ds_path,
+        query_csv,
+        ds_hash,
+    )
 
     headers = {
         "X-Dataset-Hash": ds_hash,
@@ -1801,8 +1806,13 @@ async def download_dataset_by_id(dataset_id: int):
 
     name = managed.get("name", f"dataset_{dataset_id}")
     query_csv = managed.get("query_csv") or None
-    ds_hash = history.compute_dataset_hash(ds_path, query_csv)
-    zip_path, query_csv_bundled = _zip_dataset_directory(ds_path, query_csv, ds_hash)
+    ds_hash = await asyncio.to_thread(history.compute_dataset_hash, ds_path, query_csv)
+    zip_path, query_csv_bundled = await asyncio.to_thread(
+        _zip_dataset_directory,
+        ds_path,
+        query_csv,
+        ds_hash,
+    )
 
     headers = {
         "X-Dataset-Hash": ds_hash,
