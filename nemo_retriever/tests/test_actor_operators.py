@@ -14,11 +14,13 @@ import pytest
 from nemo_retriever.graph.abstract_operator import AbstractOperator
 
 
-def _run(coro):
-    """Run a coroutine synchronously in tests."""
+def _run(coro_or_result):
+    """Run a coroutine synchronously in tests; pass through plain values."""
+    if not asyncio.iscoroutine(coro_or_result):
+        return coro_or_result
     loop = asyncio.new_event_loop()
     try:
-        return loop.run_until_complete(coro)
+        return loop.run_until_complete(coro_or_result)
     finally:
         loop.close()
 

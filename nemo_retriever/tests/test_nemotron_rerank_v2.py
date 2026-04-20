@@ -19,9 +19,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
-def _run(coro):
-    """Run a coroutine synchronously in tests."""
-    return asyncio.new_event_loop().run_until_complete(coro)
+def _run(coro_or_result):
+    """Run a coroutine synchronously in tests; pass through plain values."""
+    if not asyncio.iscoroutine(coro_or_result):
+        return coro_or_result
+    return asyncio.new_event_loop().run_until_complete(coro_or_result)
 
 
 # ---------------------------------------------------------------------------

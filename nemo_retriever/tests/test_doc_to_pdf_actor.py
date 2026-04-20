@@ -12,9 +12,11 @@ from nemo_retriever.graph.abstract_operator import AbstractOperator
 from nemo_retriever.utils.convert.to_pdf import DocToPdfConversionActor, convert_to_pdf_bytes, convert_batch_to_pdf
 
 
-def _run(coro):
-    """Run a coroutine synchronously in tests."""
-    return asyncio.new_event_loop().run_until_complete(coro)
+def _run(coro_or_result):
+    """Run a coroutine synchronously in tests; pass through plain values."""
+    if not asyncio.iscoroutine(coro_or_result):
+        return coro_or_result
+    return asyncio.new_event_loop().run_until_complete(coro_or_result)
 
 
 class TestConvertToPdfBytes:

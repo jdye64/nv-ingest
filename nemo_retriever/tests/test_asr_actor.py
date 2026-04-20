@@ -23,9 +23,11 @@ from nemo_retriever.audio.asr_actor import apply_asr_to_df
 from nemo_retriever.params import ASRParams
 
 
-def _run(coro):
-    """Run a coroutine synchronously in tests."""
-    return asyncio.new_event_loop().run_until_complete(coro)
+def _run(coro_or_result):
+    """Run a coroutine synchronously in tests; pass through plain values."""
+    if not asyncio.iscoroutine(coro_or_result):
+        return coro_or_result
+    return asyncio.new_event_loop().run_until_complete(coro_or_result)
 
 
 def test_strip_pad_from_transcript():

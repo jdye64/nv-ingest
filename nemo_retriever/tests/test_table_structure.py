@@ -18,9 +18,11 @@ import pytest
 from nemo_retriever.utils.table_and_chart import join_table_structure_and_ocr_output
 
 
-def _run(coro):
-    """Run a coroutine synchronously in tests."""
-    return asyncio.new_event_loop().run_until_complete(coro)
+def _run(coro_or_result):
+    """Run a coroutine synchronously in tests; pass through plain values."""
+    if not asyncio.iscoroutine(coro_or_result):
+        return coro_or_result
+    return asyncio.new_event_loop().run_until_complete(coro_or_result)
 
 
 def _can_import(mod: str) -> bool:
