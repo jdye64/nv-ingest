@@ -84,6 +84,8 @@ local = [
   "nemotron-table-structure-v1>=0.dev0",
   "nemotron-ocr>=0.dev0; sys_platform == 'linux'",
   "nvidia-ml-py",
+  "apscheduler>=3.10",
+  "psutil>=5.9.0",
   "vllm==0.16.0; sys_platform == 'linux'",
 ]
 
@@ -165,3 +167,6 @@ explicit = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"nemo_retriever.harness.portal" = ["static/**/*"]

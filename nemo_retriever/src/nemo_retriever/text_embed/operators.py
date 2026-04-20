@@ -8,13 +8,21 @@ from __future__ import annotations
 
 from typing import Any
 
+from nemo_retriever.graph.designer import designer_component
 from nemo_retriever.graph.operator_archetype import ArchetypeOperator
 from nemo_retriever.text_embed.runtime import embed_text_main_text_embed
 
 __all__ = ["BatchEmbedActor", "embed_text_main_text_embed"]
 
 
-class BatchEmbedActor(ArchetypeOperator):
+@designer_component(
+    name="Batch Embedder",
+    category="Embeddings & Ranking",
+    compute="gpu",
+    description="Generates embeddings in batches using configurable embedding parameters",
+    category_color="#e06cff",
+)
+class _BatchEmbedActor(ArchetypeOperator):
     """Graph-facing batch embedding archetype."""
 
     @classmethod
@@ -39,6 +47,9 @@ class BatchEmbedActor(ArchetypeOperator):
         super().__init__(params=params)
 
 
+BatchEmbedActor = _BatchEmbedActor
+
+
 def __getattr__(name: str):
     if name == "BatchEmbedCPUActor":
         from nemo_retriever.text_embed.cpu_operator import BatchEmbedCPUActor
@@ -48,9 +59,6 @@ def __getattr__(name: str):
         from nemo_retriever.text_embed.gpu_operator import BatchEmbedGPUActor
 
         return BatchEmbedGPUActor
-    # Backward compatibility aliases
-    if name == "_BatchEmbedActor":
-        return BatchEmbedActor
     if name == "_BatchEmbedCPUActor":
         from nemo_retriever.text_embed.cpu_operator import BatchEmbedCPUActor
 
