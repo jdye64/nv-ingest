@@ -8,8 +8,11 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import base64
 import io
+import logging
 import time
 import traceback
+
+logger = logging.getLogger(__name__)
 
 import pandas as pd
 from nemo_retriever.nim.nim import NIMClient, invoke_image_inference_batches
@@ -783,7 +786,7 @@ async def agraphic_elements_ocr_page_elements(
                 chart_items.append({"bbox_xyxy_norm": bbox, "text": text})
 
         except BaseException as e:
-            print(f"Warning: graphic-elements+OCR failed: {type(e).__name__}: {e}")
+            logger.warning("graphic-elements+OCR failed: %s: %s", type(e).__name__, e, exc_info=True)
             row_error = {
                 "stage": "graphic_elements_ocr_page_elements",
                 "type": e.__class__.__name__,

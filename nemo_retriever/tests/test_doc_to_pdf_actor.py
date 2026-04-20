@@ -14,7 +14,7 @@ from nemo_retriever.utils.convert.to_pdf import DocToPdfConversionActor, convert
 
 def _run(coro):
     """Run a coroutine synchronously in tests."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.new_event_loop().run_until_complete(coro)
 
 
 class TestConvertToPdfBytes:

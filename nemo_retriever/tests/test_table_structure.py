@@ -20,7 +20,7 @@ from nemo_retriever.utils.table_and_chart import join_table_structure_and_ocr_ou
 
 def _run(coro):
     """Run a coroutine synchronously in tests."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.new_event_loop().run_until_complete(coro)
 
 
 def _can_import(mod: str) -> bool:

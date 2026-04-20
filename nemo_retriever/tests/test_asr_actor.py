@@ -25,7 +25,7 @@ from nemo_retriever.params import ASRParams
 
 def _run(coro):
     """Run a coroutine synchronously in tests."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.new_event_loop().run_until_complete(coro)
 
 
 def test_strip_pad_from_transcript():

@@ -22,7 +22,7 @@ __all__ = ["BatchEmbedActor", "embed_text_main_text_embed"]
     description="Generates embeddings in batches using configurable embedding parameters",
     category_color="#e06cff",
 )
-class _BatchEmbedActor(ArchetypeOperator):
+class BatchEmbedActor(ArchetypeOperator):
     """Graph-facing batch embedding archetype."""
 
     @classmethod
@@ -45,9 +45,6 @@ class _BatchEmbedActor(ArchetypeOperator):
 
     def __init__(self, params: Any) -> None:
         super().__init__(params=params)
-
-
-BatchEmbedActor = _BatchEmbedActor
 
 
 def __getattr__(name: str):

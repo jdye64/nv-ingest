@@ -77,9 +77,9 @@ class ArchetypeOperator(AbstractOperator):
     async def arun(self, data: Any, **kwargs: Any) -> Any:
         return await self._resolve_delegate().arun(data, **kwargs)
 
-    async def __call__(self, data: Any, **kwargs: Any) -> Any:
+    def __call__(self, data: Any, **kwargs: Any) -> Any:
         delegate = self._resolve_delegate()
-        return await delegate(data, **kwargs)
+        return delegate(data, **kwargs)
 
     def _resolve_delegate(self, resources: ClusterResources | Resources | None = None) -> AbstractOperator:
         if not hasattr(self, "_resolved_delegate"):

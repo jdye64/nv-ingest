@@ -27,7 +27,7 @@ from nemo_retriever.image.ray_data import ImageLoadActor  # noqa: E402
 
 def _run(coro):
     """Run a coroutine synchronously in tests."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.new_event_loop().run_until_complete(coro)
 
 
 # -- Helpers ------------------------------------------------------------------
