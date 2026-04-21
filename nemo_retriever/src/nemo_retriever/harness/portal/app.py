@@ -315,6 +315,7 @@ class JobCompleteRequest(BaseModel):
     error: str | None = None
     execution_commit: str | None = None
     num_gpus: int | None = None
+    gpus_used: int | None = None
     log_tail: list[str] | None = None
     pip_list: str | None = None
 
@@ -639,6 +640,27 @@ async def get_run_command(run_id: int):
         if p.is_file():
             return {"command": p.read_text(encoding="utf-8").strip()}
     return {"command": None}
+
+
+@app.get("/api/runs/{run_id}/graph")
+async def get_run_graph(run_id: int):
+    """Return the graph_json associated with a run (via run -> job -> graph chain)."""
+    row = history.get_run_by_id(run_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    job_id = row.get("job_id")
+    if not job_id:
+        return {"graph_json": None}
+    job = history.get_job_by_id(job_id)
+    if not job:
+        return {"graph_json": None}
+    graph_id = job.get("graph_id")
+    if not graph_id:
+        return {"graph_json": None}
+    graph = history.get_graph(graph_id)
+    if not graph:
+        return {"graph_json": None}
+    return {"graph_json": graph.get("graph_json")}
 
 
 @app.delete("/api/runs/{run_id}")
@@ -2458,6 +2480,7 @@ async def complete_job_endpoint(job_id: str, req: JobCompleteRequest):
         effective_error,
         execution_commit=req.execution_commit,
         num_gpus=req.num_gpus,
+        gpus_used=req.gpus_used,
     )
 
     return {"ok": True, "run_id": run_id}
@@ -2521,6 +2544,7 @@ def _record_run_from_job(
     error: str | None,
     execution_commit: str | None = None,
     num_gpus: int | None = None,
+    gpus_used: int | None = None,
 ) -> int | None:
     """Create a run record in the runs table from a completed job.
 
@@ -2577,6 +2601,7 @@ def _record_run_from_job(
             schedule_id=schedule_id,
             execution_commit=execution_commit,
             num_gpus=num_gpus,
+            gpus_used=gpus_used,
             job_id=job.get("id"),
             nsys_profile=int(bool(job.get("nsys_profile"))),
             dataset_id=job.get("dataset_id"),

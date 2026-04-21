@@ -856,6 +856,7 @@ _job_tracker = _JobTracker()
 _runner_ray_address: str | None = None
 _runner_run_code_ref: str | None = None
 _runner_num_gpus: int | None = None
+_runner_gpus_used: int | None = None
 
 DATASET_CACHE_DIR: Path = Path(
     os.environ.get("HARNESS_DATASET_CACHE_DIR", str(Path.home() / ".cache" / "harness" / "datasets"))
@@ -1559,6 +1560,7 @@ def _execute_job_on_runner(base_url: str, job: dict[str, Any], runner_id: int = 
                     "result": result,
                     "execution_commit": execution_commit,
                     "num_gpus": _runner_num_gpus,
+                    "gpus_used": _runner_gpus_used,
                     "log_tail": final_log_tail,
                     "pip_list": pip_list_output,
                 },
@@ -1573,6 +1575,7 @@ def _execute_job_on_runner(base_url: str, job: dict[str, Any], runner_id: int = 
                     "result": result,
                     "execution_commit": execution_commit,
                     "num_gpus": _runner_num_gpus,
+                    "gpus_used": _runner_gpus_used,
                     "log_tail": final_log_tail,
                     "pip_list": pip_list_output,
                 },
@@ -1634,6 +1637,7 @@ def _execute_job_on_runner(base_url: str, job: dict[str, Any], runner_id: int = 
                     "result": result if isinstance(result, dict) else None,
                     "execution_commit": execution_commit,
                     "num_gpus": _runner_num_gpus,
+                    "gpus_used": _runner_gpus_used,
                     "log_tail": _job_tracker.get_log_tail(_LOG_TAIL_MAX),
                     "pip_list": err_pip_list,
                 },
@@ -1754,6 +1758,14 @@ def runner_start_command(
     global _runner_num_gpus  # noqa: PLW0603
     _runner_num_gpus = num_gpus if num_gpus is not None else meta.get("gpu_count")
     typer.echo(f"  Num GPUs : {_runner_num_gpus or 'auto'}")
+
+    global _runner_gpus_used  # noqa: PLW0603
+    cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if cuda_visible is not None and cuda_visible.strip():
+        _runner_gpus_used = len([d for d in cuda_visible.split(",") if d.strip()])
+    else:
+        _runner_gpus_used = _runner_num_gpus
+    typer.echo(f"  GPUs Used: {_runner_gpus_used or 'auto'}")
 
     update_marker = _read_and_clear_update_marker()
     if update_marker:

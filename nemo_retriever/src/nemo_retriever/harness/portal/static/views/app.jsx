@@ -1,15 +1,18 @@
 /* ===== App ===== */
 function _parseHash() {
   const h = window.location.hash.replace(/^#/, "");
-  if (!h) return { view: "runs", runId: null };
+  if (!h) return { view: "runs", runId: null, subParam: null };
   const parts = h.split("/");
-  return { view: parts[0] || "runs", runId: parts[1] || null };
+  const view = parts[0] || "runs";
+  if (view === "runs") return { view, runId: parts[1] || null, subParam: null };
+  return { view, runId: null, subParam: parts.slice(1).join("/") ? decodeURIComponent(parts.slice(1).join("/")) : null };
 }
 
 function App() {
   const initial = _parseHash();
   const [activeView, setActiveView] = useState(initial.view);
   const [pendingDeepLinkRunId, setPendingDeepLinkRunId] = useState(initial.runId);
+  const [presetDeepLink, setPresetDeepLink] = useState(initial.view === "presets" ? initial.subParam : null);
   const [runs, setRuns] = useState([]);
   const [datasets, setDatasets] = useState([]);
   const [filterDataset, setFilterDataset] = useState("");
@@ -125,12 +128,15 @@ function App() {
   // Sync URL hash <-> activeView & deep-link run modal
   useEffect(() => {
     function onHashChange() {
-      const { view, runId } = _parseHash();
+      const { view, runId, subParam } = _parseHash();
       setActiveView(view);
       if (view === "runs" && runId) {
         fetch(`/api/runs/${runId}`).then(r => r.json()).then(setSelectedRun).catch(() => {});
       } else {
         setSelectedRun(null);
+      }
+      if (view === "presets" && subParam) {
+        setPresetDeepLink(subParam);
       }
     }
     window.addEventListener("hashchange", onHashChange);
@@ -308,7 +314,8 @@ function App() {
           {activeView==="presets" && (
             <PresetsView managedPresets={managedPresets} yamlPresets={yamlPresets}
               loading={managedPresetsLoading} onRefresh={()=>{fetchManagedPresets();fetchPresetMatrices();}}
-              presetMatrices={presetMatrices} presetMatricesLoading={presetMatricesLoading} />
+              presetMatrices={presetMatrices} presetMatricesLoading={presetMatricesLoading}
+              initialExpandPreset={presetDeepLink} onClearDeepLink={() => setPresetDeepLink(null)} />
           )}
           {activeView==="runners" && <RunnersView runners={runners} loading={runnersLoading} onRefresh={fetchRunners} githubRepoUrl={githubRepoUrl} />}
           {activeView==="scheduling" && <SchedulingView schedules={schedules} loading={schedulesLoading} onRefresh={fetchSchedules} runners={runners} />}

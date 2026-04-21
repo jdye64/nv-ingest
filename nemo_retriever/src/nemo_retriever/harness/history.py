@@ -304,6 +304,7 @@ _MIGRATIONS = [
     "ALTER TABLE jobs ADD COLUMN dataset_config_hash TEXT",
     "ALTER TABLE runs ADD COLUMN dataset_id INTEGER",
     "ALTER TABLE runs ADD COLUMN dataset_config_hash TEXT",
+    "ALTER TABLE runs ADD COLUMN gpus_used INTEGER",
 ]
 
 RUNNER_MISSED_HEARTBEATS_THRESHOLD = 4
@@ -380,6 +381,7 @@ def record_run(
     schedule_id: int | None = None,
     execution_commit: str | None = None,
     num_gpus: int | None = None,
+    gpus_used: int | None = None,
     job_id: str | None = None,
     nsys_profile: int = 0,
     dataset_id: int | None = None,
@@ -418,6 +420,7 @@ def record_run(
             "ray_dashboard_url": run_meta.get("ray_dashboard_url"),
             "execution_commit": execution_commit,
             "num_gpus": num_gpus,
+            "gpus_used": gpus_used,
             "job_id": job_id,
             "nsys_profile": nsys_profile,
             "dataset_id": dataset_id,
@@ -452,7 +455,7 @@ def get_runs(
             " recall_10, files, tags,"
             " artifact_dir, hostname, gpu_type, trigger_source, schedule_id,"
             " ray_cluster_mode, ray_dashboard_url, execution_commit, num_gpus,"
-            " nsys_profile"
+            " gpus_used, nsys_profile"
             " FROM runs WHERE 1=1"
         )
         params: list[Any] = []

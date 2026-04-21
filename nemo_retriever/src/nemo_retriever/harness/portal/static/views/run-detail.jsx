@@ -1,4 +1,204 @@
 /* ===== Run Detail Modal ===== */
+
+function FormattedCommand({ command }) {
+  if (!command) return null;
+  const tokens = command.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [command];
+  const groups = [];
+  let i = 0;
+  while (i < tokens.length) {
+    const t = tokens[i];
+    if (t.startsWith("--")) {
+      const flag = t;
+      const vals = [];
+      i++;
+      while (i < tokens.length && !tokens[i].startsWith("--")) {
+        vals.push(tokens[i]);
+        i++;
+      }
+      groups.push({ flag, value: vals.join(" ") });
+    } else {
+      groups.push({ flag: null, value: t });
+      i++;
+    }
+  }
+  return (
+    <div style={{
+      padding:'14px 16px',borderRadius:'8px',
+      background:'var(--nv-bg)',border:'1px solid var(--nv-border)',
+      maxHeight:'260px',overflow:'auto',lineHeight:'1.7',
+    }}>
+      {groups.map((g, idx) => (
+        <div key={idx} style={{display:'flex',gap:'8px',alignItems:'baseline',fontSize:'12px'}}>
+          {g.flag ? (
+            <>
+              <span className="mono" style={{color:'#64b4ff',fontWeight:600,whiteSpace:'nowrap'}}>{g.flag}</span>
+              {g.value && <span className="mono" style={{color:'var(--nv-green)',wordBreak:'break-all'}}>{g.value}</span>}
+            </>
+          ) : (
+            <span className="mono" style={{color:'var(--nv-text-muted)',wordBreak:'break-all'}}>{g.value}</span>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function GraphPreview({ runId }) {
+  const [graphData, setGraphData] = useState(null);
+  const [graphLoading, setGraphLoading] = useState(false);
+  const [graphError, setGraphError] = useState(null);
+  const [showGraph, setShowGraph] = useState(false);
+  const [expandedNodes, setExpandedNodes] = useState({});
+
+  useEffect(() => {
+    if (showGraph && graphData === null && !graphLoading) {
+      setGraphLoading(true);
+      fetch(`/api/runs/${runId}/graph`)
+        .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+        .then(data => {
+          if (data.graph_json) {
+            const gj = typeof data.graph_json === 'string' ? JSON.parse(data.graph_json) : data.graph_json;
+            setGraphData(gj);
+          } else {
+            setGraphError("No graph data associated with this run.");
+          }
+        })
+        .catch(() => setGraphError("No graph data associated with this run."))
+        .finally(() => setGraphLoading(false));
+    }
+  }, [showGraph, graphData, graphLoading, runId]);
+
+  function toggleNode(nodeId) {
+    setExpandedNodes(prev => ({ ...prev, [nodeId]: !prev[nodeId] }));
+  }
+
+  const catColors = {
+    'Document Processing': { bg: 'rgba(0,150,255,0.1)', border: 'rgba(0,150,255,0.3)', text: '#4da6ff' },
+    'Detection & OCR': { bg: 'rgba(118,185,0,0.1)', border: 'rgba(118,185,0,0.3)', text: '#76b900' },
+    'Embedding': { bg: 'rgba(180,100,255,0.1)', border: 'rgba(180,100,255,0.3)', text: '#b464ff' },
+    'Storage': { bg: 'rgba(255,165,0,0.1)', border: 'rgba(255,165,0,0.3)', text: '#ffa500' },
+    'Evaluation': { bg: 'rgba(255,100,100,0.1)', border: 'rgba(255,100,100,0.3)', text: '#ff6464' },
+  };
+  const defaultCat = { bg: 'rgba(150,150,150,0.08)', border: 'rgba(150,150,150,0.2)', text: '#aaa' };
+
+  return (
+    <div style={{marginBottom:'28px'}}>
+      <div className="section-title"
+        style={{cursor:'pointer',userSelect:'none',display:'flex',alignItems:'center',gap:'8px'}}
+        onClick={() => setShowGraph(!showGraph)}
+      >
+        <span style={{transform:showGraph?'rotate(90deg)':'rotate(0deg)',transition:'transform 0.15s',display:'inline-block',fontSize:'10px'}}>{"\u25B6"}</span>
+        Pipeline Graph
+      </div>
+      {showGraph && (
+        graphLoading ? (
+          <div style={{padding:'12px',color:'var(--nv-text-muted)',fontSize:'13px'}}><span className="spinner" style={{marginRight:'8px'}}></span>Loading…</div>
+        ) : graphError ? (
+          <div style={{padding:'12px',color:'var(--nv-text-dim)',fontSize:'13px',fontStyle:'italic'}}>{graphError}</div>
+        ) : graphData && graphData.nodes ? (
+          <div style={{
+            padding:'16px',borderRadius:'8px',
+            background:'rgba(0,0,0,0.2)',border:'1px solid var(--nv-border)',
+            overflowX:'auto',
+          }}>
+            <div style={{display:'flex',gap:'0',alignItems:'stretch',minWidth:'fit-content'}}>
+              {(() => {
+                const nodes = graphData.nodes || [];
+                const edges = graphData.edges || [];
+                const ordered = [];
+                const visited = new Set();
+                const adjMap = {};
+                edges.forEach(e => { adjMap[e.source] = adjMap[e.source] || []; adjMap[e.source].push(e.target); });
+                const sources = nodes.filter(n => !edges.some(e => e.target === n.id));
+                const queue = sources.length > 0 ? [...sources] : (nodes.length > 0 ? [nodes[0]] : []);
+                while (queue.length > 0) {
+                  const node = queue.shift();
+                  if (visited.has(node.id)) continue;
+                  visited.add(node.id);
+                  ordered.push(node);
+                  (adjMap[node.id] || []).forEach(tid => {
+                    const tnode = nodes.find(n => n.id === tid);
+                    if (tnode && !visited.has(tnode.id)) queue.push(tnode);
+                  });
+                }
+                nodes.forEach(n => { if (!visited.has(n.id)) ordered.push(n); });
+
+                return ordered.map((node, idx) => {
+                  const label = (node.data && node.data.label) || node.type || 'Unknown';
+                  const category = (node.data && node.data.category) || '';
+                  const compute = (node.data && node.data.compute) || '';
+                  const colors = catColors[category] || defaultCat;
+                  const kwargs = (node.data && node.data.kwargs) || (node.data && node.data.params) || {};
+                  const kwEntries = Object.entries(kwargs).filter(([k]) => k !== 'label' && k !== 'category' && k !== 'compute');
+                  const isExpanded = expandedNodes[node.id];
+                  const hasNext = idx < ordered.length - 1;
+
+                  return (
+                    <React.Fragment key={node.id}>
+                      <div style={{
+                        minWidth:'180px',maxWidth:'260px',borderRadius:'8px',
+                        border:`1px solid ${colors.border}`,background:colors.bg,
+                        padding:'12px 14px',display:'flex',flexDirection:'column',gap:'6px',
+                        flexShrink:0,
+                      }}>
+                        <div style={{display:'flex',alignItems:'center',gap:'8px',justifyContent:'space-between'}}>
+                          <span style={{fontSize:'13px',fontWeight:700,color:'#fff'}}>{label}</span>
+                          {compute && (
+                            <span style={{
+                              fontSize:'9px',padding:'1px 5px',borderRadius:'3px',textTransform:'uppercase',fontWeight:700,letterSpacing:'0.05em',
+                              background: compute === 'gpu' ? 'rgba(118,185,0,0.2)' : 'rgba(100,180,255,0.2)',
+                              color: compute === 'gpu' ? '#76b900' : '#64b4ff',
+                            }}>{compute}</span>
+                          )}
+                        </div>
+                        {category && <span style={{fontSize:'10px',color:colors.text,fontWeight:500}}>{category}</span>}
+                        {kwEntries.length > 0 && (
+                          <div>
+                            <div style={{
+                              fontSize:'10px',color:'var(--nv-text-dim)',cursor:'pointer',userSelect:'none',
+                              display:'flex',alignItems:'center',gap:'4px',marginTop:'2px',
+                            }} onClick={() => toggleNode(node.id)}>
+                              <span style={{transform:isExpanded?'rotate(90deg)':'rotate(0deg)',transition:'transform 0.1s',display:'inline-block'}}>{"\u25B6"}</span>
+                              {kwEntries.length} param{kwEntries.length !== 1 ? 's' : ''}
+                            </div>
+                            {isExpanded && (
+                              <div style={{
+                                marginTop:'6px',fontSize:'11px',
+                                display:'grid',gridTemplateColumns:'auto 1fr',gap:'2px 8px',
+                              }}>
+                                {kwEntries.map(([k, v]) => (
+                                  <React.Fragment key={k}>
+                                    <span className="mono" style={{color:'#64b4ff',whiteSpace:'nowrap'}}>{k}</span>
+                                    <span className="mono" style={{color:'var(--nv-text-muted)',wordBreak:'break-all'}}>
+                                      {typeof v === 'object' ? JSON.stringify(v) : String(v)}
+                                    </span>
+                                  </React.Fragment>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      {hasNext && (
+                        <div style={{display:'flex',alignItems:'center',flexShrink:0,padding:'0 2px'}}>
+                          <svg width="28" height="20" viewBox="0 0 28 20" style={{display:'block'}}>
+                            <line x1="0" y1="10" x2="20" y2="10" stroke="rgba(255,255,255,0.2)" strokeWidth="2" />
+                            <polygon points="18,5 28,10 18,15" fill="rgba(255,255,255,0.25)" />
+                          </svg>
+                        </div>
+                      )}
+                    </React.Fragment>
+                  );
+                });
+              })()}
+            </div>
+          </div>
+        ) : null
+      )}
+    </div>
+  );
+}
+
 function RunDetailModal({ run, onClose, onDelete, githubRepoUrl }) {
   if (!run) return null;
   const [showRaw, setShowRaw] = useState(false);
@@ -17,6 +217,7 @@ function RunDetailModal({ run, onClose, onDelete, githubRepoUrl }) {
   const [pipListLoading, setPipListLoading] = useState(false);
   const [showPlan, setShowPlan] = useState(false);
   const [showRayStats, setShowRayStats] = useState(false);
+  const [zipDownloading, setZipDownloading] = useState(false);
   const logRef = useRef(null);
   const raw = run.raw_json && typeof run.raw_json === 'object' && Object.keys(run.raw_json).length > 0 ? run.raw_json : run;
 
@@ -78,6 +279,28 @@ function RunDetailModal({ run, onClose, onDelete, githubRepoUrl }) {
     document.body.removeChild(ta);
   }
 
+  async function handleZipDownload() {
+    setZipDownloading(true);
+    try {
+      const res = await fetch(`/api/runs/${run.id}/download/zip`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const ds = (run.dataset || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_');
+      a.download = `run_${run.id}_${ds}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert("Failed to download artifacts: " + err.message);
+    } finally {
+      setZipDownloading(false);
+    }
+  }
+
   async function handleRerunClick() {
     try {
       const res = await fetch(`/api/runs/${run.id}/rerun-info`);
@@ -113,6 +336,8 @@ function RunDetailModal({ run, onClose, onDelete, githubRepoUrl }) {
       setRerunSubmitting(false);
     }
   }
+
+  const effectiveCommit = run.execution_commit || run.git_commit;
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -208,21 +433,23 @@ function RunDetailModal({ run, onClose, onDelete, githubRepoUrl }) {
               </div>
               <div className="detail-item">
                 <div className="detail-label">Git Commit</div>
-                <div className="detail-value"><CommitLink sha={run.git_commit} repoUrl={githubRepoUrl} truncate={0} style={{fontSize:'13px'}} /></div>
+                <div className="detail-value"><CommitLink sha={effectiveCommit} repoUrl={githubRepoUrl} truncate={0} style={{fontSize:'13px'}} /></div>
               </div>
-              {run.execution_commit && (
-                <div className="detail-item">
-                  <div className="detail-label">Execution Commit</div>
-                  <div className="detail-value"><CommitLink sha={run.execution_commit} repoUrl={githubRepoUrl} truncate={0} style={{fontSize:'13px'}} /></div>
-                </div>
-              )}
               <div className="detail-item">
                 <div className="detail-label">Dataset</div>
                 <div className="detail-value">{run.dataset}</div>
               </div>
               <div className="detail-item">
                 <div className="detail-label">Preset</div>
-                <div className="detail-value">{run.preset || "\u2014"}</div>
+                <div className="detail-value">
+                  {run.preset ? (
+                    <a href={`#presets/${encodeURIComponent(run.preset)}`}
+                      onClick={e => e.stopPropagation()}
+                      style={{color:'var(--nv-green)',textDecoration:'none',borderBottom:'1px dashed var(--nv-green)',cursor:'pointer',fontSize:'13px'}}>
+                      {run.preset}
+                    </a>
+                  ) : "\u2014"}
+                </div>
               </div>
               <div className="detail-item">
                 <div className="detail-label">Hostname</div>
@@ -233,8 +460,20 @@ function RunDetailModal({ run, onClose, onDelete, githubRepoUrl }) {
                 <div className="detail-value">{run.gpu_type || "\u2014"}</div>
               </div>
               <div className="detail-item">
-                <div className="detail-label">Num GPUs</div>
-                <div className="detail-value">{run.num_gpus != null ? run.num_gpus : "\u2014"}</div>
+                <div className="detail-label">GPUs</div>
+                <div className="detail-value">
+                  {run.gpus_used != null ? (
+                    <>
+                      <span style={{color:'#fff',fontWeight:600}}>{run.gpus_used}</span>
+                      <span style={{color:'var(--nv-text-muted)'}}> used</span>
+                      {run.num_gpus != null && (
+                        <span style={{color:'var(--nv-text-dim)'}}> / {run.num_gpus} available</span>
+                      )}
+                    </>
+                  ) : run.num_gpus != null ? (
+                    <span>{run.num_gpus}</span>
+                  ) : "\u2014"}
+                </div>
               </div>
               <div className="detail-item">
                 <div className="detail-label">Trigger Source</div>
@@ -278,15 +517,16 @@ function RunDetailModal({ run, onClose, onDelete, githubRepoUrl }) {
                 </div>
               )}
               <div className="detail-item">
-                <div className="detail-label">Status</div>
-                <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
-                  <StatusBadge success={run.success} />
-                  {run.failure_reason && <span style={{fontSize:'12px',color:'#ff5050'}}>{run.failure_reason}</span>}
-                </div>
-              </div>
-              <div className="detail-item">
                 <div className="detail-label">Artifact Directory</div>
-                <div className="detail-value mono" style={{fontSize:'11px',wordBreak:'break-all',color:'var(--nv-text-muted)'}}>{run.artifact_dir || "\u2014"}</div>
+                <div className="detail-value mono" style={{fontSize:'11px',wordBreak:'break-all',color:'var(--nv-text-muted)'}}>
+                  {run.artifact_dir ? (
+                    <>
+                      <span style={{color:'var(--nv-green)',fontWeight:600}}>{run.hostname || 'unknown-host'}</span>
+                      <span style={{color:'var(--nv-text-dim)'}}>:</span>
+                      {run.artifact_dir}
+                    </>
+                  ) : "\u2014"}
+                </div>
               </div>
             </div>
           </div>
@@ -304,19 +544,16 @@ function RunDetailModal({ run, onClose, onDelete, githubRepoUrl }) {
               commandLoading ? (
                 <div style={{padding:'12px',color:'var(--nv-text-muted)',fontSize:'13px'}}><span className="spinner" style={{marginRight:'8px'}}></span>Loading…</div>
               ) : commandText ? (
-                <div style={{position:'relative'}}>
-                  <pre className="mono" style={{
-                    fontSize:'12px',padding:'16px',borderRadius:'8px',
-                    background:'var(--nv-bg)',border:'1px solid var(--nv-border)',
-                    color:'var(--nv-green)',maxHeight:'200px',overflow:'auto',
-                    whiteSpace:'pre-wrap',wordBreak:'break-all',lineHeight:'1.6',
-                  }}>{commandText}</pre>
-                  <button className="btn btn-ghost btn-sm"
-                    style={{position:'absolute',top:'8px',right:'8px',fontSize:'11px',color:'var(--nv-text-dim)'}}
-                    onClick={() => { navigator.clipboard.writeText(commandText); }}
-                    title="Copy command">
-                    Copy
-                  </button>
+                <div>
+                  <div style={{display:'flex',justifyContent:'flex-end',marginBottom:'6px',gap:'6px'}}>
+                    <button className="btn btn-ghost btn-sm"
+                      style={{fontSize:'11px',color:'var(--nv-text-dim)'}}
+                      onClick={() => { navigator.clipboard.writeText(commandText); }}
+                      title="Copy raw command for re-execution">
+                      Copy Raw Command
+                    </button>
+                  </div>
+                  <FormattedCommand command={commandText} />
                 </div>
               ) : (
                 <div style={{padding:'12px',color:'var(--nv-text-dim)',fontSize:'13px',fontStyle:'italic'}}>Command not available (artifact may have been removed)</div>
@@ -573,7 +810,7 @@ function RunDetailModal({ run, onClose, onDelete, githubRepoUrl }) {
           )}
 
           {/* Raw JSON */}
-          <div>
+          <div style={{marginBottom:'28px'}}>
             <div className="section-title"
               style={{cursor:'pointer',userSelect:'none',display:'flex',alignItems:'center',gap:'8px'}}
               onClick={()=>setShowRaw(!showRaw)}
@@ -592,6 +829,9 @@ function RunDetailModal({ run, onClose, onDelete, githubRepoUrl }) {
               </pre>
             )}
           </div>
+
+          {/* Pipeline Graph */}
+          {run.job_id && <GraphPreview runId={run.id} />}
 
           {/* Nsys Profiling Status */}
           {raw.nsys_status && raw.nsys_status.requested && (
@@ -622,9 +862,9 @@ function RunDetailModal({ run, onClose, onDelete, githubRepoUrl }) {
           <a href={`/api/runs/${run.id}/download/json`} download className="btn btn-secondary">
             <IconFile /> Download JSON
           </a>
-          <a href={`/api/runs/${run.id}/download/zip`} download className="btn btn-primary">
-            <IconPackage /> Download Artifacts ZIP
-          </a>
+          <button className="btn btn-primary" onClick={handleZipDownload} disabled={zipDownloading}>
+            {zipDownloading ? <><span className="spinner" style={{marginRight:'6px'}}></span>Downloading…</> : <><IconPackage /> Download Artifacts ZIP</>}
+          </button>
           {!!run.nsys_profile && (
             <button className="btn btn-secondary" onClick={() => window.open(`/api/runs/${run.id}/download/nsys-profile`, '_blank')}
               title="Download the Nsight Systems profile captured during this run">
@@ -678,7 +918,7 @@ function RunDetailModal({ run, onClose, onDelete, githubRepoUrl }) {
                   {(rerunState.online_runners || []).map(r => (
                     <option key={r.id} value={r.id}>
                       #{r.id} — {r.name}{r.hostname ? ` (${r.hostname})` : ''}{r.gpu_type ? ` [${r.gpu_type}]` : ''}
-                      {rerunState.original_runner && r.id === rerunState.original_runner.id ? ' ★ original' : ''}
+                      {rerunState.original_runner && r.id === rerunState.original_runner.id ? ' \u2605 original' : ''}
                     </option>
                   ))}
                 </select>

@@ -25,7 +25,7 @@ const TUNING_GROUPS = [
   { label:"Embed", fields: TUNING_FIELDS.filter(f=>f.key.includes("embed")) },
 ];
 
-function PresetsView({ managedPresets, yamlPresets, loading, onRefresh, presetMatrices, presetMatricesLoading }) {
+function PresetsView({ managedPresets, yamlPresets, loading, onRefresh, presetMatrices, presetMatricesLoading, initialExpandPreset, onClearDeepLink }) {
   const [showForm, setShowForm] = useState(false);
   const [editPreset, setEditPreset] = useState(null);
   const [expandedId, setExpandedId] = useState(null);
@@ -35,6 +35,16 @@ function PresetsView({ managedPresets, yamlPresets, loading, onRefresh, presetMa
   const [importing, setImporting] = useState(false);
   const allPresets = managedPresets;
   const pg = usePagination(allPresets, 25);
+
+  useEffect(() => {
+    if (initialExpandPreset && managedPresets.length > 0) {
+      const match = managedPresets.find(p => p.name === initialExpandPreset);
+      if (match) {
+        setExpandedId(match.id);
+      }
+      if (onClearDeepLink) onClearDeepLink();
+    }
+  }, [initialExpandPreset, managedPresets]);
   const matrices = presetMatrices || [];
   const mxPg = usePagination(matrices, 25);
 
