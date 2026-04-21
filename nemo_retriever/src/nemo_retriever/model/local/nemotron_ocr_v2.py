@@ -73,11 +73,8 @@ class NemotronOCRV2(BaseModel):
             "enabled_precisions": {torch.float16},
         }
         if hasattr(torch_tensorrt, "compile"):
-            for k in ("torch_executed_ops", "torch_executed_modules"):
-                if k == "torch_executed_ops":
-                    compile_kwargs[k] = {"torchvision::nms"}
-                elif k == "torch_executed_modules":
-                    compile_kwargs[k] = set()
+            compile_kwargs["torch_executed_ops"] = {"torchvision::nms"}
+            compile_kwargs["torch_executed_modules"] = set()
             try:
                 self._model.detector = torch_tensorrt.compile(detector, **compile_kwargs)
             except Exception:
