@@ -1116,6 +1116,16 @@ function DesignerView() {
     }
   }
 
+  async function handleDuplicateGraph(id) {
+    try {
+      const res = await fetch(`/api/graphs/${id}/duplicate`, { method:'POST' });
+      if (!res.ok) throw new Error('Duplicate failed');
+      fetchGraphs();
+    } catch (err) {
+      console.error('Duplicate failed:', err);
+    }
+  }
+
   async function handleDeleteGraph(id) {
     if (!confirm('Delete this saved graph?')) return;
     try {
@@ -1194,7 +1204,13 @@ function DesignerView() {
                     <td style={{padding:'8px 12px',color:'var(--nv-text-dim)'}}>{g.created_at?.substring(0,16).replace('T',' ')}</td>
                     <td style={{padding:'8px 12px',color:'var(--nv-text-dim)'}}>{g.updated_at?.substring(0,16).replace('T',' ')}</td>
                     <td style={{padding:'8px 12px'}} onClick={e=>e.stopPropagation()}>
+                      <button className="btn btn-ghost btn-sm" onClick={() => handleDuplicateGraph(g.id)}
+                        title="Duplicate graph"
+                        style={{fontSize:'10px',color:'var(--nv-text-dim)',padding:'2px 6px'}}>
+                        <IconCopy />
+                      </button>
                       <button className="btn btn-ghost btn-sm" onClick={() => handleDeleteGraph(g.id)}
+                        title="Delete graph"
                         style={{fontSize:'10px',color:'#ff5050',padding:'2px 6px'}}>
                         <IconTrash />
                       </button>

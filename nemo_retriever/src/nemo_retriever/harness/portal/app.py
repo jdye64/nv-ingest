@@ -4210,6 +4210,14 @@ async def update_graph_endpoint(graph_id: int, req: GraphUpdateRequest):
     return g
 
 
+@app.post("/api/graphs/{graph_id}/duplicate")
+async def duplicate_graph_endpoint(graph_id: int):
+    g = history.duplicate_graph(graph_id)
+    if not g:
+        raise HTTPException(404, "Graph not found")
+    return g
+
+
 @app.delete("/api/graphs/{graph_id}")
 async def delete_graph_endpoint(graph_id: int):
     ok = history.delete_graph(graph_id)

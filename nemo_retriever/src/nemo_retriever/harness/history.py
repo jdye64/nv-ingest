@@ -2640,6 +2640,21 @@ def update_graph(graph_id: int, data: dict[str, Any], db_path: str | None = None
         conn.close()
 
 
+def duplicate_graph(graph_id: int, db_path: str | None = None) -> dict[str, Any] | None:
+    original = get_graph(graph_id, db_path)
+    if not original:
+        return None
+    return create_graph(
+        {
+            "name": f"{original['name']} (copy)",
+            "description": original.get("description") or "",
+            "graph_json": original["graph_json"],
+            "generated_code": original.get("generated_code") or "",
+        },
+        db_path,
+    )
+
+
 def delete_graph(graph_id: int, db_path: str | None = None) -> bool:
     conn = _connect(db_path)
     try:
