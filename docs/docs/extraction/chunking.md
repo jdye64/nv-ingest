@@ -1,10 +1,15 @@
 # Split Documents
 
+!!! note
+
+    This documentation describes NeMo Retriever Library.
+
+
 Splitting, also known as chunking, breaks large documents or text into smaller, manageable sections to improve retrieval efficiency. 
 After chunking, only the most relevant pieces of information are retrieved for a given query. 
 Chunking also prevents text from exceeding the context window of the embedding model.
 
-There are two ways that the retriever pipeline chunks text:
+There are two ways that NV Ingest chunks text:
 
 - By using the `text_depth` parameter in the `extraction` task.
 - Token-based splitting by using the `split` task.
@@ -93,7 +98,7 @@ The following table contains the `split` parameters.
 
 ### Pre-download the Tokenizer
 
-By default, the NeMo Retriever Library container comes with the `meta-llama/Llama-3.2-1B` tokenizer pre-downloaded 
+By default, the NV Ingest container comes with the `meta-llama/Llama-3.2-1B` tokenizer pre-downloaded 
 so that it doesn't have to download a tokenizer at runtime.
 If you are building the container yourself and want to pre-download this model, do the following:
 
@@ -108,4 +113,4 @@ If you are building the container yourself and want to pre-download this model, 
 
 - [Use the Python API](python-api-reference.md)
 - [NeMo Retriever Library V2 API Guide](v2-api-guide.md)
-- [Environment Variables](environment-config.md)
+- [Environment variables](environment-config.md)

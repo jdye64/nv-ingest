@@ -1,4 +1,9 @@
 # Contributing to NeMo Retriever Library
 
-External contributions to NeMo Retriever Library will be welcome soon, and they are greatly appreciated! 
-For more information, refer to [Contributing to NeMo Retriever Library](https://github.com/NVIDIA/NeMo-Retriever/blob/main/CONTRIBUTING.md).
+!!! note
+
+    This documentation describes NeMo Retriever Library.
+
+
+External contributions will be welcome soon, and they are greatly appreciated! 
+For more information, refer to [Contributing to NeMo Retriever](https://github.com/NVIDIA/NeMo-Retriever/blob/main/CONTRIBUTING.md).

@@ -1,11 +1,11 @@
 # Notebooks for NeMo Retriever Library
 
-To get started using [NeMo Retriever Library](overview.md), you can try one of the ready-made notebooks that are available.
-
 !!! note
 
-    NVIDIA Ingest (nv-ingest) has been renamed to the NeMo Retriever Library.
+    This documentation describes NeMo Retriever Library.
 
+
+To get started using [NeMo Retriever Library](overview.md), you can try one of the ready-made notebooks that are available.
 
 ## Dataset Downloads for Benchmarking
 
@@ -15,8 +15,8 @@ If you plan to run benchmarking or evaluation tests, you must download the [Benc
 
 To get started with the basics, try one of the following notebooks:
 
-- [NeMo Retriever Library: CLI Client Quick Start Guide](https://github.com/NVIDIA/NeMo-Retriever/blob/main/client/client_examples/examples/cli_client_usage.ipynb)
-- [NeMo Retriever Library: Python Client Quick Start Guide](https://github.com/NVIDIA/NeMo-Retriever/blob/main/client/client_examples/examples/python_client_usage.ipynb)
+- [CLI Quick Start Guide](https://github.com/NVIDIA/NeMo-Retriever/blob/main/client/client_examples/examples/cli_client_usage.ipynb)
+- [Python Quick Start Guide](https://github.com/NVIDIA/NeMo-Retriever/blob/main/client/client_examples/examples/python_client_usage.ipynb)
 - [How to add metadata to your documents and filter searches](https://github.com/NVIDIA/NeMo-Retriever/blob/main/examples/metadata_and_filtered_search.ipynb)
 - [How to reindex a collection](https://github.com/NVIDIA/NeMo-Retriever/blob/main/examples/reindex_example.ipynb)
 
@@ -37,4 +37,4 @@ For more advanced scenarios, try one of the following notebooks:
 - [Support Matrix](support-matrix.md)
 - [Deploy Without Containers (Library Mode)](quickstart-library-mode.md)
 - [Deploy With Docker Compose (Self-Hosted)](quickstart-guide.md)
-- [Deploy With Helm](helm.md)
+- [Deploy with Helm](https://github.com/NVIDIA/NeMo-Retriever/blob/main/helm/README.md)

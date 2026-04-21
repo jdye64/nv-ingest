@@ -4,7 +4,7 @@ Use this documentation to troubleshoot issues that arise when you use [NeMo Retr
 
 !!! note
 
-    NVIDIA Ingest (nv-ingest) has been renamed to the NeMo Retriever Library.
+    This documentation describes NeMo Retriever Library.
 
 
 ## Can't process long, non-language text strings
@@ -40,7 +40,7 @@ Before you change the `-u` setting, consider the following:
 - For `-u` we recommend 10,000 as a baseline, but you might need to raise or lower it based on your actual usage and system configuration.
 
 ```bash
-ulimit -u 10,000
+ulimit -u 10000
 ```
 
 
@@ -89,7 +89,7 @@ Before you change the `-n` setting, consider the following:
 - For `-n` we recommend 10,000 as a baseline, but you might need to raise or lower it based on your actual usage and system configuration.
 
 ```bash
-ulimit -n 10,000
+ulimit -n 10000
 ```
 
 
@@ -133,4 +133,4 @@ ERROR 2025-04-24 22:49:44.434 nimutils.py:68] }
 - [Prerequisites](prerequisites.md)
 - [Deploy Without Containers (Library Mode)](quickstart-library-mode.md)
 - [Deploy With Docker Compose (Self-Hosted)](quickstart-guide.md)
-- [Deploy With Helm](helm.md)
+- [Deploy with Helm](https://github.com/NVIDIA/NeMo-Retriever/blob/main/helm/README.md)
