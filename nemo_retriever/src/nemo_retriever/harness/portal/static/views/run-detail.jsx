@@ -460,7 +460,7 @@ function RunDetailModal({ run, onClose, onDelete, githubRepoUrl }) {
                     const linkTarget = isGraph ? '#designer' : `#presets/${encodeURIComponent(run.preset)}`;
                     return (
                       <a href={linkTarget}
-                        onClick={e => e.stopPropagation()}
+                        onClick={e => { e.stopPropagation(); onClose(); }}
                         style={{color:'var(--nv-green)',textDecoration:'none',borderBottom:'1px dashed var(--nv-green)',cursor:'pointer',fontSize:'13px'}}
                         title={isGraph ? 'Open Pipeline Designer' : 'View preset configuration'}>
                         {run.preset}{isGraph ? ' (graph)' : ''}
@@ -480,14 +480,13 @@ function RunDetailModal({ run, onClose, onDelete, githubRepoUrl }) {
               <div className="detail-item">
                 <div className="detail-label">GPUs</div>
                 <div className="detail-value">
-                  {run.num_gpus != null ? (() => {
-                    const used = run.gpus_used != null ? run.gpus_used : run.num_gpus;
-                    return <>
-                      <span style={{color:'#fff',fontWeight:600}}>{used}</span>
+                  {run.num_gpus != null ? (
+                    <>
+                      <span style={{color:'#fff',fontWeight:600}}>{run.gpus_used != null ? run.gpus_used : 'N/A'}</span>
                       <span style={{color:'var(--nv-text-muted)'}}> used</span>
                       <span style={{color:'var(--nv-text-dim)'}}> / {run.num_gpus} available</span>
-                    </>;
-                  })() : "\u2014"}
+                    </>
+                  ) : "\u2014"}
                 </div>
               </div>
               <div className="detail-item">

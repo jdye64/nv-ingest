@@ -37,11 +37,10 @@ function PresetsView({ managedPresets, yamlPresets, loading, onRefresh, presetMa
   const pg = usePagination(allPresets, 25);
 
   useEffect(() => {
-    if (initialExpandPreset && managedPresets.length > 0) {
-      const match = managedPresets.find(p => p.name === initialExpandPreset);
-      if (match) {
-        setExpandedId(match.id);
-      }
+    if (!initialExpandPreset || managedPresets.length === 0) return;
+    const match = managedPresets.find(p => p.name === initialExpandPreset);
+    if (match) {
+      setExpandedId(match.id);
       if (onClearDeepLink) onClearDeepLink();
     }
   }, [initialExpandPreset, managedPresets]);
