@@ -1336,6 +1336,12 @@ def _execute_job_on_runner(base_url: str, job: dict[str, Any], runner_id: int = 
     if is_graph_job and graph_meta.get("ray_address") and "ray_address" not in overrides:
         overrides["ray_address"] = graph_meta["ray_address"]
 
+    _GRAPH_EVAL_KEYS = ("query_csv", "recall_required", "recall_match_mode", "recall_adapter", "evaluation_mode")
+    if is_graph_job:
+        for _gk in _GRAPH_EVAL_KEYS:
+            if _gk in graph_meta and _gk not in overrides:
+                overrides[_gk] = graph_meta[_gk]
+
     if is_graph_job and not graph_code.strip():
         logger.error("Job %s is a graph job but has no graph_code — completing as failed", job_id)
         _post_json(

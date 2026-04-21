@@ -4263,6 +4263,22 @@ async def run_graph_endpoint(graph_id: int, req: GraphRunRequest):
                 if paths_val:
                     input_path = paths_val
                 break
+        _EVAL_KEY_MAP = {
+            "query_csv": "query_csv",
+            "recall_required": "recall_required",
+            "match_mode": "recall_match_mode",
+            "recall_adapter": "recall_adapter",
+            "evaluation_mode": "evaluation_mode",
+        }
+        for node in gj.get("nodes") or []:
+            op = node.get("operator") or {}
+            if op.get("type") == "pipeline_evaluator":
+                cfg = node.get("config") or {}
+                for src_key, meta_key in _EVAL_KEY_MAP.items():
+                    val = cfg.get(src_key)
+                    if val is not None and val != "":
+                        graph_meta[meta_key] = val
+                break
     except Exception:
         pass
 
