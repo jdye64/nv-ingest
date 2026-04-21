@@ -95,40 +95,53 @@ function GraphPreview({ runId }) {
           <div style={{padding:'12px',color:'var(--nv-text-muted)',fontSize:'13px'}}><span className="spinner" style={{marginRight:'8px'}}></span>Loading…</div>
         ) : graphError ? (
           <div style={{padding:'12px',color:'var(--nv-text-dim)',fontSize:'13px',fontStyle:'italic'}}>{graphError}</div>
-        ) : graphData && graphData.nodes ? (
-          <div style={{
-            padding:'16px',borderRadius:'8px',
-            background:'rgba(0,0,0,0.2)',border:'1px solid var(--nv-border)',
-            overflowX:'auto',
-          }}>
-            <div style={{display:'flex',gap:'0',alignItems:'stretch',minWidth:'fit-content'}}>
-              {(() => {
-                const nodes = graphData.nodes || [];
-                const edges = graphData.edges || [];
-                const ordered = [];
-                const visited = new Set();
-                const adjMap = {};
-                edges.forEach(e => { adjMap[e.source] = adjMap[e.source] || []; adjMap[e.source].push(e.target); });
-                const sources = nodes.filter(n => !edges.some(e => e.target === n.id));
-                const queue = sources.length > 0 ? [...sources] : (nodes.length > 0 ? [nodes[0]] : []);
-                while (queue.length > 0) {
-                  const node = queue.shift();
-                  if (visited.has(node.id)) continue;
-                  visited.add(node.id);
-                  ordered.push(node);
-                  (adjMap[node.id] || []).forEach(tid => {
-                    const tnode = nodes.find(n => n.id === tid);
-                    if (tnode && !visited.has(tnode.id)) queue.push(tnode);
-                  });
-                }
-                nodes.forEach(n => { if (!visited.has(n.id)) ordered.push(n); });
+        ) : graphData && graphData.nodes ? (() => {
+          const nodes = graphData.nodes || [];
+          const edges = graphData.edges || [];
 
-                return ordered.map((node, idx) => {
-                  const label = (node.data && node.data.label) || node.type || 'Unknown';
-                  const category = (node.data && node.data.category) || '';
-                  const compute = (node.data && node.data.compute) || '';
+          const hasLabels = nodes.some(n => {
+            const op = n.operator || {};
+            const d = n.data || {};
+            return op.display_name || op.class_name || d.label;
+          });
+          if (!hasLabels) {
+            return <div style={{padding:'12px',color:'var(--nv-text-dim)',fontSize:'13px',fontStyle:'italic'}}>Pipeline graph data is not available for this run (pre-dates graph metadata collection).</div>;
+          }
+
+          const ordered = [];
+          const visited = new Set();
+          const adjMap = {};
+          edges.forEach(e => { adjMap[e.source] = adjMap[e.source] || []; adjMap[e.source].push(e.target); });
+          const sources = nodes.filter(n => !edges.some(e => e.target === n.id));
+          const queue = sources.length > 0 ? [...sources] : (nodes.length > 0 ? [nodes[0]] : []);
+          while (queue.length > 0) {
+            const node = queue.shift();
+            if (visited.has(node.id)) continue;
+            visited.add(node.id);
+            ordered.push(node);
+            (adjMap[node.id] || []).forEach(tid => {
+              const tnode = nodes.find(nn => nn.id === tid);
+              if (tnode && !visited.has(tnode.id)) queue.push(tnode);
+            });
+          }
+          nodes.forEach(n => { if (!visited.has(n.id)) ordered.push(n); });
+
+          return (
+            <div style={{
+              padding:'16px',borderRadius:'8px',
+              background:'rgba(0,0,0,0.2)',border:'1px solid var(--nv-border)',
+              overflowX:'auto',
+            }}>
+              <div style={{display:'flex',gap:'0',alignItems:'stretch',minWidth:'fit-content'}}>
+                {ordered.map((node, idx) => {
+                  const op = node.operator || {};
+                  const d = node.data || {};
+                  const label = op.display_name || op.class_name || d.label || node.varName || 'N/A';
+                  const category = op.category || d.category || '';
+                  const compute = op.compute || d.compute || '';
                   const colors = catColors[category] || defaultCat;
-                  const kwargs = (node.data && node.data.kwargs) || (node.data && node.data.params) || {};
+                  const cfg = node.config || {};
+                  const kwargs = Object.keys(cfg).length > 0 ? cfg : (d.kwargs || d.params || {});
                   const kwEntries = Object.entries(kwargs).filter(([k]) => k !== 'label' && k !== 'category' && k !== 'compute');
                   const isExpanded = expandedNodes[node.id];
                   const hasNext = idx < ordered.length - 1;
@@ -189,11 +202,11 @@ function GraphPreview({ runId }) {
                       )}
                     </React.Fragment>
                   );
-                });
-              })()}
+                })}
+              </div>
             </div>
-          </div>
-        ) : null
+          );
+        })() : null
       )}
     </div>
   );
@@ -433,7 +446,7 @@ function RunDetailModal({ run, onClose, onDelete, githubRepoUrl }) {
               </div>
               <div className="detail-item">
                 <div className="detail-label">Git Commit</div>
-                <div className="detail-value"><CommitLink sha={effectiveCommit} repoUrl={githubRepoUrl} truncate={0} style={{fontSize:'13px'}} /></div>
+                <div className="detail-value"><CommitLink sha={effectiveCommit} repoUrl={githubRepoUrl} truncate={10} style={{fontSize:'13px'}} /></div>
               </div>
               <div className="detail-item">
                 <div className="detail-label">Dataset</div>
@@ -442,13 +455,18 @@ function RunDetailModal({ run, onClose, onDelete, githubRepoUrl }) {
               <div className="detail-item">
                 <div className="detail-label">Preset</div>
                 <div className="detail-value">
-                  {run.preset ? (
-                    <a href={`#presets/${encodeURIComponent(run.preset)}`}
-                      onClick={e => e.stopPropagation()}
-                      style={{color:'var(--nv-green)',textDecoration:'none',borderBottom:'1px dashed var(--nv-green)',cursor:'pointer',fontSize:'13px'}}>
-                      {run.preset}
-                    </a>
-                  ) : "\u2014"}
+                  {run.preset ? (() => {
+                    const isGraph = run.trigger_source && run.trigger_source.toLowerCase() === 'graph';
+                    const linkTarget = isGraph ? '#designer' : `#presets/${encodeURIComponent(run.preset)}`;
+                    return (
+                      <a href={linkTarget}
+                        onClick={e => e.stopPropagation()}
+                        style={{color:'var(--nv-green)',textDecoration:'none',borderBottom:'1px dashed var(--nv-green)',cursor:'pointer',fontSize:'13px'}}
+                        title={isGraph ? 'Open Pipeline Designer' : 'View preset configuration'}>
+                        {run.preset}{isGraph ? ' (graph)' : ''}
+                      </a>
+                    );
+                  })() : "\u2014"}
                 </div>
               </div>
               <div className="detail-item">
@@ -462,17 +480,14 @@ function RunDetailModal({ run, onClose, onDelete, githubRepoUrl }) {
               <div className="detail-item">
                 <div className="detail-label">GPUs</div>
                 <div className="detail-value">
-                  {run.gpus_used != null ? (
-                    <>
-                      <span style={{color:'#fff',fontWeight:600}}>{run.gpus_used}</span>
+                  {run.num_gpus != null ? (() => {
+                    const used = run.gpus_used != null ? run.gpus_used : run.num_gpus;
+                    return <>
+                      <span style={{color:'#fff',fontWeight:600}}>{used}</span>
                       <span style={{color:'var(--nv-text-muted)'}}> used</span>
-                      {run.num_gpus != null && (
-                        <span style={{color:'var(--nv-text-dim)'}}> / {run.num_gpus} available</span>
-                      )}
-                    </>
-                  ) : run.num_gpus != null ? (
-                    <span>{run.num_gpus}</span>
-                  ) : "\u2014"}
+                      <span style={{color:'var(--nv-text-dim)'}}> / {run.num_gpus} available</span>
+                    </>;
+                  })() : "\u2014"}
                 </div>
               </div>
               <div className="detail-item">
@@ -778,36 +793,70 @@ function RunDetailModal({ run, onClose, onDelete, githubRepoUrl }) {
                     <div className="metric-label">OCR Infographics</div>
                   </div>
                 </div>
-                {labelEntries.length > 0 && (
-                  <div style={{marginTop:'16px'}}>
-                    <div style={{fontSize:'13px',fontWeight:600,color:'rgba(255,255,255,0.7)',marginBottom:'10px'}}>Page Elements by Label</div>
-                    <div style={{
-                      display:'grid',gridTemplateColumns:'1fr auto',gap:'4px 16px',
-                      padding:'14px 18px',borderRadius:'10px',
-                      background:'rgba(255,255,255,0.02)',border:'1px solid var(--nv-border)',
-                    }}>
-                      {labelEntries.map(([label, count]) => (
-                        <React.Fragment key={label}>
-                          <span style={{fontSize:'13px',color:'rgba(255,255,255,0.8)'}}>{label}</span>
-                          <span className="mono" style={{fontSize:'13px',color:'var(--nv-green)',fontWeight:600,textAlign:'right'}}>{count.toLocaleString()}</span>
-                        </React.Fragment>
-                      ))}
+                {labelEntries.length > 0 && (() => {
+                  const pieColors = ['#76b900','#4da6ff','#b464ff','#ffa500','#ff6464','#fcd34d','#00c9a7','#ff8c00','#e879f9','#60a5fa','#34d399','#f97316'];
+                  const total = labelEntries.reduce((s, e) => s + e[1], 0);
+                  let cumAngle = 0;
+                  const slices = labelEntries.map(([label, count], i) => {
+                    const pct = total > 0 ? count / total : 0;
+                    const startAngle = cumAngle;
+                    cumAngle += pct * 360;
+                    const endAngle = cumAngle;
+                    const color = pieColors[i % pieColors.length];
+                    return { label, count, pct, startAngle, endAngle, color };
+                  });
+
+                  function describeArc(cx, cy, r, startDeg, endDeg) {
+                    if (endDeg - startDeg >= 359.99) {
+                      return `M ${cx-r},${cy} A ${r},${r} 0 1,1 ${cx+r},${cy} A ${r},${r} 0 1,1 ${cx-r},${cy} Z`;
+                    }
+                    const s = (startDeg - 90) * Math.PI / 180;
+                    const e = (endDeg - 90) * Math.PI / 180;
+                    const x1 = cx + r * Math.cos(s), y1 = cy + r * Math.sin(s);
+                    const x2 = cx + r * Math.cos(e), y2 = cy + r * Math.sin(e);
+                    const large = endDeg - startDeg > 180 ? 1 : 0;
+                    return `M ${cx},${cy} L ${x1},${y1} A ${r},${r} 0 ${large},1 ${x2},${y2} Z`;
+                  }
+
+                  return (
+                    <div style={{marginTop:'16px'}}>
+                      <div style={{fontSize:'13px',fontWeight:600,color:'rgba(255,255,255,0.7)',marginBottom:'10px'}}>Page Elements by Label</div>
+                      <div style={{display:'flex',gap:'24px',alignItems:'flex-start',flexWrap:'wrap'}}>
+                        <svg width="160" height="160" viewBox="0 0 160 160" style={{flexShrink:0}}>
+                          {slices.map((sl, i) => (
+                            <path key={i} d={describeArc(80, 80, 72, sl.startAngle, sl.endAngle)}
+                              fill={sl.color} stroke="rgba(0,0,0,0.4)" strokeWidth="1">
+                              <title>{sl.label}: {sl.count.toLocaleString()} ({(sl.pct * 100).toFixed(1)}%)</title>
+                            </path>
+                          ))}
+                          <circle cx="80" cy="80" r="36" fill="var(--nv-surface, #1a1a2e)" />
+                          <text x="80" y="76" textAnchor="middle" fill="rgba(255,255,255,0.6)" fontSize="11" fontWeight="600">{total.toLocaleString()}</text>
+                          <text x="80" y="90" textAnchor="middle" fill="rgba(255,255,255,0.35)" fontSize="9">total</text>
+                        </svg>
+                        <div style={{flex:1,minWidth:'200px'}}>
+                          <div style={{
+                            display:'grid',gridTemplateColumns:'auto 1fr auto auto',gap:'4px 10px',
+                            padding:'14px 18px',borderRadius:'10px',
+                            background:'rgba(255,255,255,0.02)',border:'1px solid var(--nv-border)',
+                            alignItems:'center',
+                          }}>
+                            {slices.map((sl, i) => (
+                              <React.Fragment key={sl.label}>
+                                <span style={{width:'10px',height:'10px',borderRadius:'2px',background:sl.color,display:'inline-block'}}></span>
+                                <span style={{fontSize:'13px',color:'rgba(255,255,255,0.8)'}}>{sl.label}</span>
+                                <span className="mono" style={{fontSize:'13px',color:'var(--nv-green)',fontWeight:600,textAlign:'right'}}>{sl.count.toLocaleString()}</span>
+                                <span className="mono" style={{fontSize:'11px',color:'var(--nv-text-dim)',textAlign:'right'}}>{(sl.pct * 100).toFixed(1)}%</span>
+                              </React.Fragment>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
               </div>
             );
           })()}
-
-          {/* Tags */}
-          {run.tags && run.tags.length > 0 && (
-            <div style={{marginBottom:'28px'}}>
-              <div className="section-title">Tags</div>
-              <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
-                {run.tags.map((t,i) => <span key={i} className="tag">{t}</span>)}
-              </div>
-            </div>
-          )}
 
           {/* Raw JSON */}
           <div style={{marginBottom:'28px'}}>
@@ -854,6 +903,16 @@ function RunDetailModal({ run, onClose, onDelete, githubRepoUrl }) {
               {raw.nsys_status.error && (
                 <div style={{fontSize:'12px',color:'var(--nv-text-muted)',marginTop:'6px'}}>{raw.nsys_status.error}</div>
               )}
+            </div>
+          )}
+
+          {/* Tags */}
+          {run.tags && run.tags.length > 0 && (
+            <div style={{marginBottom:'28px'}}>
+              <div className="section-title">Tags</div>
+              <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
+                {run.tags.map((t,i) => <span key={i} className="tag">{t}</span>)}
+              </div>
             </div>
           )}
         </div>
