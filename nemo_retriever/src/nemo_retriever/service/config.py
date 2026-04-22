@@ -52,6 +52,8 @@ class ProcessingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     num_workers: int = 16
+    batch_size: int = 32
+    batch_timeout_s: float = 2.0
 
 
 class ResourceLimitsConfig(BaseModel):

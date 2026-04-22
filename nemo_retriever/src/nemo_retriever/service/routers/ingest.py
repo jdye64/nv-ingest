@@ -189,7 +189,7 @@ async def ingest_document(
     repo.insert_document(doc)
     logger.info("Document accepted: id=%s filename=%s sha=%s", doc.id, filename, content_sha256[:12])
 
-    future = pool.try_submit(
+    accepted = pool.try_submit(
         doc.id,
         content_sha256,
         file_bytes,
@@ -197,13 +197,13 @@ async def ingest_document(
         job_id=job_id,
         page_number=meta.page_number or 1,
     )
-    if future is None:
+    if not accepted:
         repo.update_document_status(doc.id, ProcessingStatus.QUEUED)
-        logger.warning("Document %s queued but pool became full between check and submit", doc.id)
+        logger.warning("Document %s queued but buffer became full between check and submit", doc.id)
         return JSONResponse(
             status_code=503,
             content={
-                "detail": "Server busy — all worker slots are in use.",
+                "detail": "Server busy — batch buffer is full.",
                 "document_id": doc.id,
                 "retry_after": 10,
                 "capacity": 0,

@@ -226,25 +226,42 @@ def pdf_extraction(
     # Assumption: PDF splitting ran earlier and produced a dataset where each row
     # contains a *single-page* PDF in the `"bytes"` column. We therefore open the
     # document and only process page 0 for each row.
+    _EXTRACT_EXPLICIT_COLS = frozenset(
+        (
+            "bytes",
+            "path",
+            "page_number",
+            "source_id",
+            "text",
+            "page_image",
+            "images",
+            "tables",
+            "charts",
+            "infographics",
+            "metadata",
+        )
+    )
+
     if isinstance(pdf_binary, pd.DataFrame):
         if pdfium is None:  # pragma: no cover
             # Best-effort: return error records for the whole batch rather than raising.
             outputs: List[Dict[str, Any]] = []
             for _, row in pdf_binary.iterrows():
                 pdf_path = row["path"] if "path" in pdf_binary.columns else None
-                outputs.append(
-                    _error_record(
-                        source_path=str(pdf_path) if pdf_path is not None else None,
-                        stage="import_pypdfium2",
-                        exc=(
-                            _PDFIUM_IMPORT_ERROR
-                            if _PDFIUM_IMPORT_ERROR is not None
-                            else RuntimeError("pypdfium2 unavailable")
-                        ),
-                        page_number=0,
-                        dpi=dpi,
-                    )
+                extra = {k: v for k, v in row.to_dict().items() if k not in _EXTRACT_EXPLICIT_COLS}
+                err = _error_record(
+                    source_path=str(pdf_path) if pdf_path is not None else None,
+                    stage="import_pypdfium2",
+                    exc=(
+                        _PDFIUM_IMPORT_ERROR
+                        if _PDFIUM_IMPORT_ERROR is not None
+                        else RuntimeError("pypdfium2 unavailable")
+                    ),
+                    page_number=0,
+                    dpi=dpi,
                 )
+                err.update(extra)
+                outputs.append(err)
             return outputs
 
         outputs: List[Dict[str, Any]] = []
@@ -254,6 +271,8 @@ def pdf_extraction(
             pdf_path = row["path"] if "path" in pdf_binary.columns else None
             page_number = int(row["page_number"]) if "page_number" in pdf_binary.columns else 1
             source_id = row["source_id"] if "source_id" in pdf_binary.columns else None
+
+            extra = {k: v for k, v in row.to_dict().items() if k not in _EXTRACT_EXPLICIT_COLS}
 
             try:
                 if not isinstance(pdf_bytes, (bytes, bytearray, memoryview)):
@@ -365,6 +384,7 @@ def pdf_extraction(
                         # place to find the page image.
                         page_record["page_image"] = render_info
 
+                    page_record.update(extra)
                     outputs.append(page_record)
                 finally:
                     try:
@@ -377,15 +397,15 @@ def pdf_extraction(
                     except Exception:
                         pass
             except BaseException as e:
-                outputs.append(
-                    _error_record(
-                        source_path=str(pdf_path) if pdf_path is not None else None,
-                        stage="page_processing",
-                        exc=e,
-                        page_number=page_number,
-                        dpi=dpi,
-                    )
+                err = _error_record(
+                    source_path=str(pdf_path) if pdf_path is not None else None,
+                    stage="page_processing",
+                    exc=e,
+                    page_number=page_number,
+                    dpi=dpi,
                 )
+                err.update(extra)
+                outputs.append(err)
 
         # Return a batch-shaped dataframe so Ray Data produces one output row per input page.
         return pd.DataFrame(outputs)

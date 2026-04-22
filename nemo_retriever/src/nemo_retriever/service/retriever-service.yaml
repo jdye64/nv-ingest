@@ -28,6 +28,12 @@ processing:
   # clients so 16 workers is a sensible default.  For local GPU models,
   # lower this to match available VRAM (e.g. 1-2).
   num_workers: 64
+  # Pages are batched before being sent to the GraphPipeline.  Larger
+  # batches improve GPU/NIM throughput but increase per-page latency.
+  batch_size: 16
+  # Maximum seconds to wait for a full batch before dispatching a
+  # partial one.  Keeps latency low for small jobs.
+  batch_timeout_s: 2.0
 
 # Remote NIM microservice endpoints.  When set, the pipeline calls these
 # HTTP endpoints instead of loading GPU models locally.  All four must
