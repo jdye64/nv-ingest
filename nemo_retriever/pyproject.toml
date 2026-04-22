@@ -171,3 +171,4 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "nemo_retriever.harness.portal" = ["static/**/*"]
+"nemo_retriever.service" = ["retriever-service.yaml"]
