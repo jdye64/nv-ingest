@@ -30,6 +30,25 @@ def start(
     thread_pool_size: Optional[int] = typer.Option(
         None, "--thread-pool-size", help="Worker thread count (overrides YAML)."
     ),
+    pipeline_replicas: Optional[int] = typer.Option(
+        None, "--pipeline-replicas", help="Number of pipeline operator chain copies (overrides YAML)."
+    ),
+    page_elements_url: Optional[str] = typer.Option(
+        None, "--page-elements-url", help="NIM endpoint for page element detection (overrides YAML)."
+    ),
+    ocr_url: Optional[str] = typer.Option(None, "--ocr-url", help="NIM endpoint for OCR (overrides YAML)."),
+    table_structure_url: Optional[str] = typer.Option(
+        None, "--table-structure-url", help="NIM endpoint for table structure detection (overrides YAML)."
+    ),
+    graphic_elements_url: Optional[str] = typer.Option(
+        None, "--graphic-elements-url", help="NIM endpoint for graphic element detection (overrides YAML)."
+    ),
+    embed_url: Optional[str] = typer.Option(
+        None, "--embed-url", help="NIM endpoint for text embedding (overrides YAML)."
+    ),
+    nim_api_key: Optional[str] = typer.Option(
+        None, "--nim-api-key", help="API key for NIM endpoints (overrides YAML / $NVIDIA_API_KEY)."
+    ),
     gpu_devices: Optional[str] = typer.Option(
         None, "--gpu-devices", help="Comma-separated GPU device IDs (overrides YAML)."
     ),
@@ -51,6 +70,20 @@ def start(
         overrides["logging.file"] = log_file
     if thread_pool_size is not None:
         overrides["processing.thread_pool_size"] = thread_pool_size
+    if pipeline_replicas is not None:
+        overrides["processing.pipeline_replicas"] = pipeline_replicas
+    if page_elements_url is not None:
+        overrides["nim_endpoints.page_elements_invoke_url"] = page_elements_url
+    if ocr_url is not None:
+        overrides["nim_endpoints.ocr_invoke_url"] = ocr_url
+    if table_structure_url is not None:
+        overrides["nim_endpoints.table_structure_invoke_url"] = table_structure_url
+    if graphic_elements_url is not None:
+        overrides["nim_endpoints.graphic_elements_invoke_url"] = graphic_elements_url
+    if embed_url is not None:
+        overrides["nim_endpoints.embed_invoke_url"] = embed_url
+    if nim_api_key is not None:
+        overrides["nim_endpoints.api_key"] = nim_api_key
     if gpu_devices is not None:
         overrides["resources.gpu_devices"] = [d.strip() for d in gpu_devices.split(",") if d.strip()]
     if db_path is not None:
@@ -73,7 +106,7 @@ def start(
 @app.command("ingest")
 def ingest(
     files: list[Path] = typer.Argument(..., help="One or more document files to ingest."),
-    server_url: str = typer.Option("http://localhost:8000", "--server-url", "-s", help="Retriever service base URL."),
+    server_url: str = typer.Option("http://localhost:7670", "--server-url", "-s", help="Retriever service base URL."),
     use_sse: bool = typer.Option(True, "--sse/--no-sse", help="Use SSE streaming (default) or poll."),
     poll_interval: float = typer.Option(2.0, "--poll-interval", help="Seconds between status polls (no-SSE mode)."),
     concurrency: int = typer.Option(8, "--concurrency", help="Max concurrent uploads."),

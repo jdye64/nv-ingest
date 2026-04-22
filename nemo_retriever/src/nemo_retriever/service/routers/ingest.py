@@ -2,10 +2,11 @@
 # All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""POST /v1/ingest and GET /v1/ingest/status/{document_id}."""
+"""POST /v1/ingest, GET /v1/ingest/status/{document_id}, GET /v1/ingest/job/{job_id}."""
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -15,11 +16,13 @@ from fastapi.responses import JSONResponse
 
 from nemo_retriever.service.db.repository import Repository
 from nemo_retriever.service.models.document import Document, ProcessingStatus
+from nemo_retriever.service.models.job import Job
 from nemo_retriever.service.models.requests import IngestRequest
 from nemo_retriever.service.models.responses import (
     IngestAccepted,
     IngestComplete,
     IngestStatus,
+    JobStatus,
     MetricSummary,
     PageSummary,
 )
@@ -33,7 +36,7 @@ router = APIRouter(tags=["ingest"])
     "/ingest",
     response_model=IngestAccepted,
     status_code=202,
-    summary="Upload a single document for ingestion",
+    summary="Upload a single document (or page) for ingestion",
     responses={
         503: {
             "description": "Server is at capacity. Retry after a worker slot frees up.",
@@ -55,17 +58,6 @@ async def ingest_document(
     file: UploadFile = File(..., description="The document to ingest"),
     metadata: str = Form(default="{}", description="JSON-encoded IngestRequest metadata"),
 ) -> IngestAccepted | JSONResponse:
-    """Accept a single document upload and queue it for processing.
-
-    The file is read into memory, its SHA-256 is computed for dedup, and it is
-    submitted to the processing thread pool.  The response is returned
-    immediately with status ``queued``.
-
-    Returns **503 Service Unavailable** with a ``Retry-After`` header when
-    all worker threads are occupied.  The client should back off and retry
-    once it receives an SSE ``document_complete`` event or after the
-    ``Retry-After`` period elapses.
-    """
     pool = request.app.state.processing_pool
 
     if not pool.has_capacity():
@@ -94,11 +86,69 @@ async def ingest_document(
     content_sha256 = hashlib.sha256(file_bytes).hexdigest()
 
     repo: Repository = request.app.state.repository
+
     existing = repo.get_document_by_sha(content_sha256)
     if existing is not None:
         logger.info("Duplicate document detected (sha=%s), returning existing record", content_sha256[:12])
+
+        job_id = meta.job_id
+        if job_id is not None:
+            existing_job = repo.get_job(job_id)
+            if existing_job is None:
+                filename = meta.filename or file.filename or "unknown"
+                job = Job(
+                    id=job_id,
+                    filename=filename,
+                    content_sha256="",
+                    total_pages=meta.total_pages or 0,
+                )
+                repo.insert_job(job)
+                repo.update_job_status(job_id, ProcessingStatus.PROCESSING)
+
+            repo.increment_job_pages_submitted(job_id)
+            pages_completed = repo.increment_job_pages_completed(job_id)
+            print(
+                f">>> [job {job_id[:8]}] Page {meta.page_number}/{meta.total_pages}"
+                f" deduped (sha={content_sha256[:8]}), counting as complete"
+            )
+
+            event_bus = request.app.state.event_bus
+            loop = request.app.state.processing_pool._event_loop
+
+            job = repo.get_job(job_id)
+            if job and pages_completed >= job.total_pages and job.total_pages > 0:
+                repo.update_job_status(job_id, ProcessingStatus.COMPLETE)
+                print(f">>> [job {job_id[:8]}] All {job.total_pages} pages of" f" {job.filename} complete")
+                asyncio.run_coroutine_threadsafe(
+                    event_bus.publish(
+                        job_id,
+                        {
+                            "event": "job_complete",
+                            "job_id": job_id,
+                            "filename": job.filename,
+                            "total_pages": job.total_pages,
+                        },
+                    ),
+                    loop,
+                )
+            else:
+                asyncio.run_coroutine_threadsafe(
+                    event_bus.publish(
+                        job_id,
+                        {
+                            "event": "page_complete",
+                            "document_id": existing.id,
+                            "job_id": job_id,
+                            "pages_received": 0,
+                            "total_pages": meta.total_pages or 0,
+                        },
+                    ),
+                    loop,
+                )
+
         return IngestAccepted(
             document_id=existing.id,
+            job_id=job_id or existing.job_id,
             content_sha256=existing.content_sha256,
             status=existing.processing_status,
             created_at=existing.created_at,
@@ -107,17 +157,43 @@ async def ingest_document(
     filename = meta.filename or file.filename or "unknown"
     content_type = meta.content_type or file.content_type or "application/octet-stream"
 
+    # Handle job creation / update when the client pre-splits pages
+    job_id = meta.job_id
+    if job_id is not None:
+        existing_job = repo.get_job(job_id)
+        if existing_job is None:
+            job = Job(
+                id=job_id,
+                filename=filename,
+                content_sha256="",
+                total_pages=meta.total_pages or 0,
+            )
+            repo.insert_job(job)
+            repo.update_job_status(job_id, ProcessingStatus.PROCESSING)
+
+        repo.increment_job_pages_submitted(job_id)
+        print(f">>> [job {job_id[:8]}] Received page {meta.page_number}/{meta.total_pages}" f" of {filename}")
+
     doc = Document(
+        job_id=job_id,
         filename=filename,
         content_type=content_type,
         content_sha256=content_sha256,
         file_size_bytes=len(file_bytes),
+        page_number=meta.page_number,
         metadata_json=json.dumps(meta.metadata),
     )
     repo.insert_document(doc)
     logger.info("Document accepted: id=%s filename=%s sha=%s", doc.id, filename, content_sha256[:12])
 
-    future = pool.try_submit(doc.id, content_sha256, file_bytes, filename)
+    future = pool.try_submit(
+        doc.id,
+        content_sha256,
+        file_bytes,
+        filename,
+        job_id=job_id,
+        page_number=meta.page_number or 1,
+    )
     if future is None:
         repo.update_document_status(doc.id, ProcessingStatus.QUEUED)
         logger.warning("Document %s queued but pool became full between check and submit", doc.id)
@@ -135,6 +211,7 @@ async def ingest_document(
 
     return IngestAccepted(
         document_id=doc.id,
+        job_id=job_id,
         content_sha256=doc.content_sha256,
         status=doc.processing_status,
         created_at=doc.created_at,
@@ -200,3 +277,48 @@ async def get_ingest_status(
     if doc is None:
         raise HTTPException(status_code=404, detail=f"Document {document_id} not found")
     return _build_status_response(repo, doc)
+
+
+@router.get(
+    "/ingest/job/{job_id}",
+    response_model=JobStatus,
+    summary="Get the aggregated processing status of a job",
+)
+async def get_job_status(
+    request: Request,
+    job_id: str,
+) -> JobStatus:
+    repo: Repository = request.app.state.repository
+    job = repo.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    metrics_rows = repo.get_metrics_for_job(job_id)
+
+    agg: dict[str, MetricSummary] = {}
+    for m in metrics_rows:
+        key = m.model_name
+        if key not in agg:
+            agg[key] = MetricSummary(
+                model_name=m.model_name,
+                invocation_count=0,
+                pages_processed=0,
+                detections_count=0,
+                duration_ms=0.0,
+            )
+        agg[key].invocation_count += m.invocation_count
+        agg[key].pages_processed += m.pages_processed
+        agg[key].detections_count += m.detections_count
+        agg[key].duration_ms += m.duration_ms
+
+    return JobStatus(
+        job_id=job.id,
+        filename=job.filename,
+        status=job.processing_status,
+        total_pages=job.total_pages,
+        pages_submitted=job.pages_submitted,
+        pages_completed=job.pages_completed,
+        metrics=list(agg.values()),
+        created_at=job.created_at,
+        updated_at=job.updated_at,
+    )

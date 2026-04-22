@@ -7,6 +7,9 @@
 Each document can have zero or more subscriber queues.  When an event is
 published for a document, it is fanned out to all connected queues.  If no
 subscribers exist the event is silently discarded.
+
+Supports both per-document and multi-document (session) subscriptions so a
+single SSE connection can receive events for many documents at once.
 """
 
 from __future__ import annotations
@@ -25,8 +28,23 @@ class EventBus:
         self._subscribers: dict[str, list[asyncio.Queue[dict[str, Any]]]] = {}
 
     def subscribe(self, document_id: str) -> asyncio.Queue[dict[str, Any]]:
+        """Subscribe to events for a single document."""
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._subscribers.setdefault(document_id, []).append(queue)
+        return queue
+
+    def subscribe_many(
+        self,
+        document_ids: list[str],
+    ) -> asyncio.Queue[dict[str, Any]]:
+        """Subscribe to events for multiple documents on a single queue.
+
+        Every event for any of the listed documents is delivered to the same
+        queue, tagged with its ``document_id`` in the payload.
+        """
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        for doc_id in document_ids:
+            self._subscribers.setdefault(doc_id, []).append(queue)
         return queue
 
     def unsubscribe(self, document_id: str, queue: asyncio.Queue[dict[str, Any]]) -> None:
@@ -38,6 +56,14 @@ class EventBus:
                 pass
             if not queues:
                 del self._subscribers[document_id]
+
+    def unsubscribe_many(
+        self,
+        document_ids: list[str],
+        queue: asyncio.Queue[dict[str, Any]],
+    ) -> None:
+        for doc_id in document_ids:
+            self.unsubscribe(doc_id, queue)
 
     async def publish(self, document_id: str, event: dict[str, Any]) -> None:
         queues = self._subscribers.get(document_id, [])

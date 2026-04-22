@@ -10,7 +10,7 @@
 
 server:
   host: "0.0.0.0"
-  port: 8000
+  port: 7670
 
 logging:
   level: "INFO"
@@ -22,8 +22,27 @@ database:
   path: "retriever-service.db"
 
 processing:
-  # Number of worker threads, each holding a pre-built GraphPipeline instance.
+  # Number of I/O worker threads (controls request concurrency).
+  # Threads overlap on DB writes, SSE publishing, and HTTP uploads
+  # even though only one pipeline chain runs at a time.
   thread_pool_size: 32
+  # Number of pre-built pipeline operator chains.  Chain execution is
+  # serialised (one at a time) because the C/C++ CPU actors (pypdfium2,
+  # image cropping) are not thread-safe.  Multiple replicas keep separate
+  # operator state but don't improve throughput.  Default: 1.
+  pipeline_replicas: 1
+
+# Remote NIM microservice endpoints.  When set, the pipeline calls these
+# HTTP endpoints instead of loading GPU models locally.  All four must
+# be provided for a fully remote configuration.
+nim_endpoints:
+  page_elements_invoke_url: http://localhost:8000/v1/infer
+  graphic_elements_invoke_url: http://localhost:8003/v1/infer
+  table_structure_invoke_url: http://localhost:8000/v1/infer
+  ocr_invoke_url: http://localhost:8009/v1/infer
+  embed_invoke_url: http://localhost:8012/v1/embeddings
+  # NVIDIA API key (or NIM auth token).  Also reads $NVIDIA_API_KEY env var.
+  api_key: null
 
 resources:
   # Hard memory cap in MiB.  null = no limit.

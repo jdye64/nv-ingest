@@ -18,7 +18,7 @@ class ServerConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     host: str = "0.0.0.0"
-    port: int = 8000
+    port: int = 7670
 
 
 class LoggingConfig(BaseModel):
@@ -35,10 +35,24 @@ class DatabaseConfig(BaseModel):
     path: str = "retriever-service.db"
 
 
+class NimEndpointsConfig(BaseModel):
+    """Remote NIM microservice endpoints used instead of local GPU models."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    page_elements_invoke_url: str | None = None
+    ocr_invoke_url: str | None = None
+    table_structure_invoke_url: str | None = None
+    graphic_elements_invoke_url: str | None = None
+    embed_invoke_url: str | None = None
+    api_key: str | None = None
+
+
 class ProcessingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     thread_pool_size: int = 32
+    pipeline_replicas: int = 1
 
 
 class ResourceLimitsConfig(BaseModel):
@@ -62,6 +76,7 @@ class ServiceConfig(BaseModel):
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     processing: ProcessingConfig = Field(default_factory=ProcessingConfig)
+    nim_endpoints: NimEndpointsConfig = Field(default_factory=NimEndpointsConfig)
     resources: ResourceLimitsConfig = Field(default_factory=ResourceLimitsConfig)
 
 

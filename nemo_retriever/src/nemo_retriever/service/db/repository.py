@@ -11,7 +11,9 @@ from datetime import datetime, timezone
 
 from nemo_retriever.service.db.engine import DatabaseEngine
 from nemo_retriever.service.models.document import Document, ProcessingStatus
+from nemo_retriever.service.models.job import Job
 from nemo_retriever.service.models.metrics import ProcessingMetric
+from nemo_retriever.service.models.page_processing_log import PageProcessingLog
 from nemo_retriever.service.models.page_result import PageResult
 
 logger = logging.getLogger(__name__)
@@ -26,6 +28,73 @@ class Repository:
     @property
     def _conn(self):
         return self._engine.connection
+
+    # ------------------------------------------------------------------
+    # Jobs
+    # ------------------------------------------------------------------
+
+    def insert_job(self, job: Job) -> None:
+        row = job.to_row()
+        cols = ", ".join(row.keys())
+        placeholders = ", ".join(f":{k}" for k in row.keys())
+        self._conn.execute(f"INSERT INTO jobs ({cols}) VALUES ({placeholders})", row)
+        self._conn.commit()
+
+    def get_job(self, job_id: str) -> Job | None:
+        cur = self._conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,))
+        row = cur.fetchone()
+        return Job(**dict(row)) if row else None
+
+    def get_job_by_sha(self, sha256: str) -> Job | None:
+        cur = self._conn.execute("SELECT * FROM jobs WHERE content_sha256 = ?", (sha256,))
+        row = cur.fetchone()
+        return Job(**dict(row)) if row else None
+
+    def increment_job_pages_submitted(self, job_id: str) -> int:
+        now = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(
+            "UPDATE jobs SET pages_submitted = pages_submitted + 1, updated_at = ? WHERE id = ?",
+            (now, job_id),
+        )
+        self._conn.commit()
+        cur = self._conn.execute("SELECT pages_submitted FROM jobs WHERE id = ?", (job_id,))
+        row = cur.fetchone()
+        return int(row["pages_submitted"]) if row else 0
+
+    def increment_job_pages_completed(self, job_id: str) -> int:
+        now = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(
+            "UPDATE jobs SET pages_completed = pages_completed + 1, updated_at = ? WHERE id = ?",
+            (now, job_id),
+        )
+        self._conn.commit()
+        cur = self._conn.execute("SELECT pages_completed, total_pages FROM jobs WHERE id = ?", (job_id,))
+        row = cur.fetchone()
+        return int(row["pages_completed"]) if row else 0
+
+    def update_job_status(self, job_id: str, status: ProcessingStatus) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(
+            "UPDATE jobs SET processing_status = ?, updated_at = ? WHERE id = ?",
+            (status.value, now, job_id),
+        )
+        self._conn.commit()
+
+    def get_documents_for_job(self, job_id: str) -> list[Document]:
+        cur = self._conn.execute(
+            "SELECT * FROM documents WHERE job_id = ? ORDER BY page_number",
+            (job_id,),
+        )
+        return [Document(**dict(r)) for r in cur.fetchall()]
+
+    def get_metrics_for_job(self, job_id: str) -> list[ProcessingMetric]:
+        cur = self._conn.execute(
+            "SELECT m.* FROM processing_metrics m "
+            "JOIN documents d ON m.document_id = d.id "
+            "WHERE d.job_id = ? ORDER BY m.model_name",
+            (job_id,),
+        )
+        return [ProcessingMetric(**dict(r)) for r in cur.fetchall()]
 
     # ------------------------------------------------------------------
     # Documents
@@ -125,3 +194,28 @@ class Repository:
             (document_id,),
         )
         return [ProcessingMetric(**dict(r)) for r in cur.fetchall()]
+
+    # ------------------------------------------------------------------
+    # Page processing log
+    # ------------------------------------------------------------------
+
+    def insert_page_processing_log(self, entry: PageProcessingLog) -> None:
+        row = entry.to_row()
+        cols = ", ".join(row.keys())
+        placeholders = ", ".join(f":{k}" for k in row.keys())
+        self._conn.execute(
+            f"INSERT OR REPLACE INTO page_processing_log ({cols}) VALUES ({placeholders})",
+            row,
+        )
+        self._conn.commit()
+
+    def get_all_page_processing_logs(self) -> list[PageProcessingLog]:
+        cur = self._conn.execute("SELECT * FROM page_processing_log ORDER BY source_file, page_number")
+        return [PageProcessingLog(**dict(r)) for r in cur.fetchall()]
+
+    def get_page_processing_logs_for_job(self, job_id: str) -> list[PageProcessingLog]:
+        cur = self._conn.execute(
+            "SELECT * FROM page_processing_log WHERE job_id = ? ORDER BY source_file, page_number",
+            (job_id,),
+        )
+        return [PageProcessingLog(**dict(r)) for r in cur.fetchall()]

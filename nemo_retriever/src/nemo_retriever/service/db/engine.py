@@ -14,12 +14,26 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _DDL = """
+CREATE TABLE IF NOT EXISTS jobs (
+    id               TEXT PRIMARY KEY,
+    filename         TEXT NOT NULL,
+    content_sha256   TEXT NOT NULL,
+    total_pages      INTEGER NOT NULL,
+    pages_submitted  INTEGER NOT NULL DEFAULT 0,
+    pages_completed  INTEGER NOT NULL DEFAULT 0,
+    processing_status TEXT NOT NULL DEFAULT 'queued',
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS documents (
     id              TEXT PRIMARY KEY,
+    job_id          TEXT REFERENCES jobs(id),
     filename        TEXT NOT NULL,
     content_type    TEXT NOT NULL DEFAULT 'application/octet-stream',
     content_sha256  TEXT NOT NULL,
     file_size_bytes INTEGER NOT NULL,
+    page_number     INTEGER,
     total_pages     INTEGER,
     pages_received  INTEGER NOT NULL DEFAULT 0,
     processing_status TEXT NOT NULL DEFAULT 'queued',
@@ -29,6 +43,7 @@ CREATE TABLE IF NOT EXISTS documents (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_sha256 ON documents(content_sha256);
+CREATE INDEX IF NOT EXISTS idx_documents_job ON documents(job_id);
 
 CREATE TABLE IF NOT EXISTS page_results (
     id          TEXT PRIMARY KEY,
@@ -41,17 +56,36 @@ CREATE TABLE IF NOT EXISTS page_results (
 CREATE INDEX IF NOT EXISTS idx_page_results_doc ON page_results(document_id);
 
 CREATE TABLE IF NOT EXISTS processing_metrics (
-    id               TEXT PRIMARY KEY,
-    document_id      TEXT NOT NULL REFERENCES documents(id),
-    model_name       TEXT NOT NULL,
-    invocation_count INTEGER NOT NULL DEFAULT 0,
-    pages_processed  INTEGER NOT NULL DEFAULT 0,
-    detections_count INTEGER NOT NULL DEFAULT 0,
-    duration_ms      REAL NOT NULL DEFAULT 0.0,
-    created_at       TEXT NOT NULL
+    id                   TEXT PRIMARY KEY,
+    document_id          TEXT NOT NULL REFERENCES documents(id),
+    model_name           TEXT NOT NULL,
+    invocation_count     INTEGER NOT NULL DEFAULT 0,
+    pages_processed      INTEGER NOT NULL DEFAULT 0,
+    detections_count     INTEGER NOT NULL DEFAULT 0,
+    counts_by_label_json TEXT NOT NULL DEFAULT '{}',
+    duration_ms          REAL NOT NULL DEFAULT 0.0,
+    created_at           TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_metrics_doc ON processing_metrics(document_id);
+
+CREATE TABLE IF NOT EXISTS page_processing_log (
+    id                     TEXT PRIMARY KEY,
+    document_id            TEXT NOT NULL REFERENCES documents(id),
+    job_id                 TEXT REFERENCES jobs(id),
+    source_file            TEXT NOT NULL,
+    page_number            INTEGER NOT NULL,
+    status                 TEXT NOT NULL DEFAULT 'complete',
+    error_message          TEXT,
+    detection_count        INTEGER NOT NULL DEFAULT 0,
+    processing_duration_ms REAL NOT NULL DEFAULT 0.0,
+    started_at             TEXT NOT NULL,
+    completed_at           TEXT NOT NULL,
+    created_at             TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_ppl_source ON page_processing_log(source_file);
+CREATE INDEX IF NOT EXISTS idx_ppl_job ON page_processing_log(job_id);
 """
 
 

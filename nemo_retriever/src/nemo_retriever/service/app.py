@@ -120,10 +120,11 @@ def create_app(config: ServiceConfig) -> FastAPI:
     )
     app.state.config = config
 
-    from nemo_retriever.service.routers import ingest, internal, stream
+    from nemo_retriever.service.routers import ingest, internal, metrics, stream
 
     app.include_router(ingest.router, prefix="/v1")
     app.include_router(internal.router, prefix="/v1")
+    app.include_router(metrics.router, prefix="/v1")
     app.include_router(stream.router, prefix="/v1")
 
     return app
