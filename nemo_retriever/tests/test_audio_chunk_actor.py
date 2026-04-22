@@ -6,7 +6,6 @@
 Unit tests for nemo_retriever.audio: MediaChunkActor and audio_path_to_chunks_df.
 """
 
-import asyncio
 import wave
 from pathlib import Path
 
@@ -18,13 +17,7 @@ from nemo_retriever.audio.chunk_actor import MediaChunkActor
 from nemo_retriever.audio.chunk_actor import audio_path_to_chunks_df
 from nemo_retriever.audio.media_interface import is_media_available
 from nemo_retriever.params import AudioChunkParams
-
-
-def _run(coro_or_result):
-    """Run a coroutine synchronously in tests; pass through plain values."""
-    if not asyncio.iscoroutine(coro_or_result):
-        return coro_or_result
-    return asyncio.new_event_loop().run_until_complete(coro_or_result)
+from nemo_retriever.tests.testing_utils import _run
 
 
 def _make_small_wav(path: Path, duration_sec: float = 0.5, sample_rate: int = 8000) -> None:

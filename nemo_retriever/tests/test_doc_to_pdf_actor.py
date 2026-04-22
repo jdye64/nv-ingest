@@ -2,21 +2,14 @@
 # All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
 from unittest.mock import patch
 
 import pandas as pd
 import pytest
 
 from nemo_retriever.graph.abstract_operator import AbstractOperator
+from nemo_retriever.tests.testing_utils import _run
 from nemo_retriever.utils.convert.to_pdf import DocToPdfConversionActor, convert_to_pdf_bytes, convert_batch_to_pdf
-
-
-def _run(coro_or_result):
-    """Run a coroutine synchronously in tests; pass through plain values."""
-    if not asyncio.iscoroutine(coro_or_result):
-        return coro_or_result
-    return asyncio.new_event_loop().run_until_complete(coro_or_result)
 
 
 class TestConvertToPdfBytes:

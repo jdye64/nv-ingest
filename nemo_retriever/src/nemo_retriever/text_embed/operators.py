@@ -56,6 +56,8 @@ def __getattr__(name: str):
         from nemo_retriever.text_embed.gpu_operator import BatchEmbedGPUActor
 
         return BatchEmbedGPUActor
+    if name == "_BatchEmbedActor":
+        return BatchEmbedActor
     if name == "_BatchEmbedCPUActor":
         from nemo_retriever.text_embed.cpu_operator import BatchEmbedCPUActor
 

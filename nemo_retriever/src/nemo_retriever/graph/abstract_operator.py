@@ -16,32 +16,15 @@ if TYPE_CHECKING:
 def _ensure_event_loop() -> None:
     """Guarantee an asyncio event loop exists for the current thread.
 
-    uvloop >= 0.22's ``get_event_loop()`` raises ``RuntimeError`` when no loop
-    is *running*, which breaks Ray Data's async-actor initialisation in freshly
-    spawned worker processes.  We try to create a loop under the *current*
-    policy first so that uvloop (or any other custom policy) is preserved.
-    The default-policy fallback only triggers if the installed policy itself
-    cannot create a usable loop.
+    Ray Data spawns fresh worker processes that may not have an event loop.
+    ``asyncio.new_event_loop()`` delegates to the installed policy, so uvloop
+    (or any other custom policy) is automatically preserved.
     """
     try:
-        loop = asyncio.get_event_loop_policy().get_event_loop()
-        if loop.is_closed():
-            raise RuntimeError("closed")
+        asyncio.get_running_loop()
         return
     except RuntimeError:
         pass
-
-    # Try to create a new loop under the current policy before falling back.
-    policy = asyncio.get_event_loop_policy()
-    try:
-        new_loop = policy.new_event_loop()
-        asyncio.set_event_loop(new_loop)
-        return
-    except Exception:
-        pass
-
-    # Current policy cannot create a loop — fall back to the stdlib default.
-    asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
     asyncio.set_event_loop(asyncio.new_event_loop())
 
 

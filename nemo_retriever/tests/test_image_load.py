@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
 from io import BytesIO
 from unittest.mock import patch
@@ -23,13 +22,7 @@ from nemo_retriever.image.load import (  # noqa: E402
     image_file_to_pages_df,
 )
 from nemo_retriever.image.ray_data import ImageLoadActor  # noqa: E402
-
-
-def _run(coro_or_result):
-    """Run a coroutine synchronously in tests; pass through plain values."""
-    if not asyncio.iscoroutine(coro_or_result):
-        return coro_or_result
-    return asyncio.new_event_loop().run_until_complete(coro_or_result)
+from nemo_retriever.tests.testing_utils import _run  # noqa: E402
 
 
 # -- Helpers ------------------------------------------------------------------

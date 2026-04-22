@@ -11,19 +11,13 @@ are stubbed via sys.modules injection so no GPU or model download is required.
 
 from __future__ import annotations
 
-import asyncio
 import sys
 from types import ModuleType
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-
-def _run(coro_or_result):
-    """Run a coroutine synchronously in tests; pass through plain values."""
-    if not asyncio.iscoroutine(coro_or_result):
-        return coro_or_result
-    return asyncio.new_event_loop().run_until_complete(coro_or_result)
+from nemo_retriever.tests.testing_utils import _run
 
 
 # ---------------------------------------------------------------------------

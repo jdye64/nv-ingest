@@ -10,7 +10,6 @@ the model package; local-ASR tests inject a fake nemo_retriever.model.local
 into sys.modules so the real module is never loaded.
 """
 
-import asyncio
 import base64
 import sys
 from unittest.mock import MagicMock
@@ -21,13 +20,7 @@ import pandas as pd
 from nemo_retriever.audio.asr_actor import ASRActor, ASRCPUActor
 from nemo_retriever.audio.asr_actor import apply_asr_to_df
 from nemo_retriever.params import ASRParams
-
-
-def _run(coro_or_result):
-    """Run a coroutine synchronously in tests; pass through plain values."""
-    if not asyncio.iscoroutine(coro_or_result):
-        return coro_or_result
-    return asyncio.new_event_loop().run_until_complete(coro_or_result)
+from nemo_retriever.tests.testing_utils import _run
 
 
 def test_strip_pad_from_transcript():

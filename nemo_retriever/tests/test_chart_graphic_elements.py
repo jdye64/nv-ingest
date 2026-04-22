@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import importlib
 import io
@@ -15,14 +14,8 @@ from unittest.mock import MagicMock
 import pandas as pd
 import pytest
 
+from nemo_retriever.tests.testing_utils import _run
 from nemo_retriever.utils.table_and_chart import join_graphic_elements_and_ocr_output
-
-
-def _run(coro_or_result):
-    """Run a coroutine synchronously in tests; pass through plain values."""
-    if not asyncio.iscoroutine(coro_or_result):
-        return coro_or_result
-    return asyncio.new_event_loop().run_until_complete(coro_or_result)
 
 
 def _can_import(mod: str) -> bool:

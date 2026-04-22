@@ -4,7 +4,6 @@
 
 """Unit tests verifying all pipeline actors inherit from AbstractOperator."""
 
-import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -12,17 +11,7 @@ import pandas as pd
 import pytest
 
 from nemo_retriever.graph.abstract_operator import AbstractOperator
-
-
-def _run(coro_or_result):
-    """Run a coroutine synchronously in tests; pass through plain values."""
-    if not asyncio.iscoroutine(coro_or_result):
-        return coro_or_result
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(coro_or_result)
-    finally:
-        loop.close()
+from nemo_retriever.tests.testing_utils import _run
 
 
 # ---------------------------------------------------------------------------
