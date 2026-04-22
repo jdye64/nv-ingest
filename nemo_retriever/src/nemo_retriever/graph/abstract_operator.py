@@ -77,20 +77,9 @@ class AbstractOperator(ABC):
         data = self.postprocess(data, **kwargs)
         return data
 
-    def __call__(self, data: Any, **kwargs: Any) -> Any:
-        """Make operators directly usable as Ray ``map_batches`` async callables.
-
-        When called from a synchronous context (no running event loop) the
-        operator executes synchronously via :meth:`run` so that existing
-        ``result = op(data)`` call-sites keep working.  Inside an async
-        context the method returns the :meth:`arun` coroutine which the
-        caller (e.g. Ray Data) must ``await``.
-        """
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return self.run(data, **kwargs)
-        return self.arun(data, **kwargs)
+    async def __call__(self, data: Any, **kwargs: Any) -> Any:
+        """Make operators directly usable as Ray ``map_batches`` async callables."""
+        return await self.arun(data, **kwargs)
 
     def get_constructor_kwargs(self) -> dict[str, Any]:
         """Best-effort constructor kwargs for executor-side reconstruction."""
