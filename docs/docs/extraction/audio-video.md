@@ -7,22 +7,17 @@ with the [parakeet-1-1b-ctc-en-us ASR NIM microservice](https://docs.nvidia.com/
 - Run the NIM locally by using Docker Compose
 - Use NVIDIA Cloud Functions (NVCF) endpoints for cloud-based inference
 
-!!! note
-
-   NVIDIA Ingest (nv-ingest) has been renamed NeMo Retriever Library. 
-
 Currently, you can extract speech from the following file types:
 
 - `mp3`
 - `wav`
 
 
-
 ## Overview
 
 [NeMo Retriever Library](overview.md) supports extracting speech from audio files for Retrieval Augmented Generation (RAG) applications. 
 Similar to how the multimodal document extraction pipeline leverages object detection and image OCR microservices, 
-NeMo Retriever leverages the [parakeet-1-1b-ctc-en-us ASR NIM microservice](https://docs.nvidia.com/nim/speech/latest/asr/deploy-asr-models/parakeet-ctc-en-us.html) 
+NeMo Retriever Library uses the [parakeet-1-1b-ctc-en-us ASR NIM microservice](https://docs.nvidia.com/nim/speech/latest/asr/deploy-asr-models/parakeet-ctc-en-us.html) 
 to transcribe speech to text, which is then embedded by using the NeMo Retriever embedding NIM. 
 
 !!! important
@@ -45,7 +40,7 @@ Use the following procedure to run the NIM locally.
 
     The parakeet-1-1b-ctc-en-us ASR NIM microservice must run on a [dedicated additional GPU](support-matrix.md). Edit docker-compose.yaml to set the device_id to a dedicated GPU: device_ids: ["1"] or higher.
 
-1. To access the required container images, log in to the NVIDIA Container Registry (nvcr.io). Use [your NGC key](ngc-api-key.md) as the password. Run the following command in your terminal.
+1. To access the required container images, log in to the NVIDIA Container Registry (nvcr.io). Use [your NGC key](api-keys.md) as the password. Run the following command in your terminal.
 
     - Replace `<your-ngc-key>` with your actual NGC API key.
     - The username is always `$oauthtoken`.
@@ -92,7 +87,7 @@ To generate one extracted element for each sentence-like ASR segment, include `e
 
     !!! tip
 
-        For more Python examples, refer to [NV-Ingest: Python Client Quick Start Guide](https://github.com/NVIDIA/nv-ingest/blob/main/client/client_examples/examples/python_client_usage.ipynb).
+        For more Python examples, refer to [Python Quick Start Guide](https://github.com/NVIDIA/NeMo-Retriever/blob/main/client/client_examples/examples/python_client_usage.ipynb).
 
 
 ## Use NVCF Endpoints for Cloud-Based Inference
@@ -128,7 +123,7 @@ Instead of running the pipeline locally, you can use NVCF to perform inference b
 
     !!! tip
 
-        For more Python examples, refer to [NV-Ingest: Python Client Quick Start Guide](https://github.com/NVIDIA/nv-ingest/blob/main/client/client_examples/examples/python_client_usage.ipynb).
+        For more Python examples, refer to [Python Quick Start Guide](https://github.com/NVIDIA/NeMo-Retriever/blob/main/client/client_examples/examples/python_client_usage.ipynb).
 
 
 
@@ -136,4 +131,4 @@ Instead of running the pipeline locally, you can use NVCF to perform inference b
 
 - [Support Matrix](support-matrix.md)
 - [Troubleshoot Nemo Retriever Extraction](troubleshoot.md)
-- [Use the Python API](nv-ingest-python-api.md)
+- [Use the Python API](python-api-reference.md)
