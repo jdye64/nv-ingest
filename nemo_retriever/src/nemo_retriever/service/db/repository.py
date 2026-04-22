@@ -2,14 +2,20 @@
 # All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""CRUD operations for all service-mode SQLite tables."""
+"""CRUD operations for all service-mode SQLite tables.
+
+Every write method is wrapped with :func:`execute_with_retry` so that
+transient ``OperationalError: database is locked`` errors (common with
+16+ concurrent writer processes) are retried with exponential backoff
+instead of crashing the worker.
+"""
 
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
 
-from nemo_retriever.service.db.engine import DatabaseEngine
+from nemo_retriever.service.db.engine import DatabaseEngine, execute_with_retry
 from nemo_retriever.service.models.document import Document, ProcessingStatus
 from nemo_retriever.service.models.job import Job
 from nemo_retriever.service.models.metrics import ProcessingMetric
@@ -20,7 +26,11 @@ logger = logging.getLogger(__name__)
 
 
 class Repository:
-    """Data-access layer wrapping all three service tables."""
+    """Data-access layer wrapping all service tables.
+
+    All public write methods delegate to ``execute_with_retry`` so that
+    SQLite lock contention is handled transparently.
+    """
 
     def __init__(self, engine: DatabaseEngine) -> None:
         self._engine = engine
@@ -34,11 +44,14 @@ class Repository:
     # ------------------------------------------------------------------
 
     def insert_job(self, job: Job) -> None:
-        row = job.to_row()
-        cols = ", ".join(row.keys())
-        placeholders = ", ".join(f":{k}" for k in row.keys())
-        self._conn.execute(f"INSERT INTO jobs ({cols}) VALUES ({placeholders})", row)
-        self._conn.commit()
+        def _do():
+            row = job.to_row()
+            cols = ", ".join(row.keys())
+            placeholders = ", ".join(f":{k}" for k in row.keys())
+            self._conn.execute(f"INSERT INTO jobs ({cols}) VALUES ({placeholders})", row)
+            self._conn.commit()
+
+        execute_with_retry(_do)
 
     def get_job(self, job_id: str) -> Job | None:
         cur = self._conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,))
@@ -51,34 +64,43 @@ class Repository:
         return Job(**dict(row)) if row else None
 
     def increment_job_pages_submitted(self, job_id: str) -> int:
-        now = datetime.now(timezone.utc).isoformat()
-        self._conn.execute(
-            "UPDATE jobs SET pages_submitted = pages_submitted + 1, updated_at = ? WHERE id = ?",
-            (now, job_id),
-        )
-        self._conn.commit()
-        cur = self._conn.execute("SELECT pages_submitted FROM jobs WHERE id = ?", (job_id,))
-        row = cur.fetchone()
-        return int(row["pages_submitted"]) if row else 0
+        def _do() -> int:
+            now = datetime.now(timezone.utc).isoformat()
+            self._conn.execute(
+                "UPDATE jobs SET pages_submitted = pages_submitted + 1, updated_at = ? WHERE id = ?",
+                (now, job_id),
+            )
+            self._conn.commit()
+            cur = self._conn.execute("SELECT pages_submitted FROM jobs WHERE id = ?", (job_id,))
+            row = cur.fetchone()
+            return int(row["pages_submitted"]) if row else 0
+
+        return execute_with_retry(_do)
 
     def increment_job_pages_completed(self, job_id: str) -> int:
-        now = datetime.now(timezone.utc).isoformat()
-        self._conn.execute(
-            "UPDATE jobs SET pages_completed = pages_completed + 1, updated_at = ? WHERE id = ?",
-            (now, job_id),
-        )
-        self._conn.commit()
-        cur = self._conn.execute("SELECT pages_completed, total_pages FROM jobs WHERE id = ?", (job_id,))
-        row = cur.fetchone()
-        return int(row["pages_completed"]) if row else 0
+        def _do() -> int:
+            now = datetime.now(timezone.utc).isoformat()
+            self._conn.execute(
+                "UPDATE jobs SET pages_completed = pages_completed + 1, updated_at = ? WHERE id = ?",
+                (now, job_id),
+            )
+            self._conn.commit()
+            cur = self._conn.execute("SELECT pages_completed, total_pages FROM jobs WHERE id = ?", (job_id,))
+            row = cur.fetchone()
+            return int(row["pages_completed"]) if row else 0
+
+        return execute_with_retry(_do)
 
     def update_job_status(self, job_id: str, status: ProcessingStatus) -> None:
-        now = datetime.now(timezone.utc).isoformat()
-        self._conn.execute(
-            "UPDATE jobs SET processing_status = ?, updated_at = ? WHERE id = ?",
-            (status.value, now, job_id),
-        )
-        self._conn.commit()
+        def _do():
+            now = datetime.now(timezone.utc).isoformat()
+            self._conn.execute(
+                "UPDATE jobs SET processing_status = ?, updated_at = ? WHERE id = ?",
+                (status.value, now, job_id),
+            )
+            self._conn.commit()
+
+        execute_with_retry(_do)
 
     def get_documents_for_job(self, job_id: str) -> list[Document]:
         cur = self._conn.execute(
@@ -101,11 +123,14 @@ class Repository:
     # ------------------------------------------------------------------
 
     def insert_document(self, doc: Document) -> None:
-        row = doc.to_row()
-        cols = ", ".join(row.keys())
-        placeholders = ", ".join(f":{k}" for k in row.keys())
-        self._conn.execute(f"INSERT INTO documents ({cols}) VALUES ({placeholders})", row)
-        self._conn.commit()
+        def _do():
+            row = doc.to_row()
+            cols = ", ".join(row.keys())
+            placeholders = ", ".join(f":{k}" for k in row.keys())
+            self._conn.execute(f"INSERT INTO documents ({cols}) VALUES ({placeholders})", row)
+            self._conn.commit()
+
+        execute_with_retry(_do)
 
     def get_document(self, document_id: str) -> Document | None:
         cur = self._conn.execute("SELECT * FROM documents WHERE id = ?", (document_id,))
@@ -124,41 +149,51 @@ class Repository:
         *,
         total_pages: int | None = None,
     ) -> None:
-        now = datetime.now(timezone.utc).isoformat()
-        if total_pages is not None:
-            self._conn.execute(
-                "UPDATE documents SET processing_status = ?, total_pages = ?, updated_at = ? WHERE id = ?",
-                (status.value, total_pages, now, document_id),
-            )
-        else:
-            self._conn.execute(
-                "UPDATE documents SET processing_status = ?, updated_at = ? WHERE id = ?",
-                (status.value, now, document_id),
-            )
-        self._conn.commit()
+        def _do():
+            now = datetime.now(timezone.utc).isoformat()
+            if total_pages is not None:
+                self._conn.execute(
+                    "UPDATE documents SET processing_status = ?, total_pages = ?, updated_at = ? WHERE id = ?",
+                    (status.value, total_pages, now, document_id),
+                )
+            else:
+                self._conn.execute(
+                    "UPDATE documents SET processing_status = ?, updated_at = ? WHERE id = ?",
+                    (status.value, now, document_id),
+                )
+            self._conn.commit()
+
+        execute_with_retry(_do)
 
     def increment_pages_received(self, document_id: str) -> int:
         """Atomically increment ``pages_received`` and return the new count."""
-        now = datetime.now(timezone.utc).isoformat()
-        self._conn.execute(
-            "UPDATE documents SET pages_received = pages_received + 1, updated_at = ? WHERE id = ?",
-            (now, document_id),
-        )
-        self._conn.commit()
-        cur = self._conn.execute("SELECT pages_received FROM documents WHERE id = ?", (document_id,))
-        row = cur.fetchone()
-        return int(row["pages_received"]) if row else 0
+
+        def _do() -> int:
+            now = datetime.now(timezone.utc).isoformat()
+            self._conn.execute(
+                "UPDATE documents SET pages_received = pages_received + 1, updated_at = ? WHERE id = ?",
+                (now, document_id),
+            )
+            self._conn.commit()
+            cur = self._conn.execute("SELECT pages_received FROM documents WHERE id = ?", (document_id,))
+            row = cur.fetchone()
+            return int(row["pages_received"]) if row else 0
+
+        return execute_with_retry(_do)
 
     # ------------------------------------------------------------------
     # Page results
     # ------------------------------------------------------------------
 
     def insert_page_result(self, page: PageResult) -> None:
-        row = page.to_row()
-        cols = ", ".join(row.keys())
-        placeholders = ", ".join(f":{k}" for k in row.keys())
-        self._conn.execute(f"INSERT INTO page_results ({cols}) VALUES ({placeholders})", row)
-        self._conn.commit()
+        def _do():
+            row = page.to_row()
+            cols = ", ".join(row.keys())
+            placeholders = ", ".join(f":{k}" for k in row.keys())
+            self._conn.execute(f"INSERT INTO page_results ({cols}) VALUES ({placeholders})", row)
+            self._conn.commit()
+
+        execute_with_retry(_do)
 
     def get_page_results(self, document_id: str) -> list[PageResult]:
         cur = self._conn.execute(
@@ -172,21 +207,28 @@ class Repository:
     # ------------------------------------------------------------------
 
     def insert_metric(self, metric: ProcessingMetric) -> None:
-        row = metric.to_row()
-        cols = ", ".join(row.keys())
-        placeholders = ", ".join(f":{k}" for k in row.keys())
-        self._conn.execute(f"INSERT INTO processing_metrics ({cols}) VALUES ({placeholders})", row)
-        self._conn.commit()
+        def _do():
+            row = metric.to_row()
+            cols = ", ".join(row.keys())
+            placeholders = ", ".join(f":{k}" for k in row.keys())
+            self._conn.execute(f"INSERT INTO processing_metrics ({cols}) VALUES ({placeholders})", row)
+            self._conn.commit()
+
+        execute_with_retry(_do)
 
     def insert_metrics(self, metrics: list[ProcessingMetric]) -> None:
         if not metrics:
             return
-        for m in metrics:
-            row = m.to_row()
-            cols = ", ".join(row.keys())
-            placeholders = ", ".join(f":{k}" for k in row.keys())
-            self._conn.execute(f"INSERT INTO processing_metrics ({cols}) VALUES ({placeholders})", row)
-        self._conn.commit()
+
+        def _do():
+            for m in metrics:
+                row = m.to_row()
+                cols = ", ".join(row.keys())
+                placeholders = ", ".join(f":{k}" for k in row.keys())
+                self._conn.execute(f"INSERT INTO processing_metrics ({cols}) VALUES ({placeholders})", row)
+            self._conn.commit()
+
+        execute_with_retry(_do)
 
     def get_metrics(self, document_id: str) -> list[ProcessingMetric]:
         cur = self._conn.execute(
@@ -200,14 +242,17 @@ class Repository:
     # ------------------------------------------------------------------
 
     def insert_page_processing_log(self, entry: PageProcessingLog) -> None:
-        row = entry.to_row()
-        cols = ", ".join(row.keys())
-        placeholders = ", ".join(f":{k}" for k in row.keys())
-        self._conn.execute(
-            f"INSERT OR REPLACE INTO page_processing_log ({cols}) VALUES ({placeholders})",
-            row,
-        )
-        self._conn.commit()
+        def _do():
+            row = entry.to_row()
+            cols = ", ".join(row.keys())
+            placeholders = ", ".join(f":{k}" for k in row.keys())
+            self._conn.execute(
+                f"INSERT OR REPLACE INTO page_processing_log ({cols}) VALUES ({placeholders})",
+                row,
+            )
+            self._conn.commit()
+
+        execute_with_retry(_do)
 
     def get_all_page_processing_logs(self) -> list[PageProcessingLog]:
         cur = self._conn.execute("SELECT * FROM page_processing_log ORDER BY source_file, page_number")

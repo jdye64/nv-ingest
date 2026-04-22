@@ -93,10 +93,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.processing_pool = pool
 
     logger.info(
-        "Retriever service started — host=%s port=%d pool_size=%d",
+        "Retriever service started — host=%s port=%d workers=%d",
         config.server.host,
         config.server.port,
-        config.processing.thread_pool_size,
+        config.processing.num_workers,
     )
 
     yield

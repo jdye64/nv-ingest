@@ -205,12 +205,11 @@ async def stream_job_events(
     request: Request,
     body: JobStreamRequest,
 ) -> StreamingResponse:
-    repo: Repository = request.app.state.repository
-    for jid in body.job_ids:
-        job = repo.get_job(jid)
-        if job is None:
-            raise HTTPException(status_code=404, detail=f"Job {jid} not found")
-
+    # Subscribe immediately without validating job existence.
+    # Jobs are created on-the-fly as the first page for each file arrives,
+    # so the SSE stream must be open BEFORE uploads begin to avoid missing
+    # early events.  The EventBus is purely in-memory and doesn't need
+    # the job row to exist.
     event_bus: EventBus = request.app.state.event_bus
     return StreamingResponse(
         _job_stream_generator(event_bus, body.job_ids),

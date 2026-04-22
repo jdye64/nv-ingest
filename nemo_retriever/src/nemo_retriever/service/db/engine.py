@@ -2,16 +2,75 @@
 # All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Thread-safe SQLite connection pool using ``threading.local``."""
+"""Thread-safe SQLite connection pool using ``threading.local``.
+
+Multi-process writer safety
+---------------------------
+Service mode runs N worker *processes*, each opening its own connection.
+WAL mode allows concurrent readers and a single writer at a time.  When
+multiple workers call ``commit()`` simultaneously, they contend for the
+write lock.  We defend against ``OperationalError: database is locked``
+at two levels:
+
+1. **Connection-level busy timeout** — ``sqlite3.connect(timeout=60)``
+   plus ``PRAGMA busy_timeout=60000`` tells SQLite's built-in busy
+   handler to spin/sleep up to 60 s before returning ``SQLITE_BUSY``.
+
+2. **Application-level retry** — :func:`execute_with_retry` wraps
+   any callable that touches the DB with exponential-backoff retries
+   so that transient lock contention is retried transparently.
+"""
 
 from __future__ import annotations
 
 import logging
+import random
 import sqlite3
 import threading
+import time
 from pathlib import Path
+from typing import TypeVar
 
 logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
+
+_BUSY_TIMEOUT_MS = 60_000
+_CONNECT_TIMEOUT_S = _BUSY_TIMEOUT_MS / 1000
+
+_RETRY_MAX_ATTEMPTS = 8
+_RETRY_BASE_DELAY = 0.1
+_RETRY_MAX_DELAY = 10.0
+
+
+def execute_with_retry(fn, *args, **kwargs) -> _T:  # type: ignore[type-var]
+    """Call *fn* with retries on ``sqlite3.OperationalError``.
+
+    Uses exponential backoff with jitter.  This catches the cases where
+    even the 60 s busy_timeout is exhausted (e.g. a long-running
+    checkpoint) or when the error surfaces from Python's connection
+    management rather than from SQLite's busy handler.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(_RETRY_MAX_ATTEMPTS):
+        try:
+            return fn(*args, **kwargs)
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
+                raise
+            last_exc = exc
+            delay = min(_RETRY_BASE_DELAY * (2**attempt), _RETRY_MAX_DELAY)
+            delay *= 0.5 + random.random()  # jitter
+            logger.warning(
+                "SQLite locked (attempt %d/%d), retrying in %.2fs: %s",
+                attempt + 1,
+                _RETRY_MAX_ATTEMPTS,
+                delay,
+                exc,
+            )
+            time.sleep(delay)
+    raise last_exc  # type: ignore[misc]
+
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -97,9 +156,15 @@ class DatabaseEngine:
         self._local = threading.local()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        conn = sqlite3.connect(
+            self._db_path,
+            timeout=_CONNECT_TIMEOUT_S,
+            check_same_thread=False,
+        )
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
+        conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA foreign_keys=ON")
         return conn
 

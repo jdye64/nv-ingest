@@ -259,3 +259,9 @@ models/
 nemo_retriever/run_results/
 
 nemo_retriever/src/nemo_retriever/relational_db/generate_sql/spider2-lite.jsonl
+
+*.db
+*.db-shm
+*.db-wal
+
+nemo_retriever/private_scripts/

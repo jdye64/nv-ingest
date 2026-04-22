@@ -27,11 +27,11 @@ def start(
     port: Optional[int] = typer.Option(None, "--port", "-p", help="Listen port (overrides YAML)."),
     log_level: Optional[str] = typer.Option(None, "--log-level", help="Logging level (overrides YAML)."),
     log_file: Optional[str] = typer.Option(None, "--log-file", help="Log file path (overrides YAML)."),
-    thread_pool_size: Optional[int] = typer.Option(
-        None, "--thread-pool-size", help="Worker thread count (overrides YAML)."
-    ),
-    pipeline_replicas: Optional[int] = typer.Option(
-        None, "--pipeline-replicas", help="Number of pipeline operator chain copies (overrides YAML)."
+    num_workers: Optional[int] = typer.Option(
+        None,
+        "--num-workers",
+        "-w",
+        help="Number of worker processes (each with its own operator chain). Default 16 for NIM, 1-2 for local GPU.",
     ),
     page_elements_url: Optional[str] = typer.Option(
         None, "--page-elements-url", help="NIM endpoint for page element detection (overrides YAML)."
@@ -68,10 +68,8 @@ def start(
         overrides["logging.level"] = log_level
     if log_file is not None:
         overrides["logging.file"] = log_file
-    if thread_pool_size is not None:
-        overrides["processing.thread_pool_size"] = thread_pool_size
-    if pipeline_replicas is not None:
-        overrides["processing.pipeline_replicas"] = pipeline_replicas
+    if num_workers is not None:
+        overrides["processing.num_workers"] = num_workers
     if page_elements_url is not None:
         overrides["nim_endpoints.page_elements_invoke_url"] = page_elements_url
     if ocr_url is not None:
@@ -94,6 +92,13 @@ def start(
     from nemo_retriever.service.app import create_app
 
     application = create_app(cfg)
+
+    try:
+        import setproctitle
+
+        setproctitle.setproctitle("nemo-retriever-server")
+    except ImportError:
+        pass
 
     uvicorn.run(
         application,

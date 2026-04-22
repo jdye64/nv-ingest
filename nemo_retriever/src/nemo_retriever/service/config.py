@@ -51,8 +51,7 @@ class NimEndpointsConfig(BaseModel):
 class ProcessingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    thread_pool_size: int = 32
-    pipeline_replicas: int = 1
+    num_workers: int = 16
 
 
 class ResourceLimitsConfig(BaseModel):

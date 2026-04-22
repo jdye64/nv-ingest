@@ -17,20 +17,23 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import httpx
+from rich.bar import Bar
 from rich.console import Console, Group
 from rich.live import Live
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
 from rich.table import Table
+from rich.text import Text
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_RETRY_AFTER = 5.0
-_MAX_BACKOFF = 60.0
+_DEFAULT_RETRY_AFTER = 10.0
+_MAX_BACKOFF = 120.0
 _MAX_RETRIES = 5
 _RETRY_BASE_DELAY = 2.0
 
@@ -91,6 +94,8 @@ class _JobTracker:
         if job_id in self.jobs:
             j = self.jobs[job_id]
             j["pages_completed"] = min(j["pages_completed"] + 1, j["total_pages"])
+            if j["status"] == "uploading":
+                j["status"] = "processing"
 
     def page_failed(self, job_id: str, source_file: str, page_number: int, error: str) -> None:
         if job_id in self.jobs:
@@ -104,6 +109,8 @@ class _JobTracker:
         if job_id in self.jobs:
             j = self.jobs[job_id]
             j["pages_completed"] = min(max(j["pages_completed"], count), j["total_pages"])
+            if count > 0 and j["status"] == "uploading":
+                j["status"] = "processing"
 
     def job_done(self, job_id: str, status: str = "complete") -> None:
         if job_id in self.jobs:
@@ -140,66 +147,126 @@ class _JobTracker:
 
 
 class _LiveDisplay:
-    """Manages the rich live display with per-job progress bars and metrics."""
+    """Manages a compact Rich live display that scales to hundreds of files.
+
+    Only the overall progress bar and *actively-processing* files are shown.
+    Completed and queued jobs are counted but not listed individually.
+    """
 
     def __init__(self, tracker: _JobTracker) -> None:
         self._tracker = tracker
-        self._progress = Progress(
+        self._overall = Progress(
             TextColumn("[bold]{task.description}"),
-            BarColumn(bar_width=40),
+            BarColumn(bar_width=50),
             MofNCompleteColumn(),
             TextColumn("pages"),
             TimeElapsedColumn(),
         )
-        self._overall_task = self._progress.add_task("Overall", total=0)
-        self._job_tasks: dict[str, int] = {}
+        self._overall_task = self._overall.add_task("Overall", total=0)
+        self._t0 = time.monotonic()
 
     def add_job(self, job_id: str, filename: str, total_pages: int) -> None:
-        display_name = filename if len(filename) <= 30 else filename[:27] + "..."
-        task_id = self._progress.add_task(display_name, total=total_pages)
-        self._job_tasks[job_id] = task_id
-        self._progress.update(self._overall_task, total=self._tracker.total_pages)
+        self._overall.update(self._overall_task, total=self._tracker.total_pages)
 
-    def refresh(self) -> None:
-        for job_id, task_id in self._job_tasks.items():
-            info = self._tracker.jobs.get(job_id)
-            if info:
-                completed = info["pages_completed"]
-                failed = info.get("pages_failed", 0)
-                self._progress.update(task_id, completed=completed)
-                if info["status"] == "complete" and failed == 0:
-                    self._progress.update(task_id, description=f"[green]{info['filename']}  done")
-                elif info["status"] in ("complete", "failed") and failed > 0:
-                    self._progress.update(
-                        task_id,
-                        description=f"[yellow]{info['filename']}  {failed} failed",
-                    )
-                elif info["status"] == "failed":
-                    self._progress.update(task_id, description=f"[red]{info['filename']}  FAILED")
-        self._progress.update(self._overall_task, completed=self._tracker.total_completed)
+    def _mini_bar(self, completed: int, total: int, width: int = 20) -> Bar:
+        """Build a small inline progress bar."""
+        return Bar(size=total, begin=0, end=completed, width=width)
 
     def build_renderable(self) -> Group:
-        self.refresh()
         t = self._tracker
+        self._overall.update(self._overall_task, completed=t.total_completed)
 
-        metrics_table = Table(title="Model Metrics", show_header=True, expand=False)
-        metrics_table.add_column("Model", style="cyan", min_width=25)
-        metrics_table.add_column("Invocations", justify="right")
-        metrics_table.add_column("Detections", justify="right")
-        for model, vals in sorted(t.metrics.items()):
-            metrics_table.add_row(
-                model,
-                str(vals["invocations"]),
-                str(vals["detections"]),
-            )
+        parts: list[Any] = [self._overall]
 
-        status_line = (
-            f"  Completed: {t.total_completed}/{t.total_pages}" f"  |  Failed: [red]{t.total_failed}[/red]"
-            if t.total_failed
-            else f"  Completed: {t.total_completed}/{t.total_pages}"
+        # --- Status summary line ---
+        n_complete = sum(1 for j in t.jobs.values() if j["status"] in ("complete", "failed") and j["pages_failed"] == 0)
+        n_failed_jobs = sum(1 for j in t.jobs.values() if j.get("pages_failed", 0) > 0)
+        n_active = sum(
+            1
+            for j in t.jobs.values()
+            if j["status"] in ("uploading", "processing") and j["pages_completed"] < j["total_pages"]
         )
+        n_queued = len(t.jobs) - n_complete - n_failed_jobs - n_active
 
-        return Group(self._progress, status_line, "", metrics_table)
+        elapsed = time.monotonic() - self._t0
+        pps = t.total_completed / elapsed if elapsed > 0 and t.total_completed > 0 else 0.0
+
+        status_parts = [
+            f"  [green]{n_complete} done[/green]",
+            f"[cyan]{n_active} active[/cyan]",
+        ]
+        if n_queued > 0:
+            status_parts.append(f"[dim]{n_queued} queued[/dim]")
+        if n_failed_jobs > 0:
+            status_parts.append(f"[red]{n_failed_jobs} with failures[/red]")
+        status_parts.append(f"[bold]{pps:.1f} pages/sec[/bold]")
+        parts.append("  |  ".join(status_parts))
+
+        # --- Active jobs table (only in-progress files) ---
+        active_jobs = [
+            (jid, info)
+            for jid, info in t.jobs.items()
+            if info["status"] in ("uploading", "processing") and info["pages_completed"] < info["total_pages"]
+        ]
+        if active_jobs:
+            active_table = Table(
+                show_header=True,
+                expand=False,
+                padding=(0, 1),
+                title=f"Active ({len(active_jobs)})",
+                title_style="bold cyan",
+            )
+            active_table.add_column("File", style="bold", max_width=35, no_wrap=True)
+            active_table.add_column("Progress", width=20, no_wrap=True)
+            active_table.add_column("Pages", justify="right", width=10)
+            active_table.add_column("Status", width=12)
+
+            for _jid, info in sorted(active_jobs, key=lambda x: x[1]["filename"]):
+                name = info["filename"]
+                if len(name) > 35:
+                    name = "…" + name[-33:]
+                completed = info["pages_completed"]
+                total = info["total_pages"]
+                pct = (completed / total * 100) if total > 0 else 0
+
+                bar = self._mini_bar(completed, total)
+                pages_text = f"{completed}/{total}"
+                status = info["status"]
+                if status == "uploading":
+                    status_text = Text("uploading", style="yellow")
+                else:
+                    status_text = Text(f"{pct:.0f}%", style="green")
+
+                active_table.add_row(name, bar, pages_text, status_text)
+
+            parts.append("")
+            parts.append(active_table)
+
+        # --- Detection metrics table ---
+        if t.metrics:
+            total_det = sum(v["detections"] for v in t.metrics.values())
+            total_inv = sum(v["invocations"] for v in t.metrics.values())
+
+            metrics_table = Table(
+                show_header=True,
+                expand=False,
+                padding=(0, 1),
+                title=f"Detections ({total_det:,} total, {total_inv:,} invocations)",
+                title_style="bold",
+            )
+            metrics_table.add_column("Model", style="cyan", min_width=20)
+            metrics_table.add_column("Invocations", justify="right")
+            metrics_table.add_column("Detections", justify="right")
+            for model, vals in sorted(t.metrics.items()):
+                metrics_table.add_row(
+                    model,
+                    f"{vals['invocations']:,}",
+                    f"{vals['detections']:,}",
+                )
+            parts.append("")
+            parts.append(metrics_table)
+
+        return Group(*parts)
 
 
 # ------------------------------------------------------------------
@@ -279,7 +346,7 @@ class RetrieverServiceClient:
                     await asyncio.wait_for(self._capacity_event.wait(), timeout=retry_after)
                 except asyncio.TimeoutError:
                     pass
-                backoff = min(backoff * 1.5, _MAX_BACKOFF)
+                backoff = min(backoff * 2.0, _MAX_BACKOFF)
 
     # ------------------------------------------------------------------
     # SSE job stream (runs concurrently with uploads)
@@ -312,24 +379,30 @@ class RetrieverServiceClient:
                 ) as resp:
                     resp.raise_for_status()
 
+                    async def _poll_one_job(jid: str) -> None:
+                        try:
+                            r = await client.get(f"{self._base_url}/v1/ingest/job/{jid}")
+                            r.raise_for_status()
+                            body = r.json()
+                            completed = body.get("pages_completed", 0)
+                            tracker.set_pages_completed(jid, completed)
+                            status = body.get("status", "")
+                            if status in ("complete", "failed"):
+                                tracker.job_done(jid, status)
+                                self.notify_capacity_available()
+                                pending.discard(jid)
+                        except Exception:
+                            pass
+
                     async def _catchup_poll() -> None:
                         await uploads_done.wait()
                         while pending:
                             await asyncio.sleep(2.0)
-                            for jid in list(pending):
-                                try:
-                                    r = await client.get(f"{self._base_url}/v1/ingest/job/{jid}")
-                                    r.raise_for_status()
-                                    body = r.json()
-                                    completed = body.get("pages_completed", 0)
-                                    tracker.set_pages_completed(jid, completed)
-                                    status = body.get("status", "")
-                                    if status in ("complete", "failed"):
-                                        tracker.job_done(jid, status)
-                                        self.notify_capacity_available()
-                                        pending.discard(jid)
-                                except Exception:
-                                    pass
+                            batch = list(pending)
+                            await asyncio.gather(
+                                *(_poll_one_job(jid) for jid in batch),
+                                return_exceptions=True,
+                            )
 
                     catchup_task = asyncio.create_task(_catchup_poll())
 
@@ -473,6 +546,59 @@ class RetrieverServiceClient:
         await asyncio.gather(*tasks, return_exceptions=True)
 
     # ------------------------------------------------------------------
+    # Text preview (post-processing validation)
+    # ------------------------------------------------------------------
+
+    async def _fetch_text_previews(
+        self,
+        client: httpx.AsyncClient,
+    ) -> dict[str, str]:
+        """Fetch per-file reassembled text from ingest_metrics + document status.
+
+        Returns ``{source_file: full_text}`` for every completed file.
+        """
+        try:
+            resp = await client.get(f"{self._base_url}/v1/ingest_metrics")
+            resp.raise_for_status()
+            metrics = resp.json()
+        except Exception:
+            return {}
+
+        file_doc_ids: dict[str, list[tuple[int, str]]] = {}
+        for file_info in metrics.get("files", []):
+            source = file_info.get("source_file", "unknown")
+            for page in file_info.get("pages", []):
+                doc_id = page.get("document_id")
+                page_num = page.get("page_number", 0)
+                if doc_id:
+                    file_doc_ids.setdefault(source, []).append((page_num, doc_id))
+
+        for pages in file_doc_ids.values():
+            pages.sort(key=lambda t: t[0])
+
+        async def _get_page_text(doc_id: str) -> str:
+            try:
+                r = await client.get(f"{self._base_url}/v1/ingest/status/{doc_id}")
+                r.raise_for_status()
+                body = r.json()
+                parts = []
+                for page in sorted(body.get("pages", []), key=lambda p: p.get("page_number", 0)):
+                    text = page.get("content", {}).get("text", "")
+                    if isinstance(text, str) and text.strip():
+                        parts.append(text.strip())
+                return "\n".join(parts)
+            except Exception:
+                return ""
+
+        previews: dict[str, str] = {}
+        for source_file, pages in file_doc_ids.items():
+            tasks = [_get_page_text(doc_id) for _, doc_id in pages]
+            page_texts = await asyncio.gather(*tasks)
+            previews[source_file] = "\n\n".join(t for t in page_texts if t)
+
+        return previews
+
+    # ------------------------------------------------------------------
     # Fetch failed pages from server (for poll-based flow)
     # ------------------------------------------------------------------
 
@@ -546,6 +672,8 @@ class RetrieverServiceClient:
         pool_limits = httpx.Limits(max_connections=200, max_keepalive_connections=100)
         timeout = httpx.Timeout(600.0, connect=30.0)
 
+        processing_t0 = time.monotonic()
+
         async with httpx.AsyncClient(timeout=timeout, limits=pool_limits) as client:
             with Live(display.build_renderable(), refresh_per_second=4) as live:
 
@@ -560,25 +688,10 @@ class RetrieverServiceClient:
                     job_ids = [p["job_id"] for p in job_plans]
                     uploads_done = asyncio.Event()
 
-                    first_page_coros = []
+                    all_upload_coros = []
                     for plan in job_plans:
-                        pb, pn, tp = plan["pages"][0]
-                        first_page_coros.append(
-                            self._upload_page(
-                                client,
-                                pb,
-                                plan["filename"],
-                                plan["job_id"],
-                                pn,
-                                tp,
-                            )
-                        )
-                    await asyncio.gather(*first_page_coros, return_exceptions=True)
-
-                    remaining_coros = []
-                    for plan in job_plans:
-                        for page_bytes, page_num, total in plan["pages"][1:]:
-                            remaining_coros.append(
+                        for page_bytes, page_num, total in plan["pages"]:
+                            all_upload_coros.append(
                                 self._upload_page(
                                     client,
                                     page_bytes,
@@ -590,8 +703,7 @@ class RetrieverServiceClient:
                             )
 
                     async def _do_uploads() -> None:
-                        if remaining_coros:
-                            await asyncio.gather(*remaining_coros, return_exceptions=True)
+                        await asyncio.gather(*all_upload_coros, return_exceptions=True)
                         for plan in job_plans:
                             if plan["job_id"] in tracker.jobs:
                                 tracker.jobs[plan["job_id"]]["status"] = "processing"
@@ -614,6 +726,8 @@ class RetrieverServiceClient:
                         pass
                     live.update(display.build_renderable())
 
+        processing_elapsed = time.monotonic() - processing_t0
+
         # Collect final results
         final_results: list[dict[str, Any]] = []
         async with httpx.AsyncClient(timeout=timeout, limits=pool_limits) as client:
@@ -627,8 +741,15 @@ class RetrieverServiceClient:
 
             await self._fetch_failed_pages(client, tracker)
 
-        # Print failure summary
+            # Fetch text previews for validation
+            text_previews = await self._fetch_text_previews(client)
+
+        # Print failure summary and text preview
         _print_failure_summary(tracker)
+        if text_previews:
+            _print_text_previews(text_previews)
+
+        _print_throughput(tracker.total_pages, processing_elapsed)
 
         return final_results
 
@@ -666,6 +787,68 @@ def _print_failure_summary(tracker: _JobTracker) -> None:
         fail_table.add_row(fp.page_id, fp.error)
 
     console.print(fail_table)
+    console.print()
+
+
+def _print_throughput(total_pages: int, elapsed_s: float) -> None:
+    """Print pages-per-second throughput as the final output line."""
+    if elapsed_s <= 0 or total_pages == 0:
+        return
+    pps = total_pages / elapsed_s
+    mins, secs = divmod(elapsed_s, 60)
+    if mins >= 1:
+        elapsed_fmt = f"{int(mins)}m {secs:.1f}s"
+    else:
+        elapsed_fmt = f"{elapsed_s:.1f}s"
+    console.print(
+        f"[bold]Throughput:[/bold] {total_pages:,} pages in {elapsed_fmt}"
+        f" = [bold green]{pps:.2f} pages/sec[/bold green]"
+    )
+    console.print()
+
+
+def _print_text_previews(previews: dict[str, str]) -> None:
+    """Print a truncated text preview per file for quick validation."""
+    if not previews:
+        return
+
+    table = Table(
+        title="Extracted Text Preview (per document)",
+        show_lines=True,
+        expand=True,
+    )
+    table.add_column("File", style="bold cyan", max_width=35, no_wrap=True)
+    table.add_column("Pages", justify="right", width=6)
+    table.add_column("Chars", justify="right", width=8)
+    table.add_column("Text Preview", ratio=1)
+
+    for source_file in sorted(previews):
+        text = previews[source_file]
+        char_count = len(text)
+        page_count = text.count("\n\n") + 1 if text else 0
+
+        if not text.strip():
+            preview = "[dim italic]<empty>[/dim italic]"
+        elif char_count <= 200:
+            preview = text.replace("\n", " ")
+        else:
+            head = text[:100].replace("\n", " ")
+            tail = text[-100:].replace("\n", " ")
+            preview = f"{head} [dim]…[/dim] {tail}"
+
+        display_name = source_file
+        if len(display_name) > 35:
+            display_name = "…" + display_name[-33:]
+
+        table.add_row(
+            display_name,
+            str(page_count),
+            f"{char_count:,}",
+            preview,
+        )
+
+    console.print()
+    console.print(table)
     console.print()
 
 

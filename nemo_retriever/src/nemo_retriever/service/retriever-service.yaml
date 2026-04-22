@@ -22,15 +22,12 @@ database:
   path: "retriever-service.db"
 
 processing:
-  # Number of I/O worker threads (controls request concurrency).
-  # Threads overlap on DB writes, SSE publishing, and HTTP uploads
-  # even though only one pipeline chain runs at a time.
-  thread_pool_size: 32
-  # Number of pre-built pipeline operator chains.  Chain execution is
-  # serialised (one at a time) because the C/C++ CPU actors (pypdfium2,
-  # image cropping) are not thread-safe.  Multiple replicas keep separate
-  # operator state but don't improve throughput.  Default: 1.
-  pipeline_replicas: 1
+  # Number of worker processes.  Each process builds its own isolated
+  # operator chain and runs pipelines independently — no thread-safety
+  # concerns.  With remote NIM endpoints the chains are lightweight HTTP
+  # clients so 16 workers is a sensible default.  For local GPU models,
+  # lower this to match available VRAM (e.g. 1-2).
+  num_workers: 16
 
 # Remote NIM microservice endpoints.  When set, the pipeline calls these
 # HTTP endpoints instead of loading GPU models locally.  All four must

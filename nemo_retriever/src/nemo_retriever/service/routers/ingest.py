@@ -61,7 +61,7 @@ async def ingest_document(
     pool = request.app.state.processing_pool
 
     if not pool.has_capacity():
-        logger.warning(
+        logger.debug(
             "Ingest rejected — pool at capacity (%d/%d)",
             pool._pool_size,
             pool._pool_size,
@@ -70,11 +70,11 @@ async def ingest_document(
             status_code=503,
             content={
                 "detail": "Server busy — all worker slots are in use.",
-                "retry_after": 5,
+                "retry_after": 10,
                 "capacity": 0,
                 "pool_size": pool._pool_size,
             },
-            headers={"Retry-After": "5"},
+            headers={"Retry-After": "10"},
         )
 
     try:
@@ -107,9 +107,12 @@ async def ingest_document(
 
             repo.increment_job_pages_submitted(job_id)
             pages_completed = repo.increment_job_pages_completed(job_id)
-            print(
-                f">>> [job {job_id[:8]}] Page {meta.page_number}/{meta.total_pages}"
-                f" deduped (sha={content_sha256[:8]}), counting as complete"
+            logger.info(
+                "[job %s] Page %s/%s deduped (sha=%s), counting as complete",
+                job_id[:8],
+                meta.page_number,
+                meta.total_pages,
+                content_sha256[:8],
             )
 
             event_bus = request.app.state.event_bus
@@ -118,7 +121,7 @@ async def ingest_document(
             job = repo.get_job(job_id)
             if job and pages_completed >= job.total_pages and job.total_pages > 0:
                 repo.update_job_status(job_id, ProcessingStatus.COMPLETE)
-                print(f">>> [job {job_id[:8]}] All {job.total_pages} pages of" f" {job.filename} complete")
+                logger.info("[job %s] All %d pages of %s complete", job_id[:8], job.total_pages, job.filename)
                 asyncio.run_coroutine_threadsafe(
                     event_bus.publish(
                         job_id,
@@ -172,7 +175,7 @@ async def ingest_document(
             repo.update_job_status(job_id, ProcessingStatus.PROCESSING)
 
         repo.increment_job_pages_submitted(job_id)
-        print(f">>> [job {job_id[:8]}] Received page {meta.page_number}/{meta.total_pages}" f" of {filename}")
+        logger.info("[job %s] Received page %s/%s of %s", job_id[:8], meta.page_number, meta.total_pages, filename)
 
     doc = Document(
         job_id=job_id,
@@ -202,11 +205,11 @@ async def ingest_document(
             content={
                 "detail": "Server busy — all worker slots are in use.",
                 "document_id": doc.id,
-                "retry_after": 5,
+                "retry_after": 10,
                 "capacity": 0,
                 "pool_size": pool._pool_size,
             },
-            headers={"Retry-After": "5"},
+            headers={"Retry-After": "10"},
         )
 
     return IngestAccepted(
