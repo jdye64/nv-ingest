@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import sys
@@ -86,7 +87,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     event_bus = EventBus()
     app.state.event_bus = event_bus
 
-    pool = ProcessingPool(config, db_engine)
+    loop = asyncio.get_running_loop()
+    pool = ProcessingPool(config, db_engine, event_bus, loop)
     pool.start()
     app.state.processing_pool = pool
 

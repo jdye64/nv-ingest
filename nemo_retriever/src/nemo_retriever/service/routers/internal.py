@@ -9,104 +9,90 @@ from __future__ import annotations
 import json
 import logging
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 
 from nemo_retriever.service.db.repository import Repository
 from nemo_retriever.service.event_bus import EventBus
-from nemo_retriever.service.models.document import ProcessingStatus
-from nemo_retriever.service.models.metrics import ProcessingMetric
 from nemo_retriever.service.models.page_result import PageResult
-from nemo_retriever.service.models.requests import InternalResultPayload
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["internal"])
 
 
+def _safe_value(v):
+    """Best-effort conversion to JSON-safe type."""
+    if v is None or isinstance(v, (str, int, float, bool)):
+        return v
+    if isinstance(v, bytes):
+        return f"<bytes len={len(v)}>"
+    if isinstance(v, (list, tuple)):
+        return [_safe_value(i) for i in v]
+    if isinstance(v, dict):
+        return {str(k): _safe_value(val) for k, val in v.items()}
+    return str(v)
+
+
 @router.post(
     "/ingest/internal_results",
     status_code=200,
-    summary="Receive page-level results from the processing pipeline",
+    summary="Receive raw results from the WebhookNotifyOperator",
 )
 async def receive_internal_results(
     request: Request,
-    payload: InternalResultPayload,
 ) -> dict[str, str]:
-    """Called by the ``WebhookNotifyOperator`` once per page.
+    """Called by the ``WebhookNotifyOperator`` (e.g. from a Ray Data DAG).
 
-    Stores the page result and metrics, increments the received-page counter,
-    and — when all pages are in — marks the document complete.
+    Accepts the raw ``list[dict]`` format that the webhook operator POSTs
+    (serialised DataFrame rows).  Each row is stored as a page result.
+
+    The ``content_sha256`` header (``X-Content-SHA256``) or a ``path`` field
+    in each row is used for document correlation.  If neither is available the
+    rows are stored but cannot be associated with a tracked document.
     """
+    body = await request.json()
     repo: Repository = request.app.state.repository
     event_bus: EventBus = request.app.state.event_bus
 
-    doc = repo.get_document_by_sha(payload.content_sha256)
-    if doc is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No document with sha256={payload.content_sha256[:12]}…",
-        )
+    records: list[dict] = body if isinstance(body, list) else [body]
 
-    page = PageResult(
-        document_id=doc.id,
-        page_number=payload.page_number,
-        content_json=json.dumps(payload.content),
-    )
-    repo.insert_page_result(page)
+    stored = 0
+    for idx, row in enumerate(records):
+        safe_row = {k: _safe_value(v) for k, v in row.items() if k != "bytes"}
+        content_json = json.dumps(safe_row)
 
-    metrics = [
-        ProcessingMetric(
-            document_id=doc.id,
-            model_name=m.model_name,
-            invocation_count=m.invocation_count,
-            pages_processed=m.pages_processed,
-            detections_count=m.detections_count,
-            duration_ms=m.duration_ms,
-        )
-        for m in payload.metrics
-    ]
-    repo.insert_metrics(metrics)
+        doc_id: str | None = None
+        sha = row.get("_content_sha256") or request.headers.get("x-content-sha256")
+        if sha:
+            doc = repo.get_document_by_sha(sha)
+            if doc:
+                doc_id = doc.id
 
-    if payload.total_pages and doc.total_pages is None:
-        repo.update_document_status(doc.id, doc.processing_status, total_pages=payload.total_pages)
+        if doc_id:
+            page = PageResult(
+                document_id=doc_id,
+                page_number=idx,
+                content_json=content_json,
+            )
+            repo.insert_page_result(page)
+            new_count = repo.increment_pages_received(doc_id)
 
-    new_count = repo.increment_pages_received(doc.id)
+            await event_bus.publish(
+                doc_id,
+                {
+                    "event": "page_complete",
+                    "document_id": doc_id,
+                    "page_number": idx,
+                    "pages_received": new_count,
+                    "total_pages": len(records),
+                },
+            )
+            stored += 1
+        else:
+            logger.debug(
+                "internal_results: row %d has no document correlation key, skipping DB storage",
+                idx,
+            )
 
-    await event_bus.publish(
-        doc.id,
-        {
-            "event": "page_complete",
-            "document_id": doc.id,
-            "page_number": payload.page_number,
-            "pages_received": new_count,
-            "total_pages": payload.total_pages,
-            "content": payload.content,
-        },
-    )
-
-    for m in payload.metrics:
-        await event_bus.publish(
-            doc.id,
-            {
-                "event": "metrics_update",
-                "document_id": doc.id,
-                "model_name": m.model_name,
-                "invocation_count": m.invocation_count,
-                "detections_count": m.detections_count,
-            },
-        )
-
-    if payload.total_pages and new_count >= payload.total_pages:
-        repo.update_document_status(doc.id, ProcessingStatus.COMPLETE)
-        logger.info("Document %s complete (%d/%d pages)", doc.id, new_count, payload.total_pages)
-
-        await event_bus.publish(
-            doc.id,
-            {
-                "event": "document_complete",
-                "document_id": doc.id,
-                "total_pages": payload.total_pages,
-            },
-        )
-
-    return {"status": "ok"}
+    logger.info("internal_results: stored %d/%d rows", stored, len(records))
+    return {"status": "ok", "rows_stored": str(stored)}

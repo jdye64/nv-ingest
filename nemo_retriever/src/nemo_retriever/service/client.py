@@ -17,6 +17,9 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_RETRY_AFTER = 5.0
+_MAX_BACKOFF = 60.0
+
 
 class RetrieverServiceClient:
     """Submits documents to a running retriever service and tracks results.
@@ -32,17 +35,57 @@ class RetrieverServiceClient:
     def __init__(self, base_url: str = "http://localhost:8000", max_concurrency: int = 8) -> None:
         self._base_url = base_url.rstrip("/")
         self._semaphore = asyncio.Semaphore(max_concurrency)
+        self._capacity_event = asyncio.Event()
+        self._capacity_event.set()
 
-    async def _upload_file(self, client: httpx.AsyncClient, file_path: Path) -> dict[str, Any]:
-        """Upload a single file and return the ``IngestAccepted`` payload."""
+    def notify_capacity_available(self) -> None:
+        """Signal that the server freed a slot (called from SSE listeners)."""
+        self._capacity_event.set()
+
+    async def _upload_file(
+        self,
+        client: httpx.AsyncClient,
+        file_path: Path,
+    ) -> dict[str, Any]:
+        """Upload a single file, retrying on 503 with exponential backoff.
+
+        When the server returns 503 (busy), the client waits for either:
+        - An SSE ``document_complete`` event (signalled via :pyattr:`_capacity_event`)
+        - The ``Retry-After`` header duration (fallback)
+
+        before retrying.
+        """
         async with self._semaphore:
             file_bytes = file_path.read_bytes()
-            files = {"file": (file_path.name, file_bytes)}
-            data = {"metadata": json.dumps({"filename": file_path.name})}
+            backoff = _DEFAULT_RETRY_AFTER
 
-            resp = await client.post(f"{self._base_url}/v1/ingest", files=files, data=data)
-            resp.raise_for_status()
-            return resp.json()
+            while True:
+                files = {"file": (file_path.name, file_bytes)}
+                data = {"metadata": json.dumps({"filename": file_path.name})}
+                resp = await client.post(f"{self._base_url}/v1/ingest", files=files, data=data)
+
+                if resp.status_code != 503:
+                    resp.raise_for_status()
+                    return resp.json()
+
+                retry_after = float(resp.headers.get("Retry-After", backoff))
+                body = resp.json()
+                pool_size = body.get("pool_size", "?")
+                sys.stdout.write(
+                    f"  [{file_path.name}] server busy ({pool_size} slots full)" f" — waiting {retry_after:.0f}s …\n"
+                )
+
+                self._capacity_event.clear()
+                try:
+                    await asyncio.wait_for(
+                        self._capacity_event.wait(),
+                        timeout=retry_after,
+                    )
+                    sys.stdout.write(f"  [{file_path.name}] capacity freed, retrying …\n")
+                except asyncio.TimeoutError:
+                    pass
+
+                backoff = min(backoff * 1.5, _MAX_BACKOFF)
 
     async def _poll_until_complete(
         self,
@@ -58,6 +101,7 @@ class RetrieverServiceClient:
             status = body.get("status", "")
             _print_progress(document_id, body)
             if status in ("complete", "failed"):
+                self.notify_capacity_available()
                 return body
             await asyncio.sleep(poll_interval)
 
@@ -83,10 +127,12 @@ class RetrieverServiceClient:
                     event_type = event.get("event", "message")
                     _print_sse_event(document_id, event)
                     if event_type == "document_complete":
+                        self.notify_capacity_available()
                         final = await client.get(f"{self._base_url}/v1/ingest/status/{document_id}")
                         final.raise_for_status()
                         return final.json()
 
+        self.notify_capacity_available()
         if last_body:
             final = await client.get(f"{self._base_url}/v1/ingest/status/{document_id}")
             final.raise_for_status()
@@ -100,6 +146,11 @@ class RetrieverServiceClient:
         poll_interval: float = 2.0,
     ) -> list[dict[str, Any]]:
         """Upload *files* and wait for all to complete.
+
+        Uploads are submitted concurrently.  When the server responds with
+        **503** the upload coroutine backs off and retries — either when an
+        SSE ``document_complete`` event signals freed capacity, or after the
+        ``Retry-After`` period.
 
         Returns the list of final result payloads.
         """

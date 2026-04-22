@@ -11,6 +11,7 @@ import json
 import logging
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse
 
 from nemo_retriever.service.db.repository import Repository
 from nemo_retriever.service.models.document import Document, ProcessingStatus
@@ -33,18 +34,57 @@ router = APIRouter(tags=["ingest"])
     response_model=IngestAccepted,
     status_code=202,
     summary="Upload a single document for ingestion",
+    responses={
+        503: {
+            "description": "Server is at capacity. Retry after a worker slot frees up.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Server busy — all worker slots are in use.",
+                        "retry_after": 5,
+                        "capacity": 0,
+                        "pool_size": 32,
+                    }
+                }
+            },
+        }
+    },
 )
 async def ingest_document(
     request: Request,
     file: UploadFile = File(..., description="The document to ingest"),
     metadata: str = Form(default="{}", description="JSON-encoded IngestRequest metadata"),
-) -> IngestAccepted:
+) -> IngestAccepted | JSONResponse:
     """Accept a single document upload and queue it for processing.
 
     The file is read into memory, its SHA-256 is computed for dedup, and it is
     submitted to the processing thread pool.  The response is returned
     immediately with status ``queued``.
+
+    Returns **503 Service Unavailable** with a ``Retry-After`` header when
+    all worker threads are occupied.  The client should back off and retry
+    once it receives an SSE ``document_complete`` event or after the
+    ``Retry-After`` period elapses.
     """
+    pool = request.app.state.processing_pool
+
+    if not pool.has_capacity():
+        logger.warning(
+            "Ingest rejected — pool at capacity (%d/%d)",
+            pool._pool_size,
+            pool._pool_size,
+        )
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "Server busy — all worker slots are in use.",
+                "retry_after": 5,
+                "capacity": 0,
+                "pool_size": pool._pool_size,
+            },
+            headers={"Retry-After": "5"},
+        )
+
     try:
         meta = IngestRequest(**json.loads(metadata))
     except (json.JSONDecodeError, Exception) as exc:
@@ -77,8 +117,21 @@ async def ingest_document(
     repo.insert_document(doc)
     logger.info("Document accepted: id=%s filename=%s sha=%s", doc.id, filename, content_sha256[:12])
 
-    pool = request.app.state.processing_pool
-    pool.submit(doc.id, file_bytes, filename)
+    future = pool.try_submit(doc.id, content_sha256, file_bytes, filename)
+    if future is None:
+        repo.update_document_status(doc.id, ProcessingStatus.QUEUED)
+        logger.warning("Document %s queued but pool became full between check and submit", doc.id)
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "Server busy — all worker slots are in use.",
+                "document_id": doc.id,
+                "retry_after": 5,
+                "capacity": 0,
+                "pool_size": pool._pool_size,
+            },
+            headers={"Retry-After": "5"},
+        )
 
     return IngestAccepted(
         document_id=doc.id,
