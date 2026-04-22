@@ -421,7 +421,6 @@ class WebhookParams(_ParamsModel):
     columns: list[str] = Field(default_factory=list)
     headers: dict[str, str] = Field(default_factory=dict)
     timeout_s: float = 30.0
-    api_key: Optional[str] = None
     max_retries: int = 3
 
 

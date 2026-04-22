@@ -7,7 +7,10 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import requests
 
 import pandas as pd
 
@@ -69,6 +72,31 @@ class WebhookNotifyOperator(AbstractOperator, CPUOperator):
     def __init__(self, *, params: Any = None) -> None:
         super().__init__()
         self._params = params
+        self._session: "requests.Session | None" = None
+
+    def _get_session(self) -> "requests.Session":
+        if self._session is None:
+            import requests
+            from requests.adapters import HTTPAdapter
+            from urllib3.util.retry import Retry
+
+            max_retries = getattr(self._params, "max_retries", 3)
+            headers = dict(getattr(self._params, "headers", None) or {})
+            headers.setdefault("Content-Type", "application/json")
+
+            session = requests.Session()
+            session.headers.update(headers)
+            retry_strategy = Retry(
+                total=max_retries,
+                backoff_factor=0.5,
+                status_forcelist=[429, 500, 502, 503, 504],
+                allowed_methods=["POST"],
+            )
+            session.mount("http://", HTTPAdapter(max_retries=retry_strategy))
+            session.mount("https://", HTTPAdapter(max_retries=retry_strategy))
+            self._session = session
+
+        return self._session
 
     @property
     def _endpoint_url(self) -> str | None:
@@ -82,37 +110,17 @@ class WebhookNotifyOperator(AbstractOperator, CPUOperator):
         if not url:
             return data
 
-        import requests
-        from requests.adapters import HTTPAdapter
-        from urllib3.util.retry import Retry
-
         columns = getattr(self._params, "columns", None) or []
-        headers = dict(getattr(self._params, "headers", None) or {})
         timeout = getattr(self._params, "timeout_s", 30.0)
-        api_key = getattr(self._params, "api_key", None)
-        max_retries = getattr(self._params, "max_retries", 3)
-
-        headers.setdefault("Content-Type", "application/json")
-        if api_key:
-            headers.setdefault("Authorization", f"Bearer {api_key}")
 
         records = _dataframe_to_records(data, columns or None)
         if not records:
             logger.debug("WebhookNotifyOperator: empty batch, skipping POST to %s", url)
             return data
 
-        session = requests.Session()
-        retry_strategy = Retry(
-            total=max_retries,
-            backoff_factor=0.5,
-            status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["POST"],
-        )
-        session.mount("http://", HTTPAdapter(max_retries=retry_strategy))
-        session.mount("https://", HTTPAdapter(max_retries=retry_strategy))
-
+        session = self._get_session()
         try:
-            response = session.post(url, json=records, headers=headers, timeout=timeout)
+            response = session.post(url, json=records, timeout=timeout)
             response.raise_for_status()
             logger.info(
                 "WebhookNotifyOperator: POST %d records to %s — %s",
