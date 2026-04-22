@@ -165,6 +165,9 @@ def embed_text_main_text_embed(
         out_df[output_column] = [{"embedding": [], "error": str(exc)}] * len(out_df)
         out_df[embedding_dim_column] = 0
         out_df[has_embedding_column] = False
+        n = len(out_df)
+        out_df["embedding_v1_num_detections"] = [0] * n
+        out_df["embedding_v1_counts_by_label"] = [{} for _ in range(n)]
         for column in ("_image_b64", "_embed_modality"):
             if column in out_df.columns:
                 out_df = out_df.drop(columns=[column])
@@ -187,7 +190,11 @@ def embed_text_main_text_embed(
     else:
         out_df[embedding_dim_column] = [0 for _ in range(len(out_df.index))]
 
-    out_df[has_embedding_column] = [bool(int(dim) > 0) for dim in out_df[embedding_dim_column].tolist()]
+    out_df[has_embedding_column] = [bool(int(d) > 0) for d in out_df[embedding_dim_column].tolist()]
+
+    embedded_flags = out_df[has_embedding_column].tolist()
+    out_df["embedding_v1_num_detections"] = [int(f) for f in embedded_flags]
+    out_df["embedding_v1_counts_by_label"] = [{"embedded": 1} if f else {} for f in embedded_flags]
 
     for column in ("_image_b64", "_embed_modality"):
         if column in out_df.columns:

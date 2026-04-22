@@ -380,6 +380,8 @@ def table_structure_ocr_page_elements(
         out["table"] = all_table
         out["table_structure_v1"] = all_ts_payloads
         out["table_structure_ocr_v1"] = all_meta
+        out["table_structure_v1_num_detections"] = [0 for _ in range(num_rows)]
+        out["table_structure_v1_counts_by_label"] = [{} for _ in range(num_rows)]
         return out
 
     n_crops = len(flat_crops)
@@ -478,10 +480,22 @@ def table_structure_ocr_page_elements(
     for payload in all_ts_payloads:
         payload["timing"] = {"seconds": float(elapsed)}
 
+    row_det_counts = [0] * num_rows
+    row_label_counts: List[Dict[str, int]] = [{} for _ in range(num_rows)]
+    for ci in range(n_crops):
+        ri = crop_row_indices[ci]
+        dets = structure_results[ci]
+        row_det_counts[ri] += len(dets)
+        for d in dets:
+            lbl = d.get("label_name", "unknown")
+            row_label_counts[ri][lbl] = row_label_counts[ri].get(lbl, 0) + 1
+
     out = batch_df.copy()
     out["table"] = all_table
     out["table_structure_v1"] = all_ts_payloads
     out["table_structure_ocr_v1"] = all_meta
+    out["table_structure_v1_num_detections"] = row_det_counts
+    out["table_structure_v1_counts_by_label"] = row_label_counts
     return out
 
 

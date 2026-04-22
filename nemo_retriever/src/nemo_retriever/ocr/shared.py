@@ -770,22 +770,30 @@ def ocr_page_elements(
         else:
             all_text.append(None)
 
+        row_det_count = len(table_items) + len(chart_items) + len(infographic_items) + len(row_ocr_text_blocks)
+        row_counts: Dict[str, int] = {}
+        if table_items:
+            row_counts["table"] = len(table_items)
+        if chart_items:
+            row_counts["chart"] = len(chart_items)
+        if infographic_items:
+            row_counts["infographic"] = len(infographic_items)
+        if row_ocr_text_blocks:
+            row_counts["text"] = len(row_ocr_text_blocks)
+
         all_table.append(table_items)
         all_chart.append(chart_items)
         all_infographic.append(infographic_items)
-        all_ocr_meta.append({"timing": None, "error": row_error})
+        all_ocr_meta.append(
+            {"timing": None, "error": row_error, "num_detections": row_det_count, "counts_by_label": row_counts}
+        )
 
     elapsed = time.perf_counter() - t0_total
 
-    # Fill timing into metadata.
     for meta in all_ocr_meta:
         meta["timing"] = {"seconds": float(elapsed)}
 
-    # TODO: Is this actually a necessary copy?
     out = batch_df.copy()
-    # Only overwrite content columns that this call is responsible for.
-    # When extract_tables=False, preserve any existing `table` column
-    # (e.g. populated by an upstream table-structure+OCR stage).
     if extract_tables or "table" not in out.columns:
         out["table"] = all_table
     if extract_charts or "chart" not in out.columns:
@@ -793,13 +801,14 @@ def ocr_page_elements(
     if extract_infographics or "infographic" not in out.columns:
         out["infographic"] = all_infographic
     if extract_text and "text" in out.columns:
-        # Only overwrite rows where OCR produced text; preserve native text otherwise.
         for i, ocr_text in enumerate(all_text):
             if ocr_text is not None:
                 out.iat[i, out.columns.get_loc("text")] = ocr_text
     elif extract_text:
         out["text"] = [t if t is not None else "" for t in all_text]
     out["ocr"] = all_ocr_meta
+    out["ocr_v1_num_detections"] = [m["num_detections"] for m in all_ocr_meta]
+    out["ocr_v1_counts_by_label"] = [m["counts_by_label"] for m in all_ocr_meta]
     return out
 
 

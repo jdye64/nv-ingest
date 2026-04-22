@@ -27,17 +27,23 @@ processing:
   # concerns.  With remote NIM endpoints the chains are lightweight HTTP
   # clients so 16 workers is a sensible default.  For local GPU models,
   # lower this to match available VRAM (e.g. 1-2).
-  num_workers: 16
+  num_workers: 64
 
 # Remote NIM microservice endpoints.  When set, the pipeline calls these
 # HTTP endpoints instead of loading GPU models locally.  All four must
 # be provided for a fully remote configuration.
+#
+# Multiple endpoints per model:  Provide a comma-separated list of URLs
+# to spread load across replicas.  On startup, endpoints are distributed
+# round-robin across worker processes so each worker targets exactly one
+# URL, balancing traffic evenly.
+#   Example: "http://host1:8000/v1/infer,http://host2:8000/v1/infer"
 nim_endpoints:
-  page_elements_invoke_url: http://localhost:8000/v1/infer
-  graphic_elements_invoke_url: http://localhost:8003/v1/infer
-  table_structure_invoke_url: http://localhost:8000/v1/infer
-  ocr_invoke_url: http://localhost:8009/v1/infer
-  embed_invoke_url: http://localhost:8012/v1/embeddings
+  page_elements_invoke_url: http://localhost:8000/v1/infer,http://localhost:8100/v1/infer
+  graphic_elements_invoke_url: http://localhost:8003/v1/infer,http://localhost:8103/v1/infer
+  table_structure_invoke_url: http://localhost:8006/v1/infer,http://localhost:8106/v1/infer
+  ocr_invoke_url: http://localhost:8009/v1/infer,http://localhost:8109/v1/infer
+  embed_invoke_url: http://localhost:8012/v1/embeddings,http://localhost:8112/v1/embeddings
   # NVIDIA API key (or NIM auth token).  Also reads $NVIDIA_API_KEY env var.
   api_key: null
 

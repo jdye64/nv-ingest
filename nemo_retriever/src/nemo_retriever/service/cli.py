@@ -34,17 +34,25 @@ def start(
         help="Number of worker processes (each with its own operator chain). Default 16 for NIM, 1-2 for local GPU.",
     ),
     page_elements_url: Optional[str] = typer.Option(
-        None, "--page-elements-url", help="NIM endpoint for page element detection (overrides YAML)."
+        None,
+        "--page-elements-url",
+        help="NIM endpoint(s) for page element detection. Comma-separated for multi-NIM load balancing.",
     ),
-    ocr_url: Optional[str] = typer.Option(None, "--ocr-url", help="NIM endpoint for OCR (overrides YAML)."),
+    ocr_url: Optional[str] = typer.Option(
+        None, "--ocr-url", help="NIM endpoint(s) for OCR. Comma-separated for multi-NIM load balancing."
+    ),
     table_structure_url: Optional[str] = typer.Option(
-        None, "--table-structure-url", help="NIM endpoint for table structure detection (overrides YAML)."
+        None,
+        "--table-structure-url",
+        help="NIM endpoint(s) for table structure detection. Comma-separated for multi-NIM load balancing.",
     ),
     graphic_elements_url: Optional[str] = typer.Option(
-        None, "--graphic-elements-url", help="NIM endpoint for graphic element detection (overrides YAML)."
+        None,
+        "--graphic-elements-url",
+        help="NIM endpoint(s) for graphic element detection. Comma-separated for multi-NIM load balancing.",
     ),
     embed_url: Optional[str] = typer.Option(
-        None, "--embed-url", help="NIM endpoint for text embedding (overrides YAML)."
+        None, "--embed-url", help="NIM endpoint(s) for text embedding. Comma-separated for multi-NIM load balancing."
     ),
     nim_api_key: Optional[str] = typer.Option(
         None, "--nim-api-key", help="API key for NIM endpoints (overrides YAML / $NVIDIA_API_KEY)."

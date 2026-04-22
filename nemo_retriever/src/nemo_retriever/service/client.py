@@ -87,14 +87,31 @@ class _JobTracker:
             "pages_completed": 0,
             "pages_failed": 0,
             "status": "uploading",
+            "busy_pages": 0,
         }
+
+    def mark_busy(self, job_id: str) -> None:
+        """A page for this job got a 503; show the job as server-busy."""
+        if job_id in self.jobs:
+            j = self.jobs[job_id]
+            j["busy_pages"] = j.get("busy_pages", 0) + 1
+            if j["status"] in ("uploading",):
+                j["status"] = "server_busy"
+
+    def mark_not_busy(self, job_id: str) -> None:
+        """A previously-503'd page was accepted; clear busy state if no others waiting."""
+        if job_id in self.jobs:
+            j = self.jobs[job_id]
+            j["busy_pages"] = max(j.get("busy_pages", 1) - 1, 0)
+            if j["busy_pages"] == 0 and j["status"] == "server_busy":
+                j["status"] = "uploading"
 
     def page_completed(self, job_id: str) -> None:
         """Increment by one; capped at total_pages to avoid over-count."""
         if job_id in self.jobs:
             j = self.jobs[job_id]
             j["pages_completed"] = min(j["pages_completed"] + 1, j["total_pages"])
-            if j["status"] == "uploading":
+            if j["status"] in ("uploading", "server_busy"):
                 j["status"] = "processing"
 
     def page_failed(self, job_id: str, source_file: str, page_number: int, error: str) -> None:
@@ -109,7 +126,7 @@ class _JobTracker:
         if job_id in self.jobs:
             j = self.jobs[job_id]
             j["pages_completed"] = min(max(j["pages_completed"], count), j["total_pages"])
-            if count > 0 and j["status"] == "uploading":
+            if count > 0 and j["status"] in ("uploading", "server_busy"):
                 j["status"] = "processing"
 
     def job_done(self, job_id: str, status: str = "complete") -> None:
@@ -181,12 +198,13 @@ class _LiveDisplay:
         # --- Status summary line ---
         n_complete = sum(1 for j in t.jobs.values() if j["status"] in ("complete", "failed") and j["pages_failed"] == 0)
         n_failed_jobs = sum(1 for j in t.jobs.values() if j.get("pages_failed", 0) > 0)
+        n_busy = sum(1 for j in t.jobs.values() if j["status"] == "server_busy")
         n_active = sum(
             1
             for j in t.jobs.values()
             if j["status"] in ("uploading", "processing") and j["pages_completed"] < j["total_pages"]
         )
-        n_queued = len(t.jobs) - n_complete - n_failed_jobs - n_active
+        n_queued = len(t.jobs) - n_complete - n_failed_jobs - n_active - n_busy
 
         elapsed = time.monotonic() - self._t0
         pps = t.total_completed / elapsed if elapsed > 0 and t.total_completed > 0 else 0.0
@@ -195,6 +213,8 @@ class _LiveDisplay:
             f"  [green]{n_complete} done[/green]",
             f"[cyan]{n_active} active[/cyan]",
         ]
+        if n_busy > 0:
+            status_parts.append(f"[red]{n_busy} server busy[/red]")
         if n_queued > 0:
             status_parts.append(f"[dim]{n_queued} queued[/dim]")
         if n_failed_jobs > 0:
@@ -206,7 +226,8 @@ class _LiveDisplay:
         active_jobs = [
             (jid, info)
             for jid, info in t.jobs.items()
-            if info["status"] in ("uploading", "processing") and info["pages_completed"] < info["total_pages"]
+            if info["status"] in ("uploading", "processing", "server_busy")
+            and info["pages_completed"] < info["total_pages"]
         ]
         if active_jobs:
             active_table = Table(
@@ -232,8 +253,10 @@ class _LiveDisplay:
                 bar = self._mini_bar(completed, total)
                 pages_text = f"{completed}/{total}"
                 status = info["status"]
-                if status == "uploading":
-                    status_text = Text("uploading", style="yellow")
+                if status == "server_busy":
+                    status_text = Text("server busy", style="bold red")
+                elif status == "uploading":
+                    status_text = Text("uploading", style="dark_orange")
                 else:
                     status_text = Text(f"{pct:.0f}%", style="green")
 
@@ -319,10 +342,12 @@ class RetrieverServiceClient:
         job_id: str,
         page_number: int,
         total_pages: int,
+        tracker: _JobTracker | None = None,
     ) -> dict[str, Any]:
         """Upload a single page, retrying on 503."""
         async with self._semaphore:
             backoff = _DEFAULT_RETRY_AFTER
+            was_busy = False
 
             while True:
                 meta = {
@@ -337,8 +362,14 @@ class RetrieverServiceClient:
                 resp = await client.post(f"{self._base_url}/v1/ingest", files=files, data=data)
 
                 if resp.status_code != 503:
+                    if was_busy and tracker is not None:
+                        tracker.mark_not_busy(job_id)
                     resp.raise_for_status()
                     return resp.json()
+
+                if tracker is not None:
+                    tracker.mark_busy(job_id)
+                    was_busy = True
 
                 retry_after = float(resp.headers.get("Retry-After", backoff))
                 self._capacity_event.clear()
@@ -361,13 +392,19 @@ class RetrieverServiceClient:
     ) -> None:
         """Open one SSE connection for all jobs and update tracker.
 
-        The stream is started BEFORE uploads begin.  The ``uploads_done``
-        event is set once all pages have been uploaded.  After that signal,
-        the method cross-checks each pending job against the REST API to
-        catch any ``job_complete`` events that were published before the SSE
-        subscription was established.
+        ``job_ids`` is a **live list** that grows as files are split.
+        The method waits for at least one job to appear, then opens the
+        SSE stream.  Newly added jobs are picked up by the catchup poll.
+
+        The ``uploads_done`` event is set once all pages have been uploaded.
+        After that signal the method cross-checks each pending job against
+        the REST API to catch events that were missed.
         """
         url = f"{self._base_url}/v1/ingest/stream/jobs"
+
+        while not job_ids:
+            await asyncio.sleep(0.05)
+
         pending = set(job_ids)
 
         for attempt in range(_MAX_RETRIES):
@@ -396,6 +433,7 @@ class RetrieverServiceClient:
 
                     async def _catchup_poll() -> None:
                         await uploads_done.wait()
+                        pending.update(job_ids)
                         while pending:
                             await asyncio.sleep(2.0)
                             batch = list(pending)
@@ -408,7 +446,10 @@ class RetrieverServiceClient:
 
                     buffer = ""
                     stream_iter = resp.aiter_text().__aiter__()
-                    while pending:
+                    while pending or not uploads_done.is_set():
+                        for jid in job_ids:
+                            pending.add(jid)
+
                         try:
                             chunk = await asyncio.wait_for(
                                 stream_iter.__anext__(),
@@ -647,6 +688,10 @@ class RetrieverServiceClient:
     ) -> list[dict[str, Any]]:
         """Split PDFs, upload pages, and track progress with rich live display.
 
+        File splitting runs in a background thread and feeds pages into an
+        upload pipeline as they become ready, so uploads begin immediately
+        after the first file is split — not after *all* files are split.
+
         The SSE stream is opened **in parallel** with uploads so that
         server-side events are captured from the very first page processed.
         """
@@ -654,20 +699,31 @@ class RetrieverServiceClient:
         display = _LiveDisplay(tracker)
 
         job_plans: list[dict[str, Any]] = []
-        for fpath in files:
-            pages = self._prepare_file(fpath)
-            job_id = str(uuid4())
-            total_pages = len(pages)
-            tracker.register_job(job_id, fpath.name, total_pages)
-            display.add_job(job_id, fpath.name, total_pages)
-            job_plans.append(
-                {
-                    "job_id": job_id,
-                    "filename": fpath.name,
-                    "pages": pages,
-                    "total_pages": total_pages,
-                }
-            )
+        upload_queue: asyncio.Queue[tuple[bytes, str, str, int, int] | None] = asyncio.Queue()
+        job_ids: list[str] = []
+
+        loop = asyncio.get_running_loop()
+
+        async def _split_files() -> None:
+            """Split files one at a time, feeding pages into the upload queue."""
+            for fpath in files:
+                pages = await loop.run_in_executor(None, self._prepare_file, fpath)
+                job_id = str(uuid4())
+                total_pages = len(pages)
+                tracker.register_job(job_id, fpath.name, total_pages)
+                display.add_job(job_id, fpath.name, total_pages)
+                job_plans.append(
+                    {
+                        "job_id": job_id,
+                        "filename": fpath.name,
+                        "pages": pages,
+                        "total_pages": total_pages,
+                    }
+                )
+                job_ids.append(job_id)
+                for page_bytes, page_num, total in pages:
+                    await upload_queue.put((page_bytes, fpath.name, job_id, page_num, total))
+            await upload_queue.put(None)
 
         pool_limits = httpx.Limits(max_connections=200, max_keepalive_connections=100)
         timeout = httpx.Timeout(600.0, connect=30.0)
@@ -685,37 +741,51 @@ class RetrieverServiceClient:
                 refresh_task = asyncio.create_task(_refresh_loop())
 
                 try:
-                    job_ids = [p["job_id"] for p in job_plans]
                     uploads_done = asyncio.Event()
 
-                    all_upload_coros = []
-                    for plan in job_plans:
-                        for page_bytes, page_num, total in plan["pages"]:
-                            all_upload_coros.append(
+                    async def _upload_worker() -> None:
+                        """Pull pages from the queue and upload them concurrently."""
+                        pending: set[asyncio.Task[Any]] = set()
+                        while True:
+                            item = await upload_queue.get()
+                            if item is None:
+                                break
+                            page_bytes, filename, job_id, page_num, total = item
+                            task = asyncio.create_task(
                                 self._upload_page(
                                     client,
                                     page_bytes,
-                                    plan["filename"],
-                                    plan["job_id"],
+                                    filename,
+                                    job_id,
                                     page_num,
                                     total,
+                                    tracker=tracker,
                                 )
                             )
-
-                    async def _do_uploads() -> None:
-                        await asyncio.gather(*all_upload_coros, return_exceptions=True)
+                            pending.add(task)
+                            task.add_done_callback(pending.discard)
+                            while len(pending) >= self._max_concurrency:
+                                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                        if pending:
+                            await asyncio.gather(*pending, return_exceptions=True)
                         for plan in job_plans:
                             if plan["job_id"] in tracker.jobs:
-                                tracker.jobs[plan["job_id"]]["status"] = "processing"
+                                j = tracker.jobs[plan["job_id"]]
+                                if j["status"] in ("uploading", "server_busy"):
+                                    j["status"] = "processing"
+                                    j["busy_pages"] = 0
                         uploads_done.set()
+
+                    async def _split_and_upload() -> None:
+                        await asyncio.gather(_split_files(), _upload_worker())
 
                     if use_sse:
                         await asyncio.gather(
                             self._stream_jobs(client, job_ids, tracker, uploads_done),
-                            _do_uploads(),
+                            _split_and_upload(),
                         )
                     else:
-                        await _do_uploads()
+                        await _split_and_upload()
                         await self._poll_all_jobs(client, job_ids, tracker, poll_interval)
 
                 finally:
@@ -728,7 +798,6 @@ class RetrieverServiceClient:
 
         processing_elapsed = time.monotonic() - processing_t0
 
-        # Collect final results
         final_results: list[dict[str, Any]] = []
         async with httpx.AsyncClient(timeout=timeout, limits=pool_limits) as client:
             for plan in job_plans:
@@ -741,10 +810,8 @@ class RetrieverServiceClient:
 
             await self._fetch_failed_pages(client, tracker)
 
-            # Fetch text previews for validation
             text_previews = await self._fetch_text_previews(client)
 
-        # Print failure summary and text preview
         _print_failure_summary(tracker)
         if text_previews:
             _print_text_previews(text_previews)

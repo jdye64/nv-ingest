@@ -5,9 +5,13 @@
 """ProcessPoolExecutor-based document processing for service mode.
 
 Each worker process builds its own operator chain at startup via
-``_init_worker`` and keeps it alive for the lifetime of the process.
+``_init_and_warmup`` and keeps it alive for the lifetime of the process.
 This eliminates all C-library thread-safety issues (pypdfium2, image
 processing) because every chain runs in its own address space.
+
+When multiple NIM endpoint URLs are configured (comma-separated), the
+pool distributes them round-robin across workers so that each worker
+targets exactly one URL per endpoint type, balancing traffic evenly.
 
 Workers write results directly to SQLite (WAL mode supports concurrent
 multi-process writers) and return a lightweight ``WorkerResult`` to the
@@ -106,6 +110,75 @@ def _extract_metrics_from_row(row: dict[str, Any]) -> list[dict[str, Any]]:
     return list(by_model.values())
 
 
+_NIM_URL_FIELDS = (
+    "page_elements_invoke_url",
+    "ocr_invoke_url",
+    "table_structure_invoke_url",
+    "graphic_elements_invoke_url",
+    "embed_invoke_url",
+)
+
+
+def _resolve_worker_nim_configs(
+    nim: NimEndpointsConfig,
+    num_workers: int,
+) -> list[dict[str, Any]]:
+    """Split comma-separated NIM URLs and round-robin them across workers.
+
+    Returns *num_workers* plain dicts, each suitable for
+    ``NimEndpointsConfig(**d)``.  Fields that contain a single URL (or
+    are ``None``) are replicated identically to every worker.  Fields
+    with multiple comma-separated URLs are distributed so that worker *i*
+    gets ``urls[i % len(urls)]``.
+    """
+    base = nim.model_dump()
+
+    parsed: dict[str, list[str]] = {}
+    for field in _NIM_URL_FIELDS:
+        raw = base.get(field)
+        if raw and "," in raw:
+            parsed[field] = [u.strip() for u in raw.split(",") if u.strip()]
+        else:
+            parsed[field] = [raw] if raw else []
+
+    configs: list[dict[str, Any]] = []
+    for i in range(num_workers):
+        worker_dict = dict(base)
+        for field in _NIM_URL_FIELDS:
+            urls = parsed[field]
+            if len(urls) > 1:
+                worker_dict[field] = urls[i % len(urls)]
+        configs.append(worker_dict)
+
+    return configs
+
+
+def _log_endpoint_distribution(nim: NimEndpointsConfig, num_workers: int) -> None:
+    """Log a summary of how NIM endpoints are distributed across workers."""
+    lines: list[str] = []
+    for field in _NIM_URL_FIELDS:
+        raw = getattr(nim, field, None)
+        if not raw:
+            continue
+        urls = [u.strip() for u in raw.split(",") if u.strip()]
+        n = len(urls)
+        if n == 1:
+            lines.append(f"  {field}: 1 endpoint -> all {num_workers} workers")
+        else:
+            per = num_workers // n
+            remainder = num_workers % n
+            if remainder == 0:
+                lines.append(f"  {field}: {n} endpoints -> {per} workers each")
+            else:
+                lines.append(f"  {field}: {n} endpoints -> ~{per}-{per + 1} workers each")
+            if n > num_workers:
+                lines.append(
+                    f"    WARNING: {n - num_workers} endpoint(s) will not be assigned (more URLs than workers)"
+                )
+    if lines:
+        logger.info("NIM endpoint distribution across %d workers:\n%s", num_workers, "\n".join(lines))
+
+
 def _build_params(nim: NimEndpointsConfig) -> tuple[Any, Any]:
     """Construct ``ExtractParams`` and (optionally) ``EmbedParams`` from NIM config."""
     from nemo_retriever.params import ExtractParams, EmbedParams
@@ -182,8 +255,18 @@ _worker_chain: list[tuple[str, Any]] | None = None
 _worker_db_path: str | None = None
 
 
-def _init_worker(db_path: str, nim_config_dict: dict[str, Any]) -> None:
-    """Called once per worker process by ``ProcessPoolExecutor(initializer=...)``."""
+def _worker_initializer(
+    db_path: str,
+    nim_config_queue: multiprocessing.Queue,  # type: ignore[type-arg]
+    fallback_nim_config: dict[str, Any],
+) -> None:
+    """Called exactly once per worker process by ProcessPoolExecutor.
+
+    Each worker pops a unique NIM config from the shared queue so that
+    multi-endpoint URLs are distributed round-robin.  If the queue is
+    empty (more processes than configs — shouldn't happen) the fallback
+    config is used so the worker still functions.
+    """
     global _worker_chain, _worker_db_path
     try:
         import setproctitle
@@ -191,7 +274,14 @@ def _init_worker(db_path: str, nim_config_dict: dict[str, Any]) -> None:
         setproctitle.setproctitle("nemo-retriever-worker")
     except ImportError:
         pass
+
     _worker_db_path = db_path
+    try:
+        nim_config_dict = nim_config_queue.get_nowait()
+    except Exception:
+        logger.warning("[pid %d] NIM config queue empty — using fallback config", os.getpid())
+        nim_config_dict = fallback_nim_config
+
     nim = NimEndpointsConfig(**nim_config_dict)
     _worker_chain = _build_operator_chain(os.getpid(), nim)
 
@@ -230,9 +320,10 @@ def _run_pipeline(
 ) -> WorkerResult:
     """Top-level function executed in a worker process.
 
-    Builds the operator chain on first invocation (via ``_init_worker``),
-    runs the pipeline, writes all results to SQLite, and returns a
-    ``WorkerResult`` for the main process to publish SSE events.
+    The operator chain is built once per process by ``_worker_initializer``
+    (the ``ProcessPoolExecutor`` initializer).  This function runs the
+    pipeline, writes all results to SQLite, and returns a ``WorkerResult``
+    for the main process to publish SSE events.
     """
     pid = os.getpid()
     engine = DatabaseEngine(db_path)
@@ -245,8 +336,14 @@ def _run_pipeline(
 
         started_at = datetime.now(timezone.utc).isoformat()
         t0 = time.monotonic()
-        for _name, op in _worker_chain:  # type: ignore[union-attr]
+        if _worker_chain is None:
+            raise RuntimeError("Worker operator chain not initialised — _init_and_warmup was never called")
+        for stage_name, op in _worker_chain:
             df = op.run(df)
+            if df is None:
+                raise RuntimeError(
+                    f"Operator '{stage_name}' ({type(op).__name__}) returned None instead of a DataFrame"
+                )
         elapsed_ms = (time.monotonic() - t0) * 1000.0
         completed_at = datetime.now(timezone.utc).isoformat()
 
@@ -334,7 +431,15 @@ def _run_pipeline(
 
     except BaseException as exc:
         error_msg = f"{type(exc).__name__}: {exc}"
-        logger.error("[worker %d] FAILED %s p%d (doc %s): %s", pid, filename, page_number, document_id[:8], error_msg)
+        logger.error(
+            "[worker %d] FAILED %s p%d (doc %s): %s",
+            pid,
+            filename,
+            page_number,
+            document_id[:8],
+            error_msg,
+            exc_info=True,
+        )
         try:
             repo.update_document_status(document_id, ProcessingStatus.FAILED)
             doc = repo.get_document(document_id)
@@ -369,11 +474,6 @@ def _run_pipeline(
             success=False,
             error_message=error_msg,
         )
-
-
-def _warmup_noop() -> int:
-    """No-op task submitted during startup to force eager process creation."""
-    return os.getpid()
 
 
 # ======================================================================
@@ -426,21 +526,27 @@ class ProcessingPool:
             self._num_workers,
             mode_label,
         )
-        logger.info("Launching %d worker process(es) (%s)", self._num_workers, mode_label)
 
-        nim_dict = nim.model_dump()
+        worker_nim_dicts = _resolve_worker_nim_configs(nim, self._num_workers)
+        _log_endpoint_distribution(nim, self._num_workers)
+
         db_path = str(self._db_engine._db_path)
 
         ctx = multiprocessing.get_context("spawn")
+        nim_config_queue: multiprocessing.Queue[dict[str, Any]] = ctx.Queue()
+        for cfg in worker_nim_dicts:
+            nim_config_queue.put(cfg)
+        fallback_nim_config = nim.model_dump()
+
+        logger.info("Initialising %d worker(s) — building operator chains", self._num_workers)
         self._executor = ProcessPoolExecutor(
             max_workers=self._num_workers,
             mp_context=ctx,
-            initializer=_init_worker,
-            initargs=(db_path, nim_dict),
+            initializer=_worker_initializer,
+            initargs=(db_path, nim_config_queue, fallback_nim_config),
         )
 
-        logger.info("Warming up %d worker(s) — building operator chains", self._num_workers)
-        warmup_futures = [self._executor.submit(_warmup_noop) for _ in range(self._num_workers)]
+        warmup_futures = [self._executor.submit(os.getpid) for _ in range(self._num_workers)]
         pids: set[int] = set()
         for fut in warmup_futures:
             pids.add(fut.result())

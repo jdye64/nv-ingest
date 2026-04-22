@@ -448,6 +448,8 @@ def graphic_elements_ocr_page_elements(
         out = batch_df.copy()
         out["chart"] = all_chart
         out["graphic_elements_ocr_v1"] = all_meta
+        out["graphic_elements_v1_num_detections"] = [0 for _ in range(num_rows)]
+        out["graphic_elements_v1_counts_by_label"] = [{} for _ in range(num_rows)]
         return out
 
     n_crops = len(flat_crops)
@@ -570,9 +572,15 @@ def graphic_elements_ocr_page_elements(
     for meta in all_meta:
         meta["timing"] = {"seconds": float(elapsed)}
 
+    row_det_counts = [0] * num_rows
+    for ci in range(n_crops):
+        row_det_counts[crop_row_indices[ci]] += 1
+
     out = batch_df.copy()
     out["chart"] = all_chart
     out["graphic_elements_ocr_v1"] = all_meta
+    out["graphic_elements_v1_num_detections"] = row_det_counts
+    out["graphic_elements_v1_counts_by_label"] = [{"chart": c} if c > 0 else {} for c in row_det_counts]
     return out
 
 
