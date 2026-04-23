@@ -641,6 +641,11 @@ class _BatchBuffer:
     The buffer enforces a hard cap of ``max_buffered`` pages to bound
     memory usage.  When the cap is reached, ``enqueue`` returns ``False``
     so the caller can 503 the client.
+
+    IMPORTANT: the dispatch function is called **outside** the lock so
+    that pickling large batches and submitting to the executor never
+    blocks the event-loop thread from enqueuing new pages or receiving
+    SSE events.
     """
 
     def __init__(
@@ -666,6 +671,7 @@ class _BatchBuffer:
 
     def enqueue(self, page: dict[str, Any]) -> bool:
         """Add a page to the buffer.  Returns ``False`` if full."""
+        batch: list[dict[str, Any]] | None = None
         with self._lock:
             if self._closed:
                 return False
@@ -673,29 +679,41 @@ class _BatchBuffer:
                 return False
             self._buffer.append(page)
             if len(self._buffer) >= self._batch_size:
-                self._flush_locked()
+                batch = self._drain_locked()
             elif len(self._buffer) == 1:
                 self._start_timer_locked()
+        if batch is not None:
+            self._safe_dispatch(batch)
         return True
 
     def flush(self) -> None:
         """Force-flush whatever is in the buffer."""
+        batch: list[dict[str, Any]] | None = None
         with self._lock:
-            self._flush_locked()
+            batch = self._drain_locked()
+        if batch is not None:
+            self._safe_dispatch(batch)
 
     def close(self) -> None:
         """Flush remaining pages and prevent further enqueues."""
+        batch: list[dict[str, Any]] | None = None
         with self._lock:
             self._closed = True
-            self._flush_locked()
+            batch = self._drain_locked()
+        if batch is not None:
+            self._safe_dispatch(batch)
 
-    def _flush_locked(self) -> None:
-        """Must be called while holding ``_lock``."""
+    def _drain_locked(self) -> list[dict[str, Any]] | None:
+        """Extract the current buffer contents.  Must hold ``_lock``."""
         self._cancel_timer_locked()
         if not self._buffer:
-            return
+            return None
         batch = self._buffer[:]
         self._buffer.clear()
+        return batch
+
+    def _safe_dispatch(self, batch: list[dict[str, Any]]) -> None:
+        """Dispatch a batch outside the lock, handling errors."""
         try:
             self._dispatch_fn(batch)
         except Exception:
@@ -713,8 +731,11 @@ class _BatchBuffer:
             self._timer = None
 
     def _on_timeout(self) -> None:
+        batch: list[dict[str, Any]] | None = None
         with self._lock:
-            self._flush_locked()
+            batch = self._drain_locked()
+        if batch is not None:
+            self._safe_dispatch(batch)
 
 
 class ProcessingPool:
