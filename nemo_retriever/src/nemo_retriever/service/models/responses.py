@@ -39,6 +39,14 @@ class IngestStatus(BaseModel):
     pages_received: int = 0
     metrics: list[MetricSummary] = Field(default_factory=list)
     pages: list[PageSummary] = Field(default_factory=list)
+    failure_type: str | None = Field(
+        default=None,
+        description=(
+            "When status='failed', a structured FailureType: pdf_parse | nim_timeout | "
+            "nim_5xx | nim_4xx | oom | internal | cancelled | unknown."
+        ),
+    )
+    error_message: str | None = None
     created_at: str
     updated_at: str
 
@@ -64,5 +72,165 @@ class JobStatus(BaseModel):
     pages_submitted: int = 0
     pages_completed: int = 0
     metrics: list[MetricSummary] = Field(default_factory=list)
+    document_ids: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Ordered list of per-page document IDs created for this job. "
+            "Each page upload produces one Document; entries are ordered by "
+            "input page_number."
+        ),
+    )
     created_at: str
     updated_at: str
+
+
+class JobInputPage(BaseModel):
+    """One input page of a job, with the full extracted content."""
+
+    page_number: int = Field(description="Input page number as uploaded (1-based for split PDFs).")
+    document_id: str
+    status: str
+    pages: list[PageSummary] = Field(
+        default_factory=list,
+        description=(
+            "Output rows produced by the pipeline for this input page. "
+            "Multiple entries occur when content explosion expands one input "
+            "page into N output rows (e.g. detected sub-elements)."
+        ),
+    )
+
+
+class JobResults(BaseModel):
+    """Reassembled per-page results for an entire job, in input-page order."""
+
+    job_id: str
+    filename: str
+    status: str
+    total_pages: int
+    pages_completed: int
+    metrics: list[MetricSummary] = Field(default_factory=list)
+    pages: list[JobInputPage] = Field(default_factory=list)
+    created_at: str
+    updated_at: str
+
+
+class JobListEntry(BaseModel):
+    """One job row in the paginated job-listing response.
+
+    A trimmed projection of :class:`JobStatus` (no metrics, no document_ids)
+    suitable for browsing thousands of jobs cheaply.
+    """
+
+    job_id: str
+    filename: str
+    status: str
+    total_pages: int
+    pages_submitted: int = 0
+    pages_completed: int = 0
+    created_at: str
+    updated_at: str
+
+
+class JobsList(BaseModel):
+    """Response for ``GET /v1/ingest/jobs``."""
+
+    jobs: list[JobListEntry] = Field(default_factory=list)
+    limit: int
+    offset: int
+    returned: int = Field(description="Number of jobs in this page (<= limit).")
+
+
+class JobsSummary(BaseModel):
+    """Aggregate job counts by status. Missing statuses default to 0."""
+
+    queued: int = 0
+    processing: int = 0
+    complete: int = 0
+    failed: int = 0
+    cancelled: int = 0
+    draining: int = 0
+    total: int = 0
+
+
+class JobAccepted(BaseModel):
+    """Response for ``POST /v1/ingest/job`` (server-side split)."""
+
+    job_id: str
+    filename: str
+    total_pages: int
+    document_ids: list[str] = Field(default_factory=list)
+    status: str = "processing"
+    pages_accepted: int = Field(
+        description="Number of pages accepted into the worker pool. Equals total_pages on success."
+    )
+    pages_rejected: int = Field(
+        default=0,
+        description=(
+            "Number of pages that could not be queued (server busy / draining). "
+            "Inspect pages_rejected_detail for reasons."
+        ),
+    )
+    pages_rejected_detail: list[dict] = Field(default_factory=list)
+
+
+class BatchIngestAccepted(BaseModel):
+    """Response for ``POST /v1/ingest/batch``."""
+
+    accepted: list[IngestAccepted] = Field(default_factory=list)
+    rejected: list[dict] = Field(
+        default_factory=list,
+        description="Pages that could not be queued; each entry has filename, page_number, and reason.",
+    )
+
+
+class JobCancelResponse(BaseModel):
+    """Response for ``POST /v1/ingest/job/{job_id}/cancel``."""
+
+    job_id: str
+    status: str = Field(description="The job's status AFTER the cancel call.")
+    documents_cancelled: int = Field(
+        description="Number of buffered/queued pages marked cancelled. Pages already in flight will still complete."
+    )
+    already_terminal: bool = Field(
+        default=False,
+        description="True if the job had already completed/failed/cancelled before this request.",
+    )
+
+
+class HealthResponse(BaseModel):
+    """Response for ``GET /v1/health``."""
+
+    status: str = "ok"
+    version: str
+    uptime_s: float
+    workers: int
+    in_flight_batches: int
+    capacity: int
+    pool_size: int
+    draining: bool
+
+
+class CapabilityFlag(BaseModel):
+    enabled: bool
+    endpoints: list[str] = Field(default_factory=list)
+
+
+class CapabilitiesResponse(BaseModel):
+    """Response for ``GET /v1/capabilities``.
+
+    Lets clients introspect which NIM endpoints the server has wired up
+    and which optional features are enabled, so they can validate their
+    expectations before submitting work.
+    """
+
+    version: str
+    page_elements: CapabilityFlag
+    ocr: CapabilityFlag
+    table_structure: CapabilityFlag
+    graphic_elements: CapabilityFlag
+    embed: CapabilityFlag
+    auth_required: bool
+    server_pdf_split: bool
+    bulk_upload: bool
+    resumable_sse: bool
+    cancel: bool

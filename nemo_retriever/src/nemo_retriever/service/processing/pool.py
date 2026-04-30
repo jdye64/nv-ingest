@@ -46,10 +46,12 @@ from nemo_retriever.service.config import NimEndpointsConfig, ServiceConfig
 from nemo_retriever.service.db.engine import DatabaseEngine
 from nemo_retriever.service.db.repository import Repository
 from nemo_retriever.service.event_bus import EventBus
+from nemo_retriever.service.failure_types import FailureType, categorize_exception
 from nemo_retriever.service.models.document import ProcessingStatus
 from nemo_retriever.service.models.metrics import ProcessingMetric
 from nemo_retriever.service.models.page_processing_log import PageProcessingLog
 from nemo_retriever.service.models.page_result import PageResult
+from nemo_retriever.service.spool import SpoolStore
 
 logger = logging.getLogger(__name__)
 
@@ -302,7 +304,18 @@ def _worker_initializer(
 
 @dataclasses.dataclass
 class PageDescriptor:
-    """Lightweight struct describing a single page to be batched."""
+    """Lightweight struct describing a single page to be batched.
+
+    When ``spool_path`` is set, ``file_bytes`` is left empty and the
+    worker subprocess reads the page bytes from disk.  This keeps the
+    main↔worker IPC payload small (a few-KB descriptor instead of a
+    multi-MB blob) AND means the worker can recover from a transient
+    pickling failure by re-reading from the durable spool.
+
+    When ``spool_path`` is unset, ``file_bytes`` carries the page
+    inline — used for the unit-test path and for any caller that has
+    explicitly disabled spooling in config.
+    """
 
     document_id: str
     content_sha256: str
@@ -310,6 +323,7 @@ class PageDescriptor:
     filename: str
     job_id: str | None = None
     page_number: int = 1
+    spool_path: str | None = None
 
 
 @dataclasses.dataclass
@@ -322,12 +336,18 @@ class WorkerResult:
     page_number: int
     success: bool
     error_message: str | None = None
+    failure_type: str | None = None
     metrics: list[dict[str, Any]] = dataclasses.field(default_factory=list)
     detection_count: int = 0
     processing_duration_ms: float = 0.0
     started_at: str = ""
     completed_at: str = ""
     total_pages: int = 0
+    # Full per-output-row contents emitted by the pipeline for this input page.
+    # Populated when the worker successfully runs the chain.  Plumbed back to
+    # the main process so it can publish ``page_result`` SSE events without
+    # making clients re-fetch the data over REST.
+    page_contents: list[dict[str, Any]] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass
@@ -383,10 +403,52 @@ def _run_pipeline_batch(
             pass
 
     rows = []
+    skipped: list[WorkerResult] = []
     for p in pages:
+        page_bytes = p.file_bytes
+        if not page_bytes and p.spool_path:
+            try:
+                with open(p.spool_path, "rb") as fh:
+                    page_bytes = fh.read()
+            except FileNotFoundError:
+                # Spool file vanished — almost certainly because the
+                # cleanup sweeper raced with a re-enqueue after a recent
+                # restart.  Treat as a permanent failure for this page;
+                # the caller will surface it via a status_change event.
+                logger.warning(
+                    "[worker %d] spool file missing for doc %s (page %s); marking failed",
+                    pid,
+                    p.document_id,
+                    p.page_number,
+                )
+                skipped.append(
+                    WorkerResult(
+                        document_id=p.document_id,
+                        job_id=p.job_id,
+                        source_file=p.filename,
+                        page_number=p.page_number,
+                        success=False,
+                        error_message=f"spool file missing: {p.spool_path}",
+                        failure_type=FailureType.INTERNAL.value,
+                    )
+                )
+                continue
+        if not page_bytes:
+            skipped.append(
+                WorkerResult(
+                    document_id=p.document_id,
+                    job_id=p.job_id,
+                    source_file=p.filename,
+                    page_number=p.page_number,
+                    success=False,
+                    error_message="no page bytes (neither inline nor spooled)",
+                    failure_type=FailureType.INTERNAL.value,
+                )
+            )
+            continue
         rows.append(
             {
-                "bytes": p.file_bytes,
+                "bytes": page_bytes,
                 "path": p.filename,
                 _PROVENANCE_COL: p.document_id,
                 _PROVENANCE_JOB_COL: p.job_id,
@@ -394,6 +456,25 @@ def _run_pipeline_batch(
                 _PROVENANCE_FILE_COL: p.filename,
             }
         )
+    # The pages whose bytes are actually runnable through the pipeline.
+    runnable_pages = [p for p in pages if not any(s.document_id == p.document_id for s in skipped)]
+
+    if not rows:
+        # Every page in the batch failed the byte-fetch step.  Mark each
+        # one failed in the DB so the SSE consumer + REST status reflect
+        # the truth, and return only the skipped results.
+        completed_at = datetime.now(timezone.utc).isoformat()
+        for s in skipped:
+            _mark_page_failed(
+                repo,
+                next(p for p in pages if p.document_id == s.document_id),
+                s.error_message or "page bytes unavailable",
+                completed_at,
+                completed_at,
+                s.failure_type or FailureType.INTERNAL.value,
+            )
+        return BatchWorkerResult(results=skipped)
+
     df = pd.DataFrame(rows)
 
     started_at = datetime.now(timezone.utc).isoformat()
@@ -411,17 +492,19 @@ def _run_pipeline_batch(
     except BaseException as exc:
         elapsed_ms = (time.monotonic() - t0) * 1000.0
         error_msg = f"{type(exc).__name__}: {exc}"
+        failure_type = categorize_exception(exc).value
         logger.error(
-            "[worker %d] BATCH FAILED (%d pages): %s",
+            "[worker %d] BATCH FAILED (%d pages, failure_type=%s): %s",
             pid,
             n_pages,
+            failure_type,
             error_msg,
             exc_info=True,
         )
         completed_at = datetime.now(timezone.utc).isoformat()
-        fail_results: list[WorkerResult] = []
-        for p in pages:
-            _mark_page_failed(repo, p, error_msg, started_at, completed_at)
+        fail_results: list[WorkerResult] = list(skipped)
+        for p in runnable_pages:
+            _mark_page_failed(repo, p, error_msg, started_at, completed_at, failure_type)
             fail_results.append(
                 WorkerResult(
                     document_id=p.document_id,
@@ -430,6 +513,7 @@ def _run_pipeline_batch(
                     page_number=p.page_number,
                     success=False,
                     error_message=error_msg,
+                    failure_type=failure_type,
                 )
             )
         return BatchWorkerResult(results=fail_results)
@@ -445,14 +529,17 @@ def _run_pipeline_batch(
         elapsed_ms,
     )
 
-    return _split_batch_results(
+    batch_result = _split_batch_results(
         repo,
         df,
-        pages,
+        runnable_pages,
         elapsed_ms,
         started_at,
         completed_at,
     )
+    if skipped:
+        batch_result.results = list(skipped) + list(batch_result.results)
+    return batch_result
 
 
 def _mark_page_failed(
@@ -461,6 +548,7 @@ def _mark_page_failed(
     error_msg: str,
     started_at: str,
     completed_at: str,
+    failure_type: str | None = None,
 ) -> None:
     """Mark a single page as failed in the DB."""
     try:
@@ -474,6 +562,7 @@ def _mark_page_failed(
             page_number=p.page_number,
             status="failed",
             error_message=error_msg,
+            failure_type=failure_type,
             detection_count=0,
             processing_duration_ms=0.0,
             started_at=started_at,
@@ -525,6 +614,7 @@ def _split_batch_results(
                     page_number=p.page_number,
                     success=False,
                     error_message="Provenance column lost during pipeline execution",
+                    failure_type=FailureType.INTERNAL.value,
                 )
             )
         return BatchWorkerResult(results=results)
@@ -558,9 +648,11 @@ def _split_batch_results(
             ]
             repo.insert_metrics(metric_objs)
 
-        for _, row in group_df.iterrows():
+        page_contents: list[dict[str, Any]] = []
+        for page_num, (_, row) in enumerate(group_df.iterrows()):
             row_dict = row.to_dict()
             content = _row_to_page_content(row_dict)
+            page_contents.append(content)
             page_result = PageResult(
                 document_id=doc_id,
                 page_number=p.page_number,
@@ -598,6 +690,7 @@ def _split_batch_results(
                 started_at=started_at,
                 completed_at=completed_at,
                 total_pages=total_rows,
+                page_contents=page_contents,
             )
         )
 
@@ -610,6 +703,7 @@ def _split_batch_results(
                 "Page produced no output rows after pipeline execution",
                 started_at,
                 completed_at,
+                FailureType.INTERNAL.value,
             )
             results.append(
                 WorkerResult(
@@ -619,6 +713,7 @@ def _split_batch_results(
                     page_number=p.page_number,
                     success=False,
                     error_message="Page produced no output rows after pipeline execution",
+                    failure_type=FailureType.INTERNAL.value,
                 )
             )
 
@@ -755,11 +850,13 @@ class ProcessingPool:
         db_engine: DatabaseEngine,
         event_bus: EventBus,
         event_loop: asyncio.AbstractEventLoop,
+        spool_store: SpoolStore | None = None,
     ) -> None:
         self._config = config
         self._db_engine = db_engine
         self._event_bus = event_bus
         self._event_loop = event_loop
+        self._spool_store = spool_store
         self._num_workers = config.processing.num_workers
         self._batch_size = config.processing.batch_size
         self._batch_timeout_s = config.processing.batch_timeout_s
@@ -767,6 +864,12 @@ class ProcessingPool:
         self._buffer: _BatchBuffer | None = None
         self._in_flight = 0
         self._in_flight_lock = threading.Lock()
+        # Cancellation + drain state
+        self._cancelled_jobs: set[str] = set()
+        self._cancel_lock = threading.Lock()
+        self._draining = threading.Event()
+        # Background spool sweeper (started in start()).
+        self._spool_cleanup_task: asyncio.Task | None = None
 
     def start(self) -> None:
         nim = self._config.nim_endpoints
@@ -828,6 +931,9 @@ class ProcessingPool:
         )
 
     def shutdown(self) -> None:
+        if self._spool_cleanup_task is not None and not self._spool_cleanup_task.done():
+            self._spool_cleanup_task.cancel()
+            self._spool_cleanup_task = None
         if self._buffer is not None:
             self._buffer.close()
             self._buffer = None
@@ -836,9 +942,116 @@ class ProcessingPool:
             self._executor.shutdown(wait=True, cancel_futures=True)
             self._executor = None
 
+    # ------------------------------------------------------------------
+    # Spool integration: recovery + periodic cleanup
+    # ------------------------------------------------------------------
+
+    def recover_from_spool(self) -> int:
+        """Re-enqueue every spooled-but-unprocessed page from the durable store.
+
+        Called once at startup, BEFORE HTTP starts accepting new ingest
+        requests, so the recovered work hits the buffer first.  Returns
+        the number of pages re-enqueued; logs a warning for any spool
+        file that vanished (cleaned up between crash and restart).
+        """
+        if self._spool_store is None:
+            return 0
+        repo = Repository(self._db_engine)
+        recovered = 0
+        skipped = 0
+        for doc in repo.list_recoverable_spooled_documents():
+            spool_path = doc.spool_path
+            if not spool_path:
+                continue
+            try:
+                page_bytes = self._spool_store.read(spool_path)
+            except FileNotFoundError:
+                logger.warning(
+                    "spool recovery: file %s missing for doc %s — marking failed",
+                    spool_path,
+                    doc.id,
+                )
+                repo.update_document_status(doc.id, ProcessingStatus.FAILED)
+                repo.update_document_spool_path(doc.id, None)
+                skipped += 1
+                continue
+            ok = self.try_submit(
+                doc.id,
+                doc.content_sha256,
+                page_bytes,
+                doc.filename,
+                job_id=doc.job_id,
+                page_number=doc.page_number or 1,
+                spool_path=spool_path,
+            )
+            if ok:
+                recovered += 1
+            else:
+                # Buffer full at recovery — extremely unlikely (no
+                # ingest yet); log and let the next sweep retry.
+                logger.warning(
+                    "spool recovery: buffer rejected re-enqueue of doc %s; will retry on next sweep",
+                    doc.id,
+                )
+                skipped += 1
+        if recovered or skipped:
+            logger.info(
+                "spool recovery complete: re-enqueued=%d skipped=%d",
+                recovered,
+                skipped,
+            )
+        return recovered
+
+    def start_spool_cleanup(self) -> None:
+        """Start the background sweeper that removes terminal spool files.
+
+        Safe to call multiple times — only starts a task when one isn't
+        already running.  Must be called from inside the asyncio loop
+        the service runs on.
+        """
+        if self._spool_store is None:
+            return
+        if self._spool_cleanup_task is not None and not self._spool_cleanup_task.done():
+            return
+        self._spool_cleanup_task = self._event_loop.create_task(self._spool_cleanup_loop())
+
+    async def _spool_cleanup_loop(self) -> None:
+        """Periodically delete spool files for documents in a terminal state."""
+        assert self._spool_store is not None
+        interval = float(self._config.spool.cleanup_interval_s)
+        batch = int(self._config.spool.cleanup_batch_size)
+        while True:
+            try:
+                await asyncio.sleep(interval)
+                evictable = await asyncio.to_thread(
+                    Repository(self._db_engine).list_evictable_spooled_documents,
+                    batch,
+                )
+                if not evictable:
+                    continue
+                deleted = await asyncio.to_thread(self._spool_store.cleanup_terminal, evictable)
+                # Clear spool_path on the rows whose files we successfully
+                # removed (re-using the same repo instance per call so the
+                # connection sticks to this thread).
+                if deleted:
+                    repo_main = Repository(self._db_engine)
+                    for doc_id, _path in evictable:
+                        await asyncio.to_thread(repo_main.update_document_spool_path, doc_id, None)
+            except asyncio.CancelledError:
+                logger.info("Spool cleanup loop stopped")
+                return
+            except Exception:  # noqa: BLE001 — sweeper must be resilient
+                logger.exception("Spool cleanup loop iteration failed (continuing)")
+
+    @property
+    def pool_size(self) -> int:
+        """Number of worker processes configured for this pool."""
+        return self._num_workers
+
+    # Backwards-compatible alias kept for callers that already use the
+    # private name; new code should prefer ``pool_size``.
     @property
     def _pool_size(self) -> int:
-        """Backwards-compatible accessor used by the ingest router."""
         return self._num_workers
 
     @property
@@ -851,40 +1064,187 @@ class ProcessingPool:
         return self.capacity > 0
 
     # ------------------------------------------------------------------
+    # Cancellation + drain (main-process state only)
+    # ------------------------------------------------------------------
+
+    def cancel_job(self, job_id: str) -> None:
+        """Mark *job_id* as cancelled.
+
+        Pages already in flight will run to completion (worker subprocesses
+        cannot be safely interrupted mid-pipeline), but any pages still
+        sitting in the batch buffer or still being uploaded will be dropped
+        before they reach an executor.
+        """
+        with self._cancel_lock:
+            self._cancelled_jobs.add(job_id)
+
+    def is_job_cancelled(self, job_id: str | None) -> bool:
+        if not job_id:
+            return False
+        with self._cancel_lock:
+            return job_id in self._cancelled_jobs
+
+    @property
+    def is_draining(self) -> bool:
+        return self._draining.is_set()
+
+    def begin_drain(self) -> None:
+        """Stop accepting new pages.  Existing batches still drain through."""
+        self._draining.set()
+        if self._buffer is not None:
+            # Force-flush any partial batch so it isn't held by the timer.
+            self._buffer.flush()
+
+    def in_flight_batches(self) -> int:
+        with self._in_flight_lock:
+            return self._in_flight
+
+    async def drain(self, timeout_s: float) -> bool:
+        """Mark the pool draining and wait for in-flight batches to finish.
+
+        Returns ``True`` if drain completed within ``timeout_s``, ``False``
+        if the timeout fired with batches still running.  Callers (the
+        lifespan hook, primarily) should still call :meth:`shutdown` after
+        :meth:`drain` returns to release the executor.
+        """
+        self.begin_drain()
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(0.0, timeout_s)
+        while True:
+            in_flight = self.in_flight_batches()
+            if in_flight == 0:
+                return True
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                logger.warning(
+                    "Drain timed out with %d batch(es) still in flight after %.1fs",
+                    in_flight,
+                    timeout_s,
+                )
+                return False
+            await asyncio.sleep(min(0.5, remaining))
+
+    # ------------------------------------------------------------------
     # SSE event publishing (main process only)
     # ------------------------------------------------------------------
 
     def _publish_event(self, document_id: str, event: dict[str, Any]) -> None:
-        asyncio.run_coroutine_threadsafe(
+        """Fan an event out under the configured overflow policy.
+
+        Under ``drop_low_priority`` (default) this is fire-and-forget —
+        the future is ignored and the worker callback thread returns
+        immediately.  Under ``backpressure`` or ``block`` the call WAITS
+        on the publish future so a slow consumer naturally back-presses
+        the worker pool.  We bound the wait at twice the configured
+        publish timeout (or 5 minutes for ``block``) as a safety net so
+        a truly stuck consumer can never deadlock the worker thread
+        forever.
+        """
+        # We always submit both publish coroutines; whether to wait
+        # depends on the bus's policy.
+        doc_fut = asyncio.run_coroutine_threadsafe(
             self._event_bus.publish(document_id, event),
             self._event_loop,
         )
         job_id = event.get("job_id")
-        if job_id:
+        job_fut = (
             asyncio.run_coroutine_threadsafe(
                 self._event_bus.publish(job_id, event),
                 self._event_loop,
             )
+            if job_id
+            else None
+        )
+
+        if self._event_bus.overflow_policy == "drop_low_priority":
+            return
+
+        # Bound the worker-side wait independently of the bus's own
+        # timeout so a misconfigured ``block`` mode can't pin a worker
+        # thread forever.
+        if self._event_bus.overflow_policy == "block":
+            wait_s: float | None = 300.0
+        else:
+            wait_s = max(self._config.event_bus.publish_timeout_s * 2.0, 1.0)
+
+        for fut in (doc_fut, job_fut):
+            if fut is None:
+                continue
+            try:
+                fut.result(timeout=wait_s)
+            except Exception:  # noqa: BLE001 — publish exceptions logged inside the bus
+                pass
 
     # ------------------------------------------------------------------
     # Batch dispatch (called by _BatchBuffer from its timer/flush)
     # ------------------------------------------------------------------
 
     def _dispatch_batch(self, batch: list[dict[str, Any]]) -> None:
-        """Submit a batch of pages to the executor as a single task."""
+        """Submit a batch of pages to the executor as a single task.
+
+        Pages whose job has been cancelled since enqueue are filtered out
+        and a synthetic cancelled ``WorkerResult`` is published so SSE
+        subscribers see the terminal event.
+        """
         if self._executor is None:
             raise RuntimeError("ProcessingPool has not been started")
+
+        runnable: list[dict[str, Any]] = []
+        cancelled: list[dict[str, Any]] = []
+        for page in batch:
+            if self.is_job_cancelled(page.get("job_id")):
+                cancelled.append(page)
+            else:
+                runnable.append(page)
+
+        for page in cancelled:
+            self._publish_cancelled(page)
+
+        if not runnable:
+            return
 
         with self._in_flight_lock:
             self._in_flight += 1
 
-        logger.debug("Dispatching batch of %d pages to executor", len(batch))
+        logger.debug(
+            "Dispatching batch of %d pages to executor (skipped %d cancelled)",
+            len(runnable),
+            len(cancelled),
+        )
         fut: Future[BatchWorkerResult] = self._executor.submit(
             _run_pipeline_batch,
-            batch,
+            runnable,
             db_path=str(self._db_engine._db_path),
         )
         fut.add_done_callback(self._on_batch_result)
+
+    def _publish_cancelled(self, page: dict[str, Any]) -> None:
+        """Mark a buffered page as cancelled in the DB and emit SSE event."""
+        repo = Repository(self._db_engine)
+        doc_id = page.get("document_id", "")
+        job_id = page.get("job_id")
+        try:
+            repo.update_document_status(doc_id, ProcessingStatus.CANCELLED)
+        except Exception:  # noqa: BLE001 — best effort
+            pass
+
+        self._publish_event(
+            doc_id,
+            {
+                "event": "status_change",
+                "document_id": doc_id,
+                "job_id": job_id,
+                "status": "cancelled",
+                "source_file": page.get("filename", ""),
+                "page_number": page.get("page_number", 0),
+                "reason": "job_cancelled",
+            },
+        )
+
+        if job_id:
+            # Count cancelled pages toward job completion so a fully-cancelled
+            # job transitions to its terminal state without dangling counters.
+            self._handle_job_completion(job_id)
 
     # ------------------------------------------------------------------
     # Result callback (runs in main process on a callback thread)
@@ -923,6 +1283,17 @@ class ProcessingPool:
                     },
                 )
 
+            page_result_payload: dict[str, Any] = {
+                "event": "page_result",
+                "document_id": doc_id,
+                "job_id": job_id,
+                "source_file": result.source_file,
+                "page_number": result.page_number,
+                "total_pages": result.total_pages,
+                "pages": result.page_contents,
+            }
+            self._publish_event(doc_id, page_result_payload)
+
             page_complete_payload: dict[str, Any] = {
                 "event": "page_complete",
                 "document_id": doc_id,
@@ -953,6 +1324,7 @@ class ProcessingPool:
                     "source_file": result.source_file,
                     "page_number": result.page_number,
                     "error": result.error_message or "unknown error",
+                    "failure_type": result.failure_type or FailureType.UNKNOWN.value,
                 },
             )
 
@@ -996,25 +1368,39 @@ class ProcessingPool:
         *,
         job_id: str | None = None,
         page_number: int = 1,
+        spool_path: str | None = None,
     ) -> bool:
         """Enqueue a page for batched processing.
 
-        Returns ``True`` if the page was accepted, ``False`` if the
-        buffer is full (caller should 503).
+        Returns ``True`` if the page was accepted, ``False`` if the buffer
+        is full or the pool is draining / job is cancelled (caller should
+        translate to a 503 with the appropriate detail).
+
+        When ``spool_path`` is provided the page bytes are NOT carried
+        in-memory through the IPC payload — the worker reads them from
+        the spool file inside its own process.  This keeps the
+        cross-process descriptor small (a few KB) and means a worker
+        crash mid-batch leaves the bytes available for re-enqueue.
         """
         if self._executor is None:
             raise RuntimeError("ProcessingPool has not been started")
         if self._buffer is None:
             raise RuntimeError("Batch buffer has not been initialised")
 
-        page_dict = dataclasses.asdict(
-            PageDescriptor(
-                document_id=document_id,
-                content_sha256=content_sha256,
-                file_bytes=file_bytes,
-                filename=filename,
-                job_id=job_id,
-                page_number=page_number,
-            )
+        if self._draining.is_set():
+            return False
+        if self.is_job_cancelled(job_id):
+            return False
+
+        # When the bytes have been spooled, do NOT also pickle them into
+        # the descriptor — the worker will read them from disk.
+        descriptor = PageDescriptor(
+            document_id=document_id,
+            content_sha256=content_sha256,
+            file_bytes=b"" if spool_path else file_bytes,
+            filename=filename,
+            job_id=job_id,
+            page_number=page_number,
+            spool_path=spool_path,
         )
-        return self._buffer.enqueue(page_dict)
+        return self._buffer.enqueue(dataclasses.asdict(descriptor))

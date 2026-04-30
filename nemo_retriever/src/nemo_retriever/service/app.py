@@ -16,11 +16,18 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI
 
+from pathlib import Path
+
 from nemo_retriever.service.config import ServiceConfig
 from nemo_retriever.service.db.engine import DatabaseEngine
 from nemo_retriever.service.db.repository import Repository
 from nemo_retriever.service.event_bus import EventBus
+from nemo_retriever.service.metrics import (
+    setup_instrumentation as setup_metrics_instrumentation,
+    start_refresh_loop as start_metrics_refresh_loop,
+)
 from nemo_retriever.service.processing.pool import ProcessingPool
+from nemo_retriever.service.spool import SpoolStore
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +81,13 @@ def _apply_resource_limits(config: ServiceConfig) -> None:
             logger.warning("Could not set memory limit: %s", exc)
 
 
+def _resolve_spool_root(config: ServiceConfig) -> Path:
+    """Pick the spool directory: explicit override, else ``<db_dir>/spool``."""
+    if config.spool.path:
+        return Path(config.spool.path)
+    return Path(config.database.path).resolve().parent / "spool"
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Startup / shutdown lifecycle for the service."""
@@ -84,23 +98,76 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.db_engine = db_engine
     app.state.repository = Repository(db_engine)
 
-    event_bus = EventBus()
+    event_bus = EventBus(
+        default_maxsize=config.event_bus.queue_maxsize,
+        buffer_size=config.event_bus.replay_buffer_size,
+        overflow_policy=config.event_bus.overflow_policy,
+        publish_timeout_s=config.event_bus.publish_timeout_s,
+    )
     app.state.event_bus = event_bus
 
+    spool_store: SpoolStore | None = None
+    if config.spool.enabled:
+        spool_root = _resolve_spool_root(config)
+        spool_store = SpoolStore(spool_root)
+        app.state.spool_store = spool_store
+        logger.info("Spool enabled at %s", spool_root)
+    else:
+        app.state.spool_store = None
+        logger.warning(
+            "Spool DISABLED — accepted pages live only in RAM until processed; "
+            "a pod restart between accept and processing will lose them"
+        )
+
     loop = asyncio.get_running_loop()
-    pool = ProcessingPool(config, db_engine, event_bus, loop)
+    pool = ProcessingPool(config, db_engine, event_bus, loop, spool_store=spool_store)
     pool.start()
     app.state.processing_pool = pool
 
+    # Recover any pages that were spooled but never processed — must
+    # happen BEFORE we start accepting new HTTP requests so recovery
+    # doesn't race fresh ingest for the (limited) batch buffer.
+    if spool_store is not None:
+        try:
+            recovered = await asyncio.to_thread(pool.recover_from_spool)
+            if recovered:
+                logger.info("Spool recovery re-enqueued %d page(s)", recovered)
+        except Exception:  # noqa: BLE001
+            logger.exception("Spool recovery failed — continuing with cold start")
+        pool.start_spool_cleanup()
+
+    metrics_task = start_metrics_refresh_loop(app)
+
     logger.info(
-        "Retriever service started — host=%s port=%d workers=%d",
+        "Retriever service started — host=%s port=%d workers=%d " "spool=%s event_bus.policy=%s",
         config.server.host,
         config.server.port,
         config.processing.num_workers,
+        "on" if spool_store else "off",
+        config.event_bus.overflow_policy,
     )
 
     yield
 
+    metrics_task.cancel()
+    try:
+        await metrics_task
+    except asyncio.CancelledError:
+        pass
+
+    drain_timeout_s = float(getattr(getattr(config, "drain", None), "timeout_s", 60.0))
+    logger.info(
+        "Shutting down: draining pool (timeout=%.1fs, in_flight=%d)",
+        drain_timeout_s,
+        pool.in_flight_batches() if hasattr(pool, "in_flight_batches") else 0,
+    )
+    drained = await pool.drain(drain_timeout_s) if hasattr(pool, "drain") else True
+    if not drained:
+        logger.warning(
+            "Drain incomplete after %.1fs; forcing executor shutdown — "
+            "in-flight pages remain durable in the spool and will be re-enqueued on next start.",
+            drain_timeout_s,
+        )
     pool.shutdown()
     db_engine.close()
     logger.info("Retriever service stopped")
@@ -120,11 +187,28 @@ def create_app(config: ServiceConfig) -> FastAPI:
     )
     app.state.config = config
 
-    from nemo_retriever.service.routers import ingest, internal, metrics, stream
+    if config.auth.api_token:
+        from nemo_retriever.service.auth import BearerAuthMiddleware
+
+        app.add_middleware(BearerAuthMiddleware, config=config.auth)
+        logger.info(
+            "Bearer-token authentication ENABLED (header=%s, bypass=%s)",
+            config.auth.header_name,
+            config.auth.bypass_paths,
+        )
+    else:
+        logger.info("Bearer-token authentication DISABLED (no api_token configured)")
+
+    from nemo_retriever.service.routers import ingest, internal, metrics, stream, system
 
     app.include_router(ingest.router, prefix="/v1")
     app.include_router(internal.router, prefix="/v1")
     app.include_router(metrics.router, prefix="/v1")
     app.include_router(stream.router, prefix="/v1")
+    app.include_router(system.router, prefix="/v1")
+
+    # Prometheus instrumentation must be wired before the app starts —
+    # the lifespan only kicks off the periodic gauge-refresh task.
+    setup_metrics_instrumentation(app)
 
     return app

@@ -20,7 +20,7 @@ import logging
 import time
 from pathlib import Path
 from contextlib import nullcontext
-from typing import Any, Awaitable, Callable
+from typing import Any, AsyncIterator, Awaitable, Callable
 from uuid import uuid4
 
 import httpx
@@ -37,6 +37,25 @@ _DEFAULT_RETRY_AFTER = 10.0
 _MAX_BACKOFF = 120.0
 _MAX_RETRIES = 5
 _RETRY_BASE_DELAY = 2.0
+
+# Transport-level errors we retry on.  These show up when the connection
+# is reset mid-flight (typical of Kubernetes NodePort / kube-proxy under
+# bursty load): peer closes TCP before sending response headers.
+_TRANSIENT_HTTPX_ERRORS: tuple[type[Exception], ...] = (
+    httpx.ReadError,
+    httpx.WriteError,
+    httpx.RemoteProtocolError,
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.ReadTimeout,
+)
+_UPLOAD_TRANSIENT_RETRIES = 5
+_SSE_TRANSIENT_RETRIES = 10
+# Server may send `stream_overflow` if a slow consumer caused its
+# subscription queue to back up.  We treat this as a recoverable hint to
+# reconnect with `Last-Event-ID` and resume from the per-key replay
+# buffer; only after this many overflows do we surface a hard error.
+_SSE_MAX_OVERFLOWS = 5
 
 console = Console()
 
@@ -305,12 +324,24 @@ class RetrieverServiceClient:
     events emitted by the server during uploading are never missed.
     """
 
-    def __init__(self, base_url: str = "http://localhost:7670", max_concurrency: int = 8) -> None:
+    def __init__(
+        self,
+        base_url: str = "http://localhost:7670",
+        max_concurrency: int = 8,
+        *,
+        api_token: str | None = None,
+    ) -> None:
         self._base_url = base_url.rstrip("/")
         self._semaphore = asyncio.Semaphore(max_concurrency)
         self._capacity_event = asyncio.Event()
         self._capacity_event.set()
         self._max_concurrency = max_concurrency
+        self._api_token = (api_token or "").strip() or None
+
+    @property
+    def _auth_headers(self) -> dict[str, str]:
+        """Return the Authorization header dict (empty if no token configured)."""
+        return {"Authorization": f"Bearer {self._api_token}"} if self._api_token else {}
 
     def notify_capacity_available(self) -> None:
         self._capacity_event.set()
@@ -349,6 +380,7 @@ class RetrieverServiceClient:
         async with self._semaphore:
             backoff = _DEFAULT_RETRY_AFTER
             was_busy = False
+            transport_attempts = 0
 
             while True:
                 meta = {
@@ -360,7 +392,31 @@ class RetrieverServiceClient:
                 page_filename = f"{Path(filename).stem}_p{page_number}{Path(filename).suffix}"
                 files = {"file": (page_filename, page_bytes)}
                 data = {"metadata": json.dumps(meta)}
-                resp = await client.post(f"{self._base_url}/v1/ingest", files=files, data=data)
+                try:
+                    resp = await client.post(f"{self._base_url}/v1/ingest", files=files, data=data)
+                except _TRANSIENT_HTTPX_ERRORS as exc:
+                    transport_attempts += 1
+                    if transport_attempts > _UPLOAD_TRANSIENT_RETRIES:
+                        logger.warning(
+                            "[job %s] upload of %s page %d failed after %d attempts: %s",
+                            job_id[:8],
+                            filename,
+                            page_number,
+                            transport_attempts,
+                            exc.__class__.__name__,
+                        )
+                        raise
+                    delay = min(_RETRY_BASE_DELAY * (2 ** (transport_attempts - 1)), _MAX_BACKOFF)
+                    logger.debug(
+                        "[job %s] transient %s on upload (attempt %d/%d), sleeping %.1fs",
+                        job_id[:8],
+                        exc.__class__.__name__,
+                        transport_attempts,
+                        _UPLOAD_TRANSIENT_RETRIES,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
 
                 if resp.status_code != 503:
                     if was_busy and tracker is not None:
@@ -910,7 +966,7 @@ class RetrieverServiceClient:
         else:
             _effective_cb = None
 
-        async with httpx.AsyncClient(timeout=timeout, limits=pool_limits) as client:
+        async with httpx.AsyncClient(timeout=timeout, limits=pool_limits, headers=self._auth_headers) as client:
             live_ctx = Live(display.build_renderable(), refresh_per_second=4) if show_progress else nullcontext()
             with live_ctx as live:
                 refresh_task: asyncio.Task[None] | None = None
@@ -1008,7 +1064,7 @@ class RetrieverServiceClient:
         text_previews: dict[str, str] = {}
 
         if on_page_result is None:
-            async with httpx.AsyncClient(timeout=timeout, limits=pool_limits) as client:
+            async with httpx.AsyncClient(timeout=timeout, limits=pool_limits, headers=self._auth_headers) as client:
                 for plan in job_plans:
                     try:
                         resp = await client.get(f"{self._base_url}/v1/ingest/job/{plan['job_id']}")
@@ -1028,6 +1084,242 @@ class RetrieverServiceClient:
             _print_throughput(tracker.total_pages, processing_elapsed)
 
         return final_results
+
+    # ------------------------------------------------------------------
+    # Streaming entry point — yields per-page results as they arrive
+    # ------------------------------------------------------------------
+
+    async def aingest_documents_stream(
+        self,
+        files: list[Path],
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Async generator: split + upload files, yield page results as they land.
+
+        Each yielded dict is one of:
+
+        * ``{"event": "page_result", "job_id": ..., "source_file": ...,
+            "page_number": <input page>, "document_id": ..., "pages": [<output rows>], ...}``
+        * ``{"event": "page_failed", "job_id": ..., "source_file": ...,
+            "page_number": ..., "error": ...}``
+        * ``{"event": "metrics_update", ...}``
+        * ``{"event": "job_complete", "job_id": ..., "filename": ...}``
+
+        The generator terminates when every job has completed, failed, or
+        the SSE connection has terminated with ``stream_overflow``.
+
+        Unlike :meth:`ingest_documents` this method does not render any UI;
+        it is the building block used by the high-level ``ServiceIngestor``.
+        """
+        upload_queue: asyncio.Queue[tuple[bytes, str, str, int, int] | None] = asyncio.Queue()
+        result_queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+        job_ids: list[str] = []
+        # Signal: every input file has been split and its job_id appended to
+        # ``job_ids``.  The SSE consumer waits for this before subscribing so
+        # the subscription covers ALL jobs (the server's subscribe_many takes
+        # a fixed key set — events for jobs added after subscribe are not
+        # delivered to that subscriber).
+        splits_done = asyncio.Event()
+        loop = asyncio.get_running_loop()
+
+        async def _split_files() -> None:
+            try:
+                for fpath in files:
+                    pages = await loop.run_in_executor(None, self._prepare_file, fpath)
+                    job_id = str(uuid4())
+                    job_ids.append(job_id)
+                    await result_queue.put(
+                        {
+                            "event": "job_started",
+                            "job_id": job_id,
+                            "filename": fpath.name,
+                            "total_pages": len(pages),
+                        }
+                    )
+                    for page_bytes, page_num, total in pages:
+                        await upload_queue.put((page_bytes, fpath.name, job_id, page_num, total))
+                await upload_queue.put(None)
+            finally:
+                splits_done.set()
+
+        pool_limits = httpx.Limits(max_connections=200, max_keepalive_connections=100)
+        timeout = httpx.Timeout(600.0, connect=30.0)
+
+        async with httpx.AsyncClient(timeout=timeout, limits=pool_limits, headers=self._auth_headers) as client:
+            uploads_done = asyncio.Event()
+            stream_done = asyncio.Event()
+
+            async def _upload_worker() -> None:
+                pending: set[asyncio.Task[Any]] = set()
+                while True:
+                    item = await upload_queue.get()
+                    if item is None:
+                        break
+                    page_bytes, filename, job_id, page_num, total = item
+                    task = asyncio.create_task(self._upload_page(client, page_bytes, filename, job_id, page_num, total))
+                    pending.add(task)
+                    task.add_done_callback(pending.discard)
+                    while len(pending) >= self._max_concurrency:
+                        _done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
+                uploads_done.set()
+
+            async def _stream_consumer() -> None:
+                """Open the SSE stream with include_content=True and route events.
+
+                Reconnects with ``Last-Event-ID`` on transient transport
+                failures so a single dropped TCP connection (common on
+                Kubernetes NodePort / kube-proxy paths under burst load)
+                does not silently truncate the result stream.
+                """
+                # Wait until every file has been split so the SSE subscription
+                # covers the full set of job_ids in one shot.  Subscribing
+                # earlier would miss events for jobs created after the SSE
+                # POST opened, since the server's subscribe_many takes an
+                # immutable key set.
+                await splits_done.wait()
+                if not job_ids:
+                    return
+
+                pending_jobs = set(job_ids)
+                url = f"{self._base_url}/v1/ingest/stream/jobs"
+                last_seq = 0
+                transport_attempts = 0
+                overflow_count = 0
+                terminal = False
+
+                try:
+                    while not terminal and (pending_jobs or not uploads_done.is_set()):
+                        headers = dict(self._auth_headers)
+                        if last_seq > 0:
+                            headers["Last-Event-ID"] = str(last_seq)
+                        try:
+                            async with client.stream(
+                                "POST",
+                                url,
+                                json={"job_ids": list(job_ids), "include_content": True},
+                                headers=headers,
+                            ) as resp:
+                                resp.raise_for_status()
+                                transport_attempts = 0
+                                buffer = ""
+                                stream_iter = resp.aiter_text().__aiter__()
+                                reconnect_requested = False
+                                while pending_jobs or not uploads_done.is_set():
+                                    try:
+                                        chunk = await asyncio.wait_for(stream_iter.__anext__(), timeout=5.0)
+                                    except asyncio.TimeoutError:
+                                        continue
+                                    except StopAsyncIteration:
+                                        break
+                                    buffer += chunk
+                                    while "\n\n" in buffer:
+                                        raw_event, buffer = buffer.split("\n\n", 1)
+                                        event = _parse_sse_event(raw_event)
+                                        if event is None:
+                                            continue
+                                        seq = event.get("seq")
+                                        if isinstance(seq, int) and seq > last_seq:
+                                            last_seq = seq
+                                        event_type = event.get("event", "message")
+
+                                        if event_type == "page_result":
+                                            await result_queue.put(event)
+                                        elif event_type == "metrics_update":
+                                            await result_queue.put(event)
+                                        elif event_type == "status_change" and event.get("status") == "failed":
+                                            await result_queue.put({**event, "event": "page_failed"})
+                                            pending_jobs.discard(event.get("job_id"))
+                                        elif event_type == "job_complete":
+                                            await result_queue.put(event)
+                                            pending_jobs.discard(event.get("job_id"))
+                                        elif event_type == "stream_overflow":
+                                            # Recoverable: server's subscriber
+                                            # queue saturated.  Reconnect with
+                                            # Last-Event-ID and resume from
+                                            # the replay buffer.  Only after
+                                            # repeated overflows do we give
+                                            # up — at that point the consumer
+                                            # genuinely cannot keep up and the
+                                            # caller needs to know.
+                                            overflow_count += 1
+                                            await result_queue.put(event)
+                                            logger.info(
+                                                "SSE stream_overflow #%d — reconnecting with " "Last-Event-ID=%d",
+                                                overflow_count,
+                                                last_seq,
+                                            )
+                                            if overflow_count > _SSE_MAX_OVERFLOWS:
+                                                await result_queue.put(
+                                                    {
+                                                        "event": "stream_error",
+                                                        "error": (
+                                                            f"server emitted stream_overflow "
+                                                            f"{overflow_count} times; consumer is "
+                                                            "persistently too slow"
+                                                        ),
+                                                    }
+                                                )
+                                                terminal = True
+                                            else:
+                                                reconnect_requested = True
+                                            break
+                                        elif event_type == "session_complete":
+                                            pending_jobs.clear()
+                                            terminal = True
+                                            break
+                                    if reconnect_requested or terminal:
+                                        break
+                            if reconnect_requested and not terminal:
+                                # brief backoff so the new subscription
+                                # doesn't race the worker pool drainage
+                                await asyncio.sleep(_RETRY_BASE_DELAY)
+                                continue
+                        except _TRANSIENT_HTTPX_ERRORS as exc:
+                            transport_attempts += 1
+                            if transport_attempts > _SSE_TRANSIENT_RETRIES:
+                                await result_queue.put(
+                                    {
+                                        "event": "stream_error",
+                                        "error": (
+                                            f"{type(exc).__name__}: gave up after "
+                                            f"{transport_attempts} reconnect attempts"
+                                        ),
+                                    }
+                                )
+                                break
+                            delay = min(_RETRY_BASE_DELAY * (2 ** (transport_attempts - 1)), _MAX_BACKOFF)
+                            logger.debug(
+                                "SSE %s — reconnecting (attempt %d/%d) after %.1fs (last_seq=%d)",
+                                exc.__class__.__name__,
+                                transport_attempts,
+                                _SSE_TRANSIENT_RETRIES,
+                                delay,
+                                last_seq,
+                            )
+                            await asyncio.sleep(delay)
+                            continue
+                except Exception as exc:
+                    await result_queue.put({"event": "stream_error", "error": f"{type(exc).__name__}: {exc}"})
+                finally:
+                    stream_done.set()
+                    await result_queue.put(None)
+
+            split_task = asyncio.create_task(_split_files())
+            upload_task = asyncio.create_task(_upload_worker())
+            stream_task = asyncio.create_task(_stream_consumer())
+
+            try:
+                while True:
+                    item = await result_queue.get()
+                    if item is None:
+                        break
+                    yield item
+            finally:
+                for t in (split_task, upload_task, stream_task):
+                    if not t.done():
+                        t.cancel()
+                await asyncio.gather(split_task, upload_task, stream_task, return_exceptions=True)
 
 
 # ------------------------------------------------------------------

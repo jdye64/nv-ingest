@@ -66,6 +66,11 @@ class IngestorCreateParams(_ParamsModel):
     debug: bool = False
     base_url: str = "http://localhost:7670"
     allow_no_gpu: bool = False
+    api_key: Optional[str] = None
+    # service run mode: maximum number of concurrent page uploads.  Lower
+    # values (e.g. 2-4) reduce burst pressure on Kubernetes NodePort /
+    # kube-proxy paths that otherwise reset connections under heavy load.
+    max_concurrency: Optional[int] = None
 
 
 class IngestExecuteParams(_ParamsModel):
