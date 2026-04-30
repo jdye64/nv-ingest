@@ -55,10 +55,16 @@ def create_ingestor(
         parsed = merged
     else:
         parsed = IngestorCreateParams(**merged)
-    if run_mode not in {"batch", "inprocess"}:
-        raise ValueError(
-            f"create_ingestor now supports only graph-backed run modes 'batch' and 'inprocess'; got {run_mode!r}."
+    if run_mode == "service":
+        from nemo_retriever.service_ingestor import ServiceIngestor
+
+        return ServiceIngestor(
+            base_url=parsed.base_url,
+            documents=parsed.documents,
         )
+
+    if run_mode not in {"batch", "inprocess"}:
+        raise ValueError(f"create_ingestor supports run modes 'batch', 'inprocess', and 'service'; got {run_mode!r}.")
 
     from nemo_retriever.graph_ingestor import GraphIngestor
 

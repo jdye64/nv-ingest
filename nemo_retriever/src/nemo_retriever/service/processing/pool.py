@@ -558,12 +558,12 @@ def _split_batch_results(
             ]
             repo.insert_metrics(metric_objs)
 
-        for page_num, (_, row) in enumerate(group_df.iterrows()):
+        for _, row in group_df.iterrows():
             row_dict = row.to_dict()
             content = _row_to_page_content(row_dict)
             page_result = PageResult(
                 document_id=doc_id,
-                page_number=page_num,
+                page_number=p.page_number,
                 content_json=json.dumps(content),
             )
             repo.insert_page_result(page_result)

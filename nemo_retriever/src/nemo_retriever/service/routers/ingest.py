@@ -325,3 +325,31 @@ async def get_job_status(
         created_at=job.created_at,
         updated_at=job.updated_at,
     )
+
+
+@router.get(
+    "/ingest/job/{job_id}/results",
+    summary="Get all page content for a completed job",
+)
+async def get_job_results(
+    request: Request,
+    job_id: str,
+) -> JSONResponse:
+    """Return a flat list of page-content dicts for every document in a job."""
+    repo: Repository = request.app.state.repository
+    job = repo.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    docs = repo.get_documents_for_job(job_id)
+    rows: list[dict] = []
+    for doc in docs:
+        pages = repo.get_page_results(doc.id)
+        for page in pages:
+            content: dict = json.loads(page.content_json)
+            content["_source_file"] = doc.filename or job.filename
+            content["_page_number"] = page.page_number
+            content["_document_id"] = doc.id
+            rows.append(content)
+
+    return JSONResponse(content=rows)
