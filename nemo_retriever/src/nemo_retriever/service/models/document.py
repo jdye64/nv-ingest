@@ -15,6 +15,8 @@ class ProcessingStatus(str, enum.Enum):
     PROCESSING = "processing"
     COMPLETE = "complete"
     FAILED = "failed"
+    CANCELLED = "cancelled"
+    DRAINING = "draining"
 
 
 class Document:

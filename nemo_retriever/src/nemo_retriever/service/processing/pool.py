@@ -46,6 +46,7 @@ from nemo_retriever.service.config import NimEndpointsConfig, ServiceConfig
 from nemo_retriever.service.db.engine import DatabaseEngine
 from nemo_retriever.service.db.repository import Repository
 from nemo_retriever.service.event_bus import EventBus
+from nemo_retriever.service.failure_types import FailureType, categorize_exception
 from nemo_retriever.service.models.document import ProcessingStatus
 from nemo_retriever.service.models.metrics import ProcessingMetric
 from nemo_retriever.service.models.page_processing_log import PageProcessingLog
@@ -322,6 +323,7 @@ class WorkerResult:
     page_number: int
     success: bool
     error_message: str | None = None
+    failure_type: str | None = None
     metrics: list[dict[str, Any]] = dataclasses.field(default_factory=list)
     detection_count: int = 0
     processing_duration_ms: float = 0.0
@@ -416,17 +418,19 @@ def _run_pipeline_batch(
     except BaseException as exc:
         elapsed_ms = (time.monotonic() - t0) * 1000.0
         error_msg = f"{type(exc).__name__}: {exc}"
+        failure_type = categorize_exception(exc).value
         logger.error(
-            "[worker %d] BATCH FAILED (%d pages): %s",
+            "[worker %d] BATCH FAILED (%d pages, failure_type=%s): %s",
             pid,
             n_pages,
+            failure_type,
             error_msg,
             exc_info=True,
         )
         completed_at = datetime.now(timezone.utc).isoformat()
         fail_results: list[WorkerResult] = []
         for p in pages:
-            _mark_page_failed(repo, p, error_msg, started_at, completed_at)
+            _mark_page_failed(repo, p, error_msg, started_at, completed_at, failure_type)
             fail_results.append(
                 WorkerResult(
                     document_id=p.document_id,
@@ -435,6 +439,7 @@ def _run_pipeline_batch(
                     page_number=p.page_number,
                     success=False,
                     error_message=error_msg,
+                    failure_type=failure_type,
                 )
             )
         return BatchWorkerResult(results=fail_results)
@@ -466,6 +471,7 @@ def _mark_page_failed(
     error_msg: str,
     started_at: str,
     completed_at: str,
+    failure_type: str | None = None,
 ) -> None:
     """Mark a single page as failed in the DB."""
     try:
@@ -479,6 +485,7 @@ def _mark_page_failed(
             page_number=p.page_number,
             status="failed",
             error_message=error_msg,
+            failure_type=failure_type,
             detection_count=0,
             processing_duration_ms=0.0,
             started_at=started_at,
@@ -530,6 +537,7 @@ def _split_batch_results(
                     page_number=p.page_number,
                     success=False,
                     error_message="Provenance column lost during pipeline execution",
+                    failure_type=FailureType.INTERNAL.value,
                 )
             )
         return BatchWorkerResult(results=results)
@@ -618,6 +626,7 @@ def _split_batch_results(
                 "Page produced no output rows after pipeline execution",
                 started_at,
                 completed_at,
+                FailureType.INTERNAL.value,
             )
             results.append(
                 WorkerResult(
@@ -627,6 +636,7 @@ def _split_batch_results(
                     page_number=p.page_number,
                     success=False,
                     error_message="Page produced no output rows after pipeline execution",
+                    failure_type=FailureType.INTERNAL.value,
                 )
             )
 
@@ -775,6 +785,10 @@ class ProcessingPool:
         self._buffer: _BatchBuffer | None = None
         self._in_flight = 0
         self._in_flight_lock = threading.Lock()
+        # Cancellation + drain state
+        self._cancelled_jobs: set[str] = set()
+        self._cancel_lock = threading.Lock()
+        self._draining = threading.Event()
 
     def start(self) -> None:
         nim = self._config.nim_endpoints
@@ -845,8 +859,14 @@ class ProcessingPool:
             self._executor = None
 
     @property
+    def pool_size(self) -> int:
+        """Number of worker processes configured for this pool."""
+        return self._num_workers
+
+    # Backwards-compatible alias kept for callers that already use the
+    # private name; new code should prefer ``pool_size``.
+    @property
     def _pool_size(self) -> int:
-        """Backwards-compatible accessor used by the ingest router."""
         return self._num_workers
 
     @property
@@ -857,6 +877,67 @@ class ProcessingPool:
 
     def has_capacity(self) -> bool:
         return self.capacity > 0
+
+    # ------------------------------------------------------------------
+    # Cancellation + drain (main-process state only)
+    # ------------------------------------------------------------------
+
+    def cancel_job(self, job_id: str) -> None:
+        """Mark *job_id* as cancelled.
+
+        Pages already in flight will run to completion (worker subprocesses
+        cannot be safely interrupted mid-pipeline), but any pages still
+        sitting in the batch buffer or still being uploaded will be dropped
+        before they reach an executor.
+        """
+        with self._cancel_lock:
+            self._cancelled_jobs.add(job_id)
+
+    def is_job_cancelled(self, job_id: str | None) -> bool:
+        if not job_id:
+            return False
+        with self._cancel_lock:
+            return job_id in self._cancelled_jobs
+
+    @property
+    def is_draining(self) -> bool:
+        return self._draining.is_set()
+
+    def begin_drain(self) -> None:
+        """Stop accepting new pages.  Existing batches still drain through."""
+        self._draining.set()
+        if self._buffer is not None:
+            # Force-flush any partial batch so it isn't held by the timer.
+            self._buffer.flush()
+
+    def in_flight_batches(self) -> int:
+        with self._in_flight_lock:
+            return self._in_flight
+
+    async def drain(self, timeout_s: float) -> bool:
+        """Mark the pool draining and wait for in-flight batches to finish.
+
+        Returns ``True`` if drain completed within ``timeout_s``, ``False``
+        if the timeout fired with batches still running.  Callers (the
+        lifespan hook, primarily) should still call :meth:`shutdown` after
+        :meth:`drain` returns to release the executor.
+        """
+        self.begin_drain()
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(0.0, timeout_s)
+        while True:
+            in_flight = self.in_flight_batches()
+            if in_flight == 0:
+                return True
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                logger.warning(
+                    "Drain timed out with %d batch(es) still in flight after %.1fs",
+                    in_flight,
+                    timeout_s,
+                )
+                return False
+            await asyncio.sleep(min(0.5, remaining))
 
     # ------------------------------------------------------------------
     # SSE event publishing (main process only)
@@ -879,20 +960,71 @@ class ProcessingPool:
     # ------------------------------------------------------------------
 
     def _dispatch_batch(self, batch: list[dict[str, Any]]) -> None:
-        """Submit a batch of pages to the executor as a single task."""
+        """Submit a batch of pages to the executor as a single task.
+
+        Pages whose job has been cancelled since enqueue are filtered out
+        and a synthetic cancelled ``WorkerResult`` is published so SSE
+        subscribers see the terminal event.
+        """
         if self._executor is None:
             raise RuntimeError("ProcessingPool has not been started")
+
+        runnable: list[dict[str, Any]] = []
+        cancelled: list[dict[str, Any]] = []
+        for page in batch:
+            if self.is_job_cancelled(page.get("job_id")):
+                cancelled.append(page)
+            else:
+                runnable.append(page)
+
+        for page in cancelled:
+            self._publish_cancelled(page)
+
+        if not runnable:
+            return
 
         with self._in_flight_lock:
             self._in_flight += 1
 
-        logger.debug("Dispatching batch of %d pages to executor", len(batch))
+        logger.debug(
+            "Dispatching batch of %d pages to executor (skipped %d cancelled)",
+            len(runnable),
+            len(cancelled),
+        )
         fut: Future[BatchWorkerResult] = self._executor.submit(
             _run_pipeline_batch,
-            batch,
+            runnable,
             db_path=str(self._db_engine._db_path),
         )
         fut.add_done_callback(self._on_batch_result)
+
+    def _publish_cancelled(self, page: dict[str, Any]) -> None:
+        """Mark a buffered page as cancelled in the DB and emit SSE event."""
+        repo = Repository(self._db_engine)
+        doc_id = page.get("document_id", "")
+        job_id = page.get("job_id")
+        try:
+            repo.update_document_status(doc_id, ProcessingStatus.CANCELLED)
+        except Exception:  # noqa: BLE001 — best effort
+            pass
+
+        self._publish_event(
+            doc_id,
+            {
+                "event": "status_change",
+                "document_id": doc_id,
+                "job_id": job_id,
+                "status": "cancelled",
+                "source_file": page.get("filename", ""),
+                "page_number": page.get("page_number", 0),
+                "reason": "job_cancelled",
+            },
+        )
+
+        if job_id:
+            # Count cancelled pages toward job completion so a fully-cancelled
+            # job transitions to its terminal state without dangling counters.
+            self._handle_job_completion(job_id)
 
     # ------------------------------------------------------------------
     # Result callback (runs in main process on a callback thread)
@@ -972,6 +1104,7 @@ class ProcessingPool:
                     "source_file": result.source_file,
                     "page_number": result.page_number,
                     "error": result.error_message or "unknown error",
+                    "failure_type": result.failure_type or FailureType.UNKNOWN.value,
                 },
             )
 
@@ -1018,13 +1151,19 @@ class ProcessingPool:
     ) -> bool:
         """Enqueue a page for batched processing.
 
-        Returns ``True`` if the page was accepted, ``False`` if the
-        buffer is full (caller should 503).
+        Returns ``True`` if the page was accepted, ``False`` if the buffer
+        is full or the pool is draining / job is cancelled (caller should
+        translate to a 503 with the appropriate detail).
         """
         if self._executor is None:
             raise RuntimeError("ProcessingPool has not been started")
         if self._buffer is None:
             raise RuntimeError("Batch buffer has not been initialised")
+
+        if self._draining.is_set():
+            return False
+        if self.is_job_cancelled(job_id):
+            return False
 
         page_dict = dataclasses.asdict(
             PageDescriptor(

@@ -136,6 +136,7 @@ CREATE TABLE IF NOT EXISTS page_processing_log (
     page_number            INTEGER NOT NULL,
     status                 TEXT NOT NULL DEFAULT 'complete',
     error_message          TEXT,
+    failure_type           TEXT,
     detection_count        INTEGER NOT NULL DEFAULT 0,
     processing_duration_ms REAL NOT NULL DEFAULT 0.0,
     started_at             TEXT NOT NULL,
@@ -146,6 +147,20 @@ CREATE TABLE IF NOT EXISTS page_processing_log (
 CREATE INDEX IF NOT EXISTS idx_ppl_source ON page_processing_log(source_file);
 CREATE INDEX IF NOT EXISTS idx_ppl_job ON page_processing_log(job_id);
 """
+
+
+def _safe_add_column(conn, table: str, column: str, decl: str) -> None:
+    """``ALTER TABLE ... ADD COLUMN`` if the column doesn't already exist.
+
+    SQLite has no ``ADD COLUMN IF NOT EXISTS``, so we introspect first.
+    Used to add columns to existing databases without dropping data.
+    """
+    cur = conn.execute(f"PRAGMA table_info({table})")
+    existing = {row["name"] for row in cur.fetchall()}
+    if column in existing:
+        return
+    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+    conn.commit()
 
 
 class DatabaseEngine:
@@ -178,10 +193,19 @@ class DatabaseEngine:
         return conn
 
     def initialize(self) -> None:
-        """Create tables and indexes if they do not exist."""
+        """Create tables and indexes if they do not exist.
+
+        Also runs additive schema migrations for columns added in newer
+        service versions so an upgrade does not require dropping the DB.
+        """
         conn = self.connection
         conn.executescript(_DDL)
         conn.commit()
+
+        # Additive migrations (safe to run on every startup; no-op when
+        # the column already exists).
+        _safe_add_column(conn, "page_processing_log", "failure_type", "TEXT")
+
         logger.info("SQLite database initialized at %s", self._db_path)
 
     def close(self) -> None:

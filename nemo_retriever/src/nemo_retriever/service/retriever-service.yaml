@@ -60,3 +60,22 @@ resources:
   max_cpu_cores: null
   # GPU device IDs (e.g. ["0", "1"]).  Empty list = all visible GPUs.
   gpu_devices: []
+
+# Optional bearer-token authentication.  When api_token is set, every
+# request must carry "Authorization: Bearer <token>" (or whatever
+# header_name is configured).  Paths in bypass_paths are exempt — useful
+# for Kubernetes liveness probes hitting /v1/health.
+auth:
+  api_token: null
+  header_name: "Authorization"
+  bypass_paths:
+    - "/v1/health"
+    - "/docs"
+    - "/openapi.json"
+    - "/redoc"
+
+# Graceful-shutdown tunables.  On SIGTERM the service stops accepting new
+# uploads, then waits up to drain.timeout_s for in-flight batches to
+# finish before tearing down the worker pool.
+drain:
+  timeout_s: 60.0

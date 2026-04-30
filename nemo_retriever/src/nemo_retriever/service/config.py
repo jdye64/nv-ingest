@@ -64,6 +64,30 @@ class ResourceLimitsConfig(BaseModel):
     gpu_devices: list[str] = Field(default_factory=list)
 
 
+class AuthConfig(BaseModel):
+    """Optional bearer-token authentication.
+
+    When ``api_token`` is set, every request must carry a matching
+    ``Authorization: Bearer <token>`` header (or whatever ``header_name``
+    is configured to).  Paths in ``bypass_paths`` are exempt — useful for
+    Kubernetes liveness probes hitting ``/v1/health``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    api_token: str | None = None
+    header_name: str = "Authorization"
+    bypass_paths: list[str] = Field(default_factory=lambda: ["/v1/health", "/docs", "/openapi.json", "/redoc"])
+
+
+class DrainConfig(BaseModel):
+    """Graceful-shutdown tunables."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    timeout_s: float = 60.0
+
+
 class ServiceConfig(BaseModel):
     """Top-level configuration for the retriever service mode.
 
@@ -79,6 +103,8 @@ class ServiceConfig(BaseModel):
     processing: ProcessingConfig = Field(default_factory=ProcessingConfig)
     nim_endpoints: NimEndpointsConfig = Field(default_factory=NimEndpointsConfig)
     resources: ResourceLimitsConfig = Field(default_factory=ResourceLimitsConfig)
+    auth: AuthConfig = Field(default_factory=AuthConfig)
+    drain: DrainConfig = Field(default_factory=DrainConfig)
 
 
 def _bundled_yaml_path() -> Path:

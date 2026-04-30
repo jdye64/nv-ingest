@@ -21,6 +21,7 @@ class PageProcessingLog:
         page_number: int = 0,
         status: str = "complete",
         error_message: str | None = None,
+        failure_type: str | None = None,
         detection_count: int = 0,
         processing_duration_ms: float = 0.0,
         started_at: str = "",
@@ -34,6 +35,7 @@ class PageProcessingLog:
         self.page_number = page_number
         self.status = status
         self.error_message = error_message
+        self.failure_type = failure_type
         self.detection_count = detection_count
         self.processing_duration_ms = processing_duration_ms
         self.started_at = started_at
@@ -53,6 +55,7 @@ class PageProcessingLog:
             "page_number": self.page_number,
             "status": self.status,
             "error_message": self.error_message,
+            "failure_type": self.failure_type,
             "detection_count": self.detection_count,
             "processing_duration_ms": self.processing_duration_ms,
             "started_at": self.started_at,

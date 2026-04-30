@@ -232,14 +232,20 @@ class ServiceIngestor(ingestor):
         max_concurrency: int = 8,
         request_timeout_s: float = 600.0,
         poll_interval_s: float = 2.0,
+        api_token: str | None = None,
     ) -> None:
         super().__init__(documents=documents)
         self._base_url = base_url.rstrip("/")
         self._max_concurrency = max_concurrency
         self._request_timeout_s = request_timeout_s
         self._poll_interval_s = poll_interval_s
+        self._api_token = (api_token or "").strip() or None
         self._job_ids: list[str] = []
         self._last_run_elapsed_s: float = 0.0
+
+    @property
+    def _auth_headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self._api_token}"} if self._api_token else {}
 
     # ------------------------------------------------------------------
     # Input configuration (these ARE meaningful client-side)
@@ -498,6 +504,7 @@ class ServiceIngestor(ingestor):
         client = RetrieverServiceClient(
             base_url=self._base_url,
             max_concurrency=self._max_concurrency,
+            api_token=self._api_token,
         )
         async for evt in client.aingest_documents_stream(files=files):
             yield evt
@@ -543,7 +550,7 @@ class ServiceIngestor(ingestor):
         if not self._job_ids:
             return {}
         statuses: dict[str, str] = {}
-        with httpx.Client(base_url=self._base_url, timeout=30.0) as client:
+        with httpx.Client(base_url=self._base_url, timeout=30.0, headers=self._auth_headers) as client:
             for jid in self._job_ids:
                 try:
                     resp = client.get(f"/v1/ingest/job/{jid}")
@@ -561,11 +568,38 @@ class ServiceIngestor(ingestor):
         return sum(1 for s in self.get_status().values() if s == "failed")
 
     def cancelled_jobs(self) -> int:
-        # Server has no cancel verb today (queued for tier 2); always 0.
-        return 0
+        return sum(1 for s in self.get_status().values() if s == "cancelled")
 
     def remaining_jobs(self) -> int:
         return sum(1 for s in self.get_status().values() if s in ("queued", "processing", "unknown"))
+
+    # ------------------------------------------------------------------
+    # Cancel — supported via POST /v1/ingest/job/{id}/cancel
+    # ------------------------------------------------------------------
+
+    def cancel(self, job_id: str | None = None) -> dict[str, Any]:
+        """Cancel one job (by id) or every job submitted by this ingestor.
+
+        Returns a dict ``{job_id: <server response>}``.  Pages already in
+        flight on the server cannot be interrupted; any pages still queued
+        or buffered are dropped before they reach a worker.
+        """
+        targets = [job_id] if job_id is not None else list(self._job_ids)
+        if not targets:
+            return {}
+
+        results: dict[str, Any] = {}
+        with httpx.Client(base_url=self._base_url, timeout=30.0, headers=self._auth_headers) as client:
+            for jid in targets:
+                try:
+                    resp = client.post(f"/v1/ingest/job/{jid}/cancel")
+                    resp.raise_for_status()
+                    results[jid] = resp.json()
+                except httpx.HTTPStatusError as exc:
+                    results[jid] = {"error": str(exc), "status_code": exc.response.status_code}
+                except Exception as exc:  # noqa: BLE001 — surfaces network errors
+                    results[jid] = {"error": str(exc)}
+        return results
 
     # ------------------------------------------------------------------
     # Internals
@@ -599,7 +633,11 @@ class ServiceIngestor(ingestor):
             (p["document_id"], p["content"].get("_output_index", 0)) for p in result if p.get("document_id")
         }
 
-        with httpx.Client(base_url=self._base_url, timeout=self._request_timeout_s) as client:
+        with httpx.Client(
+            base_url=self._base_url,
+            timeout=self._request_timeout_s,
+            headers=self._auth_headers,
+        ) as client:
             for jid in self._job_ids:
                 try:
                     resp = client.get(f"/v1/ingest/job/{jid}/results")

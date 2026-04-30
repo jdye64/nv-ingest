@@ -5,8 +5,10 @@
 """Lightweight in-memory pub/sub for SSE streaming.
 
 Each document (or job) can have zero or more subscriber queues.  When an
-event is published it is fanned out to all connected queues.  If no
-subscribers exist the event is silently discarded.
+event is published it is fanned out to all connected queues and stored in
+a per-key ring buffer so reconnecting clients can replay missed events.
+If no subscribers exist when the event is published the event is still
+buffered (so a late subscriber gets it) but not delivered to anyone.
 
 Backpressure model
 ------------------
@@ -16,24 +18,46 @@ block worker processes from completing batches.  When a queue overflows
 the subscription is marked overflowed, the queue is drained, and a single
 sentinel event ``{"event": "stream_overflow"}`` is injected so the SSE
 generator can emit it to the client and close the stream cleanly.  The
-client is expected to reconnect or fall back to polling the REST status
-endpoints.
+client is expected to reconnect (with ``Last-Event-ID``) or fall back to
+polling the REST status endpoints.
 
-Supports both per-document and multi-document (session) subscriptions so a
-single SSE connection can receive events for many documents at once.
+Resumable streams
+-----------------
+Every published event is annotated with a monotonic ``seq`` integer
+(unique within this process) and stored in a fixed-size per-key ring
+buffer (default 256 events).  When a client reconnects with the
+``Last-Event-ID`` header the SSE generator drains the buffer and replays
+all events with ``seq > last_event_id`` before pulling new ones from the
+queue.
+
+Supports both per-document and multi-document (session) subscriptions so
+a single SSE connection can receive events for many documents at once.
 """
 
 from __future__ import annotations
 
 import asyncio
+import collections
+import itertools
 import logging
+import threading
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
 _DEFAULT_MAXSIZE = 1024
+_DEFAULT_BUFFER_SIZE = 256
 _OVERFLOW_EVENT = {"event": "stream_overflow", "reason": "subscriber_too_slow"}
+
+
+# Process-wide monotonic event sequence number.  ``itertools.count`` is
+# thread-safe in CPython for ``next()`` calls (single bytecode op).
+_seq_counter = itertools.count(1)
+
+
+def _next_seq() -> int:
+    return next(_seq_counter)
 
 
 class _Subscription:
@@ -69,11 +93,7 @@ class _Subscription:
             return False
 
     def _drain_and_signal(self) -> None:
-        """Empty the queue and inject the overflow sentinel.
-
-        After this runs the consumer will pull the sentinel as the next
-        event and is expected to terminate the SSE stream.
-        """
+        """Empty the queue and inject the overflow sentinel."""
         try:
             while True:
                 self.queue.get_nowait()
@@ -82,8 +102,6 @@ class _Subscription:
         try:
             self.queue.put_nowait(dict(_OVERFLOW_EVENT))
         except asyncio.QueueFull:
-            # Re-raising would mask the original overflow; the subscriber is
-            # already going to be dropped so this is a noop in practice.
             pass
 
 
@@ -95,9 +113,17 @@ class EventBus:
     that key.
     """
 
-    def __init__(self, *, default_maxsize: int = _DEFAULT_MAXSIZE) -> None:
+    def __init__(
+        self,
+        *,
+        default_maxsize: int = _DEFAULT_MAXSIZE,
+        buffer_size: int = _DEFAULT_BUFFER_SIZE,
+    ) -> None:
         self._subscribers: dict[str, list[_Subscription]] = {}
+        self._buffers: dict[str, collections.deque[dict[str, Any]]] = {}
+        self._buffers_lock = threading.Lock()
         self._default_maxsize = default_maxsize
+        self._buffer_size = buffer_size
 
     # ------------------------------------------------------------------
     # Subscription
@@ -109,11 +135,7 @@ class EventBus:
         *,
         maxsize: int | None = None,
     ) -> asyncio.Queue[dict[str, Any]]:
-        """Subscribe to events for a single document/job.
-
-        Returns the underlying ``asyncio.Queue`` so existing SSE generators
-        keep working unchanged.
-        """
+        """Subscribe to events for a single document/job."""
         sub = _Subscription(maxsize=maxsize or self._default_maxsize)
         self._subscribers.setdefault(document_id, []).append(sub)
         return sub.queue
@@ -124,11 +146,7 @@ class EventBus:
         *,
         maxsize: int | None = None,
     ) -> asyncio.Queue[dict[str, Any]]:
-        """Subscribe to events for multiple documents on a single queue.
-
-        Every event for any of the listed documents is delivered to the same
-        queue, tagged with its ``document_id`` (or ``job_id``) in the payload.
-        """
+        """Subscribe to events for multiple documents on a single queue."""
         sub = _Subscription(maxsize=maxsize or self._default_maxsize)
         for doc_id in document_ids:
             self._subscribers.setdefault(doc_id, []).append(sub)
@@ -151,15 +169,50 @@ class EventBus:
             self.unsubscribe(doc_id, queue)
 
     # ------------------------------------------------------------------
+    # Replay buffer
+    # ------------------------------------------------------------------
+
+    def replay(self, document_ids: list[str], *, after_seq: int) -> list[dict[str, Any]]:
+        """Return buffered events for *document_ids* whose ``seq > after_seq``.
+
+        Returned events are sorted by ``seq`` so a multi-key replay still
+        produces a coherent stream.  Events too old to be in the buffer are
+        silently lost; the client should fall back to polling the REST
+        endpoints in that case.
+        """
+        out: list[dict[str, Any]] = []
+        with self._buffers_lock:
+            for key in document_ids:
+                buf = self._buffers.get(key)
+                if not buf:
+                    continue
+                for evt in buf:
+                    seq = evt.get("seq")
+                    if isinstance(seq, int) and seq > after_seq:
+                        out.append(evt)
+        out.sort(key=lambda e: e.get("seq", 0))
+        return out
+
+    # ------------------------------------------------------------------
     # Publishing
     # ------------------------------------------------------------------
 
     async def publish(self, document_id: str, event: dict[str, Any]) -> None:
-        """Fan ``event`` out to every subscriber of ``document_id``.
+        """Fan ``event`` out to every subscriber and store it for replay.
 
-        Never blocks the publisher — a saturated subscriber is dropped via
-        the overflow path described in the module docstring.
+        Mutates ``event`` to add a ``seq`` field if not already present.
         """
+        if "seq" not in event:
+            event["seq"] = _next_seq()
+
+        # Buffer first so even an event with no subscribers is replayable.
+        with self._buffers_lock:
+            buf = self._buffers.get(document_id)
+            if buf is None:
+                buf = collections.deque(maxlen=self._buffer_size)
+                self._buffers[document_id] = buf
+            buf.append(event)
+
         subs = self._subscribers.get(document_id, [])
         if not subs:
             return

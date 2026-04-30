@@ -101,6 +101,18 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     yield
 
+    drain_timeout_s = float(getattr(getattr(config, "drain", None), "timeout_s", 60.0))
+    logger.info(
+        "Shutting down: draining pool (timeout=%.1fs, in_flight=%d)",
+        drain_timeout_s,
+        pool.in_flight_batches() if hasattr(pool, "in_flight_batches") else 0,
+    )
+    drained = await pool.drain(drain_timeout_s) if hasattr(pool, "drain") else True
+    if not drained:
+        logger.warning(
+            "Drain incomplete after %.1fs; forcing executor shutdown — " "in-flight pages may have their results lost.",
+            drain_timeout_s,
+        )
     pool.shutdown()
     db_engine.close()
     logger.info("Retriever service stopped")
@@ -120,11 +132,24 @@ def create_app(config: ServiceConfig) -> FastAPI:
     )
     app.state.config = config
 
-    from nemo_retriever.service.routers import ingest, internal, metrics, stream
+    if config.auth.api_token:
+        from nemo_retriever.service.auth import BearerAuthMiddleware
+
+        app.add_middleware(BearerAuthMiddleware, config=config.auth)
+        logger.info(
+            "Bearer-token authentication ENABLED (header=%s, bypass=%s)",
+            config.auth.header_name,
+            config.auth.bypass_paths,
+        )
+    else:
+        logger.info("Bearer-token authentication DISABLED (no api_token configured)")
+
+    from nemo_retriever.service.routers import ingest, internal, metrics, stream, system
 
     app.include_router(ingest.router, prefix="/v1")
     app.include_router(internal.router, prefix="/v1")
     app.include_router(metrics.router, prefix="/v1")
     app.include_router(stream.router, prefix="/v1")
+    app.include_router(system.router, prefix="/v1")
 
     return app

@@ -62,6 +62,7 @@ def create_ingestor(
         return ServiceIngestor(
             base_url=parsed.base_url,
             documents=parsed.documents,
+            api_token=parsed.api_key,
         )
 
     if run_mode not in {"batch", "inprocess"}:

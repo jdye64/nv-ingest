@@ -61,6 +61,20 @@ def start(
         None, "--gpu-devices", help="Comma-separated GPU device IDs (overrides YAML)."
     ),
     db_path: Optional[str] = typer.Option(None, "--db-path", help="SQLite database path (overrides YAML)."),
+    api_token: Optional[str] = typer.Option(
+        None,
+        "--api-token",
+        help=(
+            "Bearer-token required on every request when set (overrides YAML / $NEMO_RETRIEVER_API_TOKEN). "
+            "Leave unset to disable authentication."
+        ),
+        envvar="NEMO_RETRIEVER_API_TOKEN",
+    ),
+    drain_timeout_s: Optional[float] = typer.Option(
+        None,
+        "--drain-timeout-s",
+        help="Seconds to wait for in-flight batches to finish on shutdown (overrides YAML).",
+    ),
 ) -> None:
     """Start the retriever ingest web server."""
     import uvicorn
@@ -94,6 +108,10 @@ def start(
         overrides["resources.gpu_devices"] = [d.strip() for d in gpu_devices.split(",") if d.strip()]
     if db_path is not None:
         overrides["database.path"] = db_path
+    if api_token is not None:
+        overrides["auth.api_token"] = api_token
+    if drain_timeout_s is not None:
+        overrides["drain.timeout_s"] = drain_timeout_s
 
     cfg = load_config(config_path=str(config) if config else None, overrides=overrides or None)
 
@@ -123,12 +141,22 @@ def ingest(
     use_sse: bool = typer.Option(True, "--sse/--no-sse", help="Use SSE streaming (default) or poll."),
     poll_interval: float = typer.Option(2.0, "--poll-interval", help="Seconds between status polls (no-SSE mode)."),
     concurrency: int = typer.Option(8, "--concurrency", help="Max concurrent uploads."),
+    api_token: Optional[str] = typer.Option(
+        None,
+        "--api-token",
+        help="Bearer-token to send with every request ($NEMO_RETRIEVER_API_TOKEN env var also accepted).",
+        envvar="NEMO_RETRIEVER_API_TOKEN",
+    ),
 ) -> None:
     """Submit documents to a running retriever service for ingestion."""
     from nemo_retriever.service.client import RetrieverServiceClient
 
     async def _run() -> None:
-        client = RetrieverServiceClient(base_url=server_url, max_concurrency=concurrency)
+        client = RetrieverServiceClient(
+            base_url=server_url,
+            max_concurrency=concurrency,
+            api_token=api_token,
+        )
         await client.ingest_documents(
             files=files,
             use_sse=use_sse,

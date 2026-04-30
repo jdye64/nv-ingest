@@ -304,12 +304,24 @@ class RetrieverServiceClient:
     events emitted by the server during uploading are never missed.
     """
 
-    def __init__(self, base_url: str = "http://localhost:7670", max_concurrency: int = 8) -> None:
+    def __init__(
+        self,
+        base_url: str = "http://localhost:7670",
+        max_concurrency: int = 8,
+        *,
+        api_token: str | None = None,
+    ) -> None:
         self._base_url = base_url.rstrip("/")
         self._semaphore = asyncio.Semaphore(max_concurrency)
         self._capacity_event = asyncio.Event()
         self._capacity_event.set()
         self._max_concurrency = max_concurrency
+        self._api_token = (api_token or "").strip() or None
+
+    @property
+    def _auth_headers(self) -> dict[str, str]:
+        """Return the Authorization header dict (empty if no token configured)."""
+        return {"Authorization": f"Bearer {self._api_token}"} if self._api_token else {}
 
     def notify_capacity_available(self) -> None:
         self._capacity_event.set()
@@ -730,7 +742,7 @@ class RetrieverServiceClient:
 
         processing_t0 = time.monotonic()
 
-        async with httpx.AsyncClient(timeout=timeout, limits=pool_limits) as client:
+        async with httpx.AsyncClient(timeout=timeout, limits=pool_limits, headers=self._auth_headers) as client:
             with Live(display.build_renderable(), refresh_per_second=4) as live:
 
                 async def _refresh_loop() -> None:
@@ -799,7 +811,7 @@ class RetrieverServiceClient:
         processing_elapsed = time.monotonic() - processing_t0
 
         final_results: list[dict[str, Any]] = []
-        async with httpx.AsyncClient(timeout=timeout, limits=pool_limits) as client:
+        async with httpx.AsyncClient(timeout=timeout, limits=pool_limits, headers=self._auth_headers) as client:
             for plan in job_plans:
                 try:
                     resp = await client.get(f"{self._base_url}/v1/ingest/job/{plan['job_id']}")
@@ -870,7 +882,7 @@ class RetrieverServiceClient:
         pool_limits = httpx.Limits(max_connections=200, max_keepalive_connections=100)
         timeout = httpx.Timeout(600.0, connect=30.0)
 
-        async with httpx.AsyncClient(timeout=timeout, limits=pool_limits) as client:
+        async with httpx.AsyncClient(timeout=timeout, limits=pool_limits, headers=self._auth_headers) as client:
             uploads_done = asyncio.Event()
             stream_done = asyncio.Event()
 

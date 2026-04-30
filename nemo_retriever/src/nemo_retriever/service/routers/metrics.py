@@ -9,6 +9,7 @@ existing ``document_id`` foreign key.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -162,72 +163,75 @@ def _merge_detections(summaries: list[DetectionsSummary]) -> DetectionsSummary:
 )
 async def get_ingest_metrics(request: Request) -> JSONResponse:
     repo: Repository = request.app.state.repository
-    logs = repo.get_all_page_processing_logs()
 
-    by_file: dict[str, list[Any]] = {}
-    for entry in logs:
-        by_file.setdefault(entry.source_file, []).append(entry)
+    def _build() -> IngestMetricsResponse:
+        logs = repo.get_all_page_processing_logs()
 
-    file_summaries: list[FileMetricsSummary] = []
-    grand_pages = 0
-    grand_detections = 0
-    grand_duration = 0.0
-    all_page_detections: list[DetectionsSummary] = []
+        by_file: dict[str, list[Any]] = {}
+        for entry in logs:
+            by_file.setdefault(entry.source_file, []).append(entry)
 
-    for source_file in sorted(by_file):
-        entries = sorted(by_file[source_file], key=lambda e: e.page_number)
-        file_page_detections: list[DetectionsSummary] = []
-        pages: list[PageMetricEntry] = []
+        file_summaries: list[FileMetricsSummary] = []
+        grand_pages = 0
+        grand_detections = 0
+        grand_duration = 0.0
+        all_page_detections: list[DetectionsSummary] = []
 
-        for e in entries:
-            page_det = _build_detections_for_document(repo, e.document_id)
-            file_page_detections.append(page_det)
+        for source_file in sorted(by_file):
+            entries = sorted(by_file[source_file], key=lambda e: e.page_number)
+            file_page_detections: list[DetectionsSummary] = []
+            pages: list[PageMetricEntry] = []
 
-            pages.append(
-                PageMetricEntry(
-                    id=e.id,
-                    source_file=e.source_file,
-                    page_number=e.page_number,
-                    processing_duration_ms=round(e.processing_duration_ms, 2),
-                    started_at=e.started_at,
-                    completed_at=e.completed_at,
-                    detections=page_det,
-                    job_id=e.job_id,
-                    document_id=e.document_id,
+            for e in entries:
+                page_det = _build_detections_for_document(repo, e.document_id)
+                file_page_detections.append(page_det)
+
+                pages.append(
+                    PageMetricEntry(
+                        id=e.id,
+                        source_file=e.source_file,
+                        page_number=e.page_number,
+                        processing_duration_ms=round(e.processing_duration_ms, 2),
+                        started_at=e.started_at,
+                        completed_at=e.completed_at,
+                        detections=page_det,
+                        job_id=e.job_id,
+                        document_id=e.document_id,
+                    )
+                )
+
+            file_det = _merge_detections(file_page_detections)
+            all_page_detections.extend(file_page_detections)
+
+            total_dur = sum(p.processing_duration_ms for p in pages)
+            n = len(pages)
+            file_summaries.append(
+                FileMetricsSummary(
+                    source_file=source_file,
+                    total_pages=n,
+                    total_detections=file_det.total_detections,
+                    total_duration_ms=round(total_dur, 2),
+                    avg_duration_ms=round(total_dur / n, 2) if n else 0.0,
+                    detections=file_det,
+                    pages=pages,
                 )
             )
+            grand_pages += n
+            grand_detections += file_det.total_detections
+            grand_duration += total_dur
 
-        file_det = _merge_detections(file_page_detections)
-        all_page_detections.extend(file_page_detections)
+        grand_det = _merge_detections(all_page_detections)
 
-        total_dur = sum(p.processing_duration_ms for p in pages)
-        n = len(pages)
-        file_summaries.append(
-            FileMetricsSummary(
-                source_file=source_file,
-                total_pages=n,
-                total_detections=file_det.total_detections,
-                total_duration_ms=round(total_dur, 2),
-                avg_duration_ms=round(total_dur / n, 2) if n else 0.0,
-                detections=file_det,
-                pages=pages,
-            )
+        return IngestMetricsResponse(
+            total_pages_processed=grand_pages,
+            total_detections=grand_detections,
+            total_duration_ms=round(grand_duration, 2),
+            avg_duration_per_page_ms=round(grand_duration / grand_pages, 2) if grand_pages else 0.0,
+            detections=grand_det,
+            files=file_summaries,
         )
-        grand_pages += n
-        grand_detections += file_det.total_detections
-        grand_duration += total_dur
 
-    grand_det = _merge_detections(all_page_detections)
-
-    payload = IngestMetricsResponse(
-        total_pages_processed=grand_pages,
-        total_detections=grand_detections,
-        total_duration_ms=round(grand_duration, 2),
-        avg_duration_per_page_ms=round(grand_duration / grand_pages, 2) if grand_pages else 0.0,
-        detections=grand_det,
-        files=file_summaries,
-    )
-
+    payload = await asyncio.to_thread(_build)
     return JSONResponse(
         content=payload.model_dump(),
         media_type="application/json",
