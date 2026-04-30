@@ -109,6 +109,17 @@ class Repository:
         )
         return [Document(**dict(r)) for r in cur.fetchall()]
 
+    def get_document_for_job_page(self, job_id: str, page_number: int) -> Document | None:
+        """Look up the single :class:`Document` row corresponding to one input
+        page of a job, where ``page_number`` is the 1-based input page number
+        as uploaded (i.e. metadata.page_number on POST /v1/ingest)."""
+        cur = self._conn.execute(
+            "SELECT * FROM documents WHERE job_id = ? AND page_number = ? LIMIT 1",
+            (job_id, page_number),
+        )
+        row = cur.fetchone()
+        return Document(**dict(row)) if row else None
+
     def get_metrics_for_job(self, job_id: str) -> list[ProcessingMetric]:
         cur = self._conn.execute(
             "SELECT m.* FROM processing_metrics m "

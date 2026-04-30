@@ -19,7 +19,7 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator
 from uuid import uuid4
 
 import httpx
@@ -819,6 +819,147 @@ class RetrieverServiceClient:
         _print_throughput(tracker.total_pages, processing_elapsed)
 
         return final_results
+
+    # ------------------------------------------------------------------
+    # Streaming entry point — yields per-page results as they arrive
+    # ------------------------------------------------------------------
+
+    async def aingest_documents_stream(
+        self,
+        files: list[Path],
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Async generator: split + upload files, yield page results as they land.
+
+        Each yielded dict is one of:
+
+        * ``{"event": "page_result", "job_id": ..., "source_file": ...,
+            "page_number": <input page>, "document_id": ..., "pages": [<output rows>], ...}``
+        * ``{"event": "page_failed", "job_id": ..., "source_file": ...,
+            "page_number": ..., "error": ...}``
+        * ``{"event": "metrics_update", ...}``
+        * ``{"event": "job_complete", "job_id": ..., "filename": ...}``
+
+        The generator terminates when every job has completed, failed, or
+        the SSE connection has terminated with ``stream_overflow``.
+
+        Unlike :meth:`ingest_documents` this method does not render any UI;
+        it is the building block used by the high-level ``ServiceIngestor``.
+        """
+        upload_queue: asyncio.Queue[tuple[bytes, str, str, int, int] | None] = asyncio.Queue()
+        result_queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+        job_ids: list[str] = []
+        loop = asyncio.get_running_loop()
+
+        async def _split_files() -> None:
+            for fpath in files:
+                pages = await loop.run_in_executor(None, self._prepare_file, fpath)
+                job_id = str(uuid4())
+                job_ids.append(job_id)
+                await result_queue.put(
+                    {
+                        "event": "job_started",
+                        "job_id": job_id,
+                        "filename": fpath.name,
+                        "total_pages": len(pages),
+                    }
+                )
+                for page_bytes, page_num, total in pages:
+                    await upload_queue.put((page_bytes, fpath.name, job_id, page_num, total))
+            await upload_queue.put(None)
+
+        pool_limits = httpx.Limits(max_connections=200, max_keepalive_connections=100)
+        timeout = httpx.Timeout(600.0, connect=30.0)
+
+        async with httpx.AsyncClient(timeout=timeout, limits=pool_limits) as client:
+            uploads_done = asyncio.Event()
+            stream_done = asyncio.Event()
+
+            async def _upload_worker() -> None:
+                pending: set[asyncio.Task[Any]] = set()
+                while True:
+                    item = await upload_queue.get()
+                    if item is None:
+                        break
+                    page_bytes, filename, job_id, page_num, total = item
+                    task = asyncio.create_task(self._upload_page(client, page_bytes, filename, job_id, page_num, total))
+                    pending.add(task)
+                    task.add_done_callback(pending.discard)
+                    while len(pending) >= self._max_concurrency:
+                        _done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
+                uploads_done.set()
+
+            async def _stream_consumer() -> None:
+                """Open the SSE stream with include_content=True and route events."""
+                while not job_ids:
+                    await asyncio.sleep(0.05)
+
+                pending_jobs = set(job_ids)
+                url = f"{self._base_url}/v1/ingest/stream/jobs"
+                try:
+                    async with client.stream(
+                        "POST",
+                        url,
+                        json={"job_ids": list(pending_jobs), "include_content": True},
+                    ) as resp:
+                        resp.raise_for_status()
+                        buffer = ""
+                        stream_iter = resp.aiter_text().__aiter__()
+                        while pending_jobs or not uploads_done.is_set():
+                            for jid in job_ids:
+                                pending_jobs.add(jid)
+                            try:
+                                chunk = await asyncio.wait_for(stream_iter.__anext__(), timeout=5.0)
+                            except asyncio.TimeoutError:
+                                continue
+                            except StopAsyncIteration:
+                                break
+                            buffer += chunk
+                            while "\n\n" in buffer:
+                                raw_event, buffer = buffer.split("\n\n", 1)
+                                event = _parse_sse_event(raw_event)
+                                if event is None:
+                                    continue
+                                event_type = event.get("event", "message")
+
+                                if event_type == "page_result":
+                                    await result_queue.put(event)
+                                elif event_type == "metrics_update":
+                                    await result_queue.put(event)
+                                elif event_type == "status_change" and event.get("status") == "failed":
+                                    await result_queue.put({**event, "event": "page_failed"})
+                                elif event_type == "job_complete":
+                                    await result_queue.put(event)
+                                    pending_jobs.discard(event.get("job_id"))
+                                elif event_type == "stream_overflow":
+                                    await result_queue.put(event)
+                                    pending_jobs.clear()
+                                    break
+                                elif event_type == "session_complete":
+                                    pending_jobs.clear()
+                                    break
+                except Exception as exc:
+                    await result_queue.put({"event": "stream_error", "error": f"{type(exc).__name__}: {exc}"})
+                finally:
+                    stream_done.set()
+                    await result_queue.put(None)
+
+            split_task = asyncio.create_task(_split_files())
+            upload_task = asyncio.create_task(_upload_worker())
+            stream_task = asyncio.create_task(_stream_consumer())
+
+            try:
+                while True:
+                    item = await result_queue.get()
+                    if item is None:
+                        break
+                    yield item
+            finally:
+                for t in (split_task, upload_task, stream_task):
+                    if not t.done():
+                        t.cancel()
+                await asyncio.gather(split_task, upload_task, stream_task, return_exceptions=True)
 
 
 # ------------------------------------------------------------------

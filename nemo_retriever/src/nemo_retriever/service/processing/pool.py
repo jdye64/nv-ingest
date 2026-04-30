@@ -328,6 +328,11 @@ class WorkerResult:
     started_at: str = ""
     completed_at: str = ""
     total_pages: int = 0
+    # Full per-output-row contents emitted by the pipeline for this input page.
+    # Populated when the worker successfully runs the chain.  Plumbed back to
+    # the main process so it can publish ``page_result`` SSE events without
+    # making clients re-fetch the data over REST.
+    page_contents: list[dict[str, Any]] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass
@@ -558,9 +563,11 @@ def _split_batch_results(
             ]
             repo.insert_metrics(metric_objs)
 
+        page_contents: list[dict[str, Any]] = []
         for page_num, (_, row) in enumerate(group_df.iterrows()):
             row_dict = row.to_dict()
             content = _row_to_page_content(row_dict)
+            page_contents.append(content)
             page_result = PageResult(
                 document_id=doc_id,
                 page_number=page_num,
@@ -598,6 +605,7 @@ def _split_batch_results(
                 started_at=started_at,
                 completed_at=completed_at,
                 total_pages=total_rows,
+                page_contents=page_contents,
             )
         )
 
@@ -922,6 +930,17 @@ class ProcessingPool:
                         "detections_count": m.get("detections_count", 0),
                     },
                 )
+
+            page_result_payload: dict[str, Any] = {
+                "event": "page_result",
+                "document_id": doc_id,
+                "job_id": job_id,
+                "source_file": result.source_file,
+                "page_number": result.page_number,
+                "total_pages": result.total_pages,
+                "pages": result.page_contents,
+            }
+            self._publish_event(doc_id, page_result_payload)
 
             page_complete_payload: dict[str, Any] = {
                 "event": "page_complete",

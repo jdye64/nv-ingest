@@ -55,7 +55,7 @@ async def _single_doc_generator(
             data = json.dumps(event)
             yield f"event: {event_type}\ndata: {data}\n\n"
 
-            if event_type == "document_complete":
+            if event_type in ("document_complete", "stream_overflow"):
                 break
     finally:
         event_bus.unsubscribe(document_id, queue)
@@ -64,11 +64,17 @@ async def _single_doc_generator(
 async def _multi_doc_generator(
     event_bus: EventBus,
     document_ids: list[str],
+    *,
+    include_content: bool = False,
 ) -> AsyncIterator[str]:
     """Yield SSE frames for *all* listed documents on a single connection.
 
     The stream stays open until every document has emitted a
     ``document_complete`` (or ``status_change`` with ``failed``) event.
+
+    ``page_result`` events (which carry full per-page content) are filtered
+    out unless ``include_content=True`` so the legacy CLI client doesn't
+    pay the bandwidth cost.
     """
     queue = event_bus.subscribe_many(document_ids)
     pending = set(document_ids)
@@ -81,6 +87,14 @@ async def _multi_doc_generator(
                 continue
 
             event_type = event.get("event", "message")
+
+            if event_type == "stream_overflow":
+                yield f"event: stream_overflow\ndata: {json.dumps(event)}\n\n"
+                break
+
+            if event_type == "page_result" and not include_content:
+                continue
+
             data = json.dumps(event)
             yield f"event: {event_type}\ndata: {data}\n\n"
 
@@ -98,12 +112,17 @@ async def _multi_doc_generator(
 async def _job_stream_generator(
     event_bus: EventBus,
     job_ids: list[str],
+    *,
+    include_content: bool = False,
 ) -> AsyncIterator[str]:
     """Yield SSE frames for one or more jobs until every job completes.
 
     Subscribes by *job_id* so it picks up all page-level and job-level events
     published under those keys. ``job_complete`` (or a ``status_change`` with
     ``failed``) is the terminal condition per job.
+
+    ``page_result`` events (which carry full per-page content) are filtered
+    out unless ``include_content=True``.
     """
     queue = event_bus.subscribe_many(job_ids)
     pending = set(job_ids)
@@ -116,6 +135,14 @@ async def _job_stream_generator(
                 continue
 
             event_type = event.get("event", "message")
+
+            if event_type == "stream_overflow":
+                yield f"event: stream_overflow\ndata: {json.dumps(event)}\n\n"
+                break
+
+            if event_type == "page_result" and not include_content:
+                continue
+
             data = json.dumps(event)
             yield f"event: {event_type}\ndata: {data}\n\n"
 
@@ -167,6 +194,10 @@ class StreamSessionRequest(BaseModel):
     """Body for the multi-document SSE endpoint."""
 
     document_ids: list[str] = Field(..., min_length=1)
+    include_content: bool = Field(
+        default=False,
+        description="If true, include `page_result` events carrying the full per-page extracted content.",
+    )
 
 
 @router.post(
@@ -185,7 +216,7 @@ async def stream_session_events(
 
     event_bus: EventBus = request.app.state.event_bus
     return StreamingResponse(
-        _multi_doc_generator(event_bus, body.document_ids),
+        _multi_doc_generator(event_bus, body.document_ids, include_content=body.include_content),
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
     )
@@ -195,6 +226,10 @@ class JobStreamRequest(BaseModel):
     """Body for the job-level SSE endpoint."""
 
     job_ids: list[str] = Field(..., min_length=1)
+    include_content: bool = Field(
+        default=False,
+        description="If true, include `page_result` events carrying the full per-page extracted content.",
+    )
 
 
 @router.post(
@@ -212,7 +247,7 @@ async def stream_job_events(
     # the job row to exist.
     event_bus: EventBus = request.app.state.event_bus
     return StreamingResponse(
-        _job_stream_generator(event_bus, body.job_ids),
+        _job_stream_generator(event_bus, body.job_ids, include_content=body.include_content),
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
     )

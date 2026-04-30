@@ -22,6 +22,8 @@ from nemo_retriever.service.models.responses import (
     IngestAccepted,
     IngestComplete,
     IngestStatus,
+    JobInputPage,
+    JobResults,
     JobStatus,
     MetricSummary,
     PageSummary,
@@ -282,6 +284,26 @@ async def get_ingest_status(
     return _build_status_response(repo, doc)
 
 
+def _aggregate_job_metrics(repo: Repository, job_id: str) -> list[MetricSummary]:
+    """Aggregate per-document metrics rows up to a single per-model summary."""
+    agg: dict[str, MetricSummary] = {}
+    for m in repo.get_metrics_for_job(job_id):
+        key = m.model_name
+        if key not in agg:
+            agg[key] = MetricSummary(
+                model_name=m.model_name,
+                invocation_count=0,
+                pages_processed=0,
+                detections_count=0,
+                duration_ms=0.0,
+            )
+        agg[key].invocation_count += m.invocation_count
+        agg[key].pages_processed += m.pages_processed
+        agg[key].detections_count += m.detections_count
+        agg[key].duration_ms += m.duration_ms
+    return list(agg.values())
+
+
 @router.get(
     "/ingest/job/{job_id}",
     response_model=JobStatus,
@@ -296,23 +318,8 @@ async def get_job_status(
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
-    metrics_rows = repo.get_metrics_for_job(job_id)
-
-    agg: dict[str, MetricSummary] = {}
-    for m in metrics_rows:
-        key = m.model_name
-        if key not in agg:
-            agg[key] = MetricSummary(
-                model_name=m.model_name,
-                invocation_count=0,
-                pages_processed=0,
-                detections_count=0,
-                duration_ms=0.0,
-            )
-        agg[key].invocation_count += m.invocation_count
-        agg[key].pages_processed += m.pages_processed
-        agg[key].detections_count += m.detections_count
-        agg[key].duration_ms += m.duration_ms
+    documents = repo.get_documents_for_job(job_id)
+    document_ids = [d.id for d in documents]
 
     return JobStatus(
         job_id=job.id,
@@ -321,7 +328,106 @@ async def get_job_status(
         total_pages=job.total_pages,
         pages_submitted=job.pages_submitted,
         pages_completed=job.pages_completed,
-        metrics=list(agg.values()),
+        metrics=_aggregate_job_metrics(repo, job_id),
+        document_ids=document_ids,
+        created_at=job.created_at,
+        updated_at=job.updated_at,
+    )
+
+
+@router.get(
+    "/ingest/job/{job_id}/page/{page_number}",
+    response_model=PageSummary,
+    summary="Get the extracted content for a single input page of a job",
+    responses={
+        404: {"description": "Job, input page, or page result not found."},
+        409: {"description": "Page is still processing (no results yet)."},
+    },
+)
+async def get_job_page(
+    request: Request,
+    job_id: str,
+    page_number: int,
+) -> PageSummary:
+    """Return the first output row for one input page of a job.
+
+    The input ``page_number`` is the 1-based page as uploaded (matches the
+    original PDF page).  If the pipeline expanded that page into multiple
+    output rows, this endpoint returns the first one; use
+    ``/v1/ingest/job/{job_id}/results`` to fetch all output rows for every
+    input page in one call.
+    """
+    repo: Repository = request.app.state.repository
+    job = repo.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    doc = repo.get_document_for_job_page(job_id, page_number)
+    if doc is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Page {page_number} not found for job {job_id}",
+        )
+
+    pages = repo.get_page_results(doc.id)
+    if not pages:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Page {page_number} of job {job_id} is still processing (status={doc.processing_status})",
+        )
+
+    first = pages[0]
+    return PageSummary(page_number=first.page_number, content=json.loads(first.content_json))
+
+
+@router.get(
+    "/ingest/job/{job_id}/results",
+    response_model=JobResults,
+    summary="Get the reassembled per-page extracted content for an entire job",
+)
+async def get_job_results(
+    request: Request,
+    job_id: str,
+) -> JobResults:
+    """Return the per-input-page results for an entire job in input-page order.
+
+    Each entry in ``pages`` corresponds to one input page (one POST to
+    ``/v1/ingest`` with that ``page_number``) and contains the full list of
+    output rows the pipeline produced for that input page.
+
+    Pages whose pipeline run has not yet produced any output rows appear in
+    the response with an empty ``pages`` list and the document's current
+    ``status``, so callers can distinguish "in flight" from "produced no
+    output".
+    """
+    repo: Repository = request.app.state.repository
+    job = repo.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    documents = repo.get_documents_for_job(job_id)
+    page_entries: list[JobInputPage] = []
+    for doc in documents:
+        page_results = repo.get_page_results(doc.id)
+        page_entries.append(
+            JobInputPage(
+                page_number=doc.page_number or 0,
+                document_id=doc.id,
+                status=doc.processing_status,
+                pages=[
+                    PageSummary(page_number=p.page_number, content=json.loads(p.content_json)) for p in page_results
+                ],
+            )
+        )
+
+    return JobResults(
+        job_id=job.id,
+        filename=job.filename,
+        status=job.processing_status,
+        total_pages=job.total_pages,
+        pages_completed=job.pages_completed,
+        metrics=_aggregate_job_metrics(repo, job_id),
+        pages=page_entries,
         created_at=job.created_at,
         updated_at=job.updated_at,
     )
