@@ -50,10 +50,20 @@ nemo_retriever/helm/
 
 ## Quick start
 
-### 1. Build & push the service image
+### 1. Service image
 
-The chart uses a placeholder image (`nemo-retriever-service:latest`). Build
-the real one from this repository:
+The chart defaults to the staging image published to NGC:
+
+```
+nvcr.io/nvstaging/nim/nemo-retriever-service:043020205-001
+```
+
+Pulling from `nvcr.io/nvstaging` requires an NGC pull secret — either set
+`imagePullSecret.create=true` (see below) or reference a pre-existing one
+via `imagePullSecrets`.
+
+To run a locally built image instead, build and push it from the repo root,
+then override `service.image.repository` / `service.image.tag`:
 
 ```bash
 # from the repo root:
@@ -71,8 +81,8 @@ useful install looks like:
 
 ```bash
 helm install retriever ./nemo_retriever/helm \
-  --set service.image.repository=<YOUR_REGISTRY>/nemo-retriever-service \
-  --set service.image.tag=<TAG> \
+  --set imagePullSecret.create=true \
+  --set imagePullSecret.password=$NGC_API_KEY \
   --set serviceConfig.nimEndpoints.pageElementsInvokeUrl=http://page-elements.svc:8000/v1/infer \
   --set serviceConfig.nimEndpoints.graphicElementsInvokeUrl=http://graphic-elements.svc:8000/v1/infer \
   --set serviceConfig.nimEndpoints.tableStructureInvokeUrl=http://table-structure.svc:8000/v1/infer \
@@ -87,8 +97,6 @@ This requires GPU nodes and an NGC pull secret + API key:
 
 ```bash
 helm install retriever ./nemo_retriever/helm \
-  --set service.image.repository=<YOUR_REGISTRY>/nemo-retriever-service \
-  --set service.image.tag=<TAG> \
   --set imagePullSecret.create=true \
   --set imagePullSecret.password=$NGC_API_KEY \
   --set nims.enabled=true \
@@ -110,8 +118,8 @@ short list of knobs you'll touch first.
 
 | Path                          | Default                            | Notes |
 |-------------------------------|------------------------------------|-------|
-| `service.image.repository`    | `nemo-retriever-service`           | **Override.** No image is published. |
-| `service.image.tag`           | `latest`                           |       |
+| `service.image.repository`    | `nvcr.io/nvstaging/nim/nemo-retriever-service` | Staging NGC image; requires NGC pull secret. |
+| `service.image.tag`           | `043020205-001`                    |       |
 | `service.replicas`            | `1`                                | Hard cap = 1 while SQLite is the backend. |
 | `service.resources.requests`  | `500m / 1Gi`                       | Tune in tandem with `serviceConfig.processing.numWorkers`. |
 | `service.resources.limits`    | `4 / 8Gi`                          |       |

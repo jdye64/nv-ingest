@@ -272,6 +272,58 @@ class Repository:
         row = cur.fetchone()
         return Document(**dict(row)) if row else None
 
+    # ------------------------------------------------------------------
+    # Spool support
+    # ------------------------------------------------------------------
+
+    def update_document_spool_path(self, document_id: str, spool_path: str | None) -> None:
+        """Set or clear the on-disk spool location for a document."""
+
+        def _do() -> None:
+            now = datetime.now(timezone.utc).isoformat()
+            self._conn.execute(
+                "UPDATE documents SET spool_path = ?, updated_at = ? WHERE id = ?",
+                (spool_path, now, document_id),
+            )
+            self._conn.commit()
+
+        execute_with_retry(_do)
+
+    def list_recoverable_spooled_documents(self) -> list[Document]:
+        """Return documents whose bytes are still spooled and not yet processed.
+
+        Used at startup to re-enqueue work that was accepted before a
+        crash / restart but never reached a worker subprocess.  Only
+        non-terminal statuses (``queued`` and ``processing``) are
+        returned — anything terminal will be cleaned up by the spool
+        sweeper instead.
+        """
+        cur = self._conn.execute(
+            "SELECT * FROM documents " "WHERE spool_path IS NOT NULL " "  AND processing_status IN (?, ?)",
+            (ProcessingStatus.QUEUED.value, ProcessingStatus.PROCESSING.value),
+        )
+        return [Document(**dict(row)) for row in cur.fetchall()]
+
+    def list_evictable_spooled_documents(self, limit: int = 1000) -> list[tuple[str, str]]:
+        """Return ``(document_id, spool_path)`` for terminal docs to evict.
+
+        Bounded to *limit* rows per call so the sweeper can pace itself
+        and not block the loop on a huge backlog.
+        """
+        cur = self._conn.execute(
+            "SELECT id, spool_path FROM documents "
+            "WHERE spool_path IS NOT NULL "
+            "  AND processing_status IN (?, ?, ?) "
+            "LIMIT ?",
+            (
+                ProcessingStatus.COMPLETE.value,
+                ProcessingStatus.FAILED.value,
+                ProcessingStatus.CANCELLED.value,
+                limit,
+            ),
+        )
+        return [(str(row["id"]), str(row["spool_path"])) for row in cur.fetchall()]
+
     def update_document_status(
         self,
         document_id: str,

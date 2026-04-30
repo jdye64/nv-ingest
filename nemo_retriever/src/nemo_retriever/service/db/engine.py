@@ -97,6 +97,12 @@ CREATE TABLE IF NOT EXISTS documents (
     pages_received  INTEGER NOT NULL DEFAULT 0,
     processing_status TEXT NOT NULL DEFAULT 'queued',
     metadata_json   TEXT NOT NULL DEFAULT '{}',
+    -- Path to the on-disk spooled bytes for this document.  Set at ingest
+    -- time (after the multipart upload is fsync'd) so that a pod restart
+    -- between accept and processing can re-enqueue the work without data
+    -- loss.  Cleared by the spool cleaner once the document reaches a
+    -- terminal state and the file has been unlinked.
+    spool_path      TEXT,
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL
 );
@@ -205,6 +211,7 @@ class DatabaseEngine:
         # Additive migrations (safe to run on every startup; no-op when
         # the column already exists).
         _safe_add_column(conn, "page_processing_log", "failure_type", "TEXT")
+        _safe_add_column(conn, "documents", "spool_path", "TEXT")
 
         logger.info("SQLite database initialized at %s", self._db_path)
 

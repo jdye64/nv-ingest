@@ -51,6 +51,7 @@ from nemo_retriever.service.models.document import ProcessingStatus
 from nemo_retriever.service.models.metrics import ProcessingMetric
 from nemo_retriever.service.models.page_processing_log import PageProcessingLog
 from nemo_retriever.service.models.page_result import PageResult
+from nemo_retriever.service.spool import SpoolStore
 
 logger = logging.getLogger(__name__)
 
@@ -303,7 +304,18 @@ def _worker_initializer(
 
 @dataclasses.dataclass
 class PageDescriptor:
-    """Lightweight struct describing a single page to be batched."""
+    """Lightweight struct describing a single page to be batched.
+
+    When ``spool_path`` is set, ``file_bytes`` is left empty and the
+    worker subprocess reads the page bytes from disk.  This keeps the
+    main↔worker IPC payload small (a few-KB descriptor instead of a
+    multi-MB blob) AND means the worker can recover from a transient
+    pickling failure by re-reading from the durable spool.
+
+    When ``spool_path`` is unset, ``file_bytes`` carries the page
+    inline — used for the unit-test path and for any caller that has
+    explicitly disabled spooling in config.
+    """
 
     document_id: str
     content_sha256: str
@@ -311,6 +323,7 @@ class PageDescriptor:
     filename: str
     job_id: str | None = None
     page_number: int = 1
+    spool_path: str | None = None
 
 
 @dataclasses.dataclass
@@ -390,10 +403,52 @@ def _run_pipeline_batch(
             pass
 
     rows = []
+    skipped: list[WorkerResult] = []
     for p in pages:
+        page_bytes = p.file_bytes
+        if not page_bytes and p.spool_path:
+            try:
+                with open(p.spool_path, "rb") as fh:
+                    page_bytes = fh.read()
+            except FileNotFoundError:
+                # Spool file vanished — almost certainly because the
+                # cleanup sweeper raced with a re-enqueue after a recent
+                # restart.  Treat as a permanent failure for this page;
+                # the caller will surface it via a status_change event.
+                logger.warning(
+                    "[worker %d] spool file missing for doc %s (page %s); marking failed",
+                    pid,
+                    p.document_id,
+                    p.page_number,
+                )
+                skipped.append(
+                    WorkerResult(
+                        document_id=p.document_id,
+                        job_id=p.job_id,
+                        source_file=p.filename,
+                        page_number=p.page_number,
+                        success=False,
+                        error_message=f"spool file missing: {p.spool_path}",
+                        failure_type=FailureType.INTERNAL.value,
+                    )
+                )
+                continue
+        if not page_bytes:
+            skipped.append(
+                WorkerResult(
+                    document_id=p.document_id,
+                    job_id=p.job_id,
+                    source_file=p.filename,
+                    page_number=p.page_number,
+                    success=False,
+                    error_message="no page bytes (neither inline nor spooled)",
+                    failure_type=FailureType.INTERNAL.value,
+                )
+            )
+            continue
         rows.append(
             {
-                "bytes": p.file_bytes,
+                "bytes": page_bytes,
                 "path": p.filename,
                 _PROVENANCE_COL: p.document_id,
                 _PROVENANCE_JOB_COL: p.job_id,
@@ -401,6 +456,25 @@ def _run_pipeline_batch(
                 _PROVENANCE_FILE_COL: p.filename,
             }
         )
+    # The pages whose bytes are actually runnable through the pipeline.
+    runnable_pages = [p for p in pages if not any(s.document_id == p.document_id for s in skipped)]
+
+    if not rows:
+        # Every page in the batch failed the byte-fetch step.  Mark each
+        # one failed in the DB so the SSE consumer + REST status reflect
+        # the truth, and return only the skipped results.
+        completed_at = datetime.now(timezone.utc).isoformat()
+        for s in skipped:
+            _mark_page_failed(
+                repo,
+                next(p for p in pages if p.document_id == s.document_id),
+                s.error_message or "page bytes unavailable",
+                completed_at,
+                completed_at,
+                s.failure_type or FailureType.INTERNAL.value,
+            )
+        return BatchWorkerResult(results=skipped)
+
     df = pd.DataFrame(rows)
 
     started_at = datetime.now(timezone.utc).isoformat()
@@ -428,8 +502,8 @@ def _run_pipeline_batch(
             exc_info=True,
         )
         completed_at = datetime.now(timezone.utc).isoformat()
-        fail_results: list[WorkerResult] = []
-        for p in pages:
+        fail_results: list[WorkerResult] = list(skipped)
+        for p in runnable_pages:
             _mark_page_failed(repo, p, error_msg, started_at, completed_at, failure_type)
             fail_results.append(
                 WorkerResult(
@@ -455,14 +529,17 @@ def _run_pipeline_batch(
         elapsed_ms,
     )
 
-    return _split_batch_results(
+    batch_result = _split_batch_results(
         repo,
         df,
-        pages,
+        runnable_pages,
         elapsed_ms,
         started_at,
         completed_at,
     )
+    if skipped:
+        batch_result.results = list(skipped) + list(batch_result.results)
+    return batch_result
 
 
 def _mark_page_failed(
@@ -773,11 +850,13 @@ class ProcessingPool:
         db_engine: DatabaseEngine,
         event_bus: EventBus,
         event_loop: asyncio.AbstractEventLoop,
+        spool_store: SpoolStore | None = None,
     ) -> None:
         self._config = config
         self._db_engine = db_engine
         self._event_bus = event_bus
         self._event_loop = event_loop
+        self._spool_store = spool_store
         self._num_workers = config.processing.num_workers
         self._batch_size = config.processing.batch_size
         self._batch_timeout_s = config.processing.batch_timeout_s
@@ -789,6 +868,8 @@ class ProcessingPool:
         self._cancelled_jobs: set[str] = set()
         self._cancel_lock = threading.Lock()
         self._draining = threading.Event()
+        # Background spool sweeper (started in start()).
+        self._spool_cleanup_task: asyncio.Task | None = None
 
     def start(self) -> None:
         nim = self._config.nim_endpoints
@@ -850,6 +931,9 @@ class ProcessingPool:
         )
 
     def shutdown(self) -> None:
+        if self._spool_cleanup_task is not None and not self._spool_cleanup_task.done():
+            self._spool_cleanup_task.cancel()
+            self._spool_cleanup_task = None
         if self._buffer is not None:
             self._buffer.close()
             self._buffer = None
@@ -857,6 +941,107 @@ class ProcessingPool:
             logger.info("Shutting down processing pool …")
             self._executor.shutdown(wait=True, cancel_futures=True)
             self._executor = None
+
+    # ------------------------------------------------------------------
+    # Spool integration: recovery + periodic cleanup
+    # ------------------------------------------------------------------
+
+    def recover_from_spool(self) -> int:
+        """Re-enqueue every spooled-but-unprocessed page from the durable store.
+
+        Called once at startup, BEFORE HTTP starts accepting new ingest
+        requests, so the recovered work hits the buffer first.  Returns
+        the number of pages re-enqueued; logs a warning for any spool
+        file that vanished (cleaned up between crash and restart).
+        """
+        if self._spool_store is None:
+            return 0
+        repo = Repository(self._db_engine)
+        recovered = 0
+        skipped = 0
+        for doc in repo.list_recoverable_spooled_documents():
+            spool_path = doc.spool_path
+            if not spool_path:
+                continue
+            try:
+                page_bytes = self._spool_store.read(spool_path)
+            except FileNotFoundError:
+                logger.warning(
+                    "spool recovery: file %s missing for doc %s — marking failed",
+                    spool_path,
+                    doc.id,
+                )
+                repo.update_document_status(doc.id, ProcessingStatus.FAILED)
+                repo.update_document_spool_path(doc.id, None)
+                skipped += 1
+                continue
+            ok = self.try_submit(
+                doc.id,
+                doc.content_sha256,
+                page_bytes,
+                doc.filename,
+                job_id=doc.job_id,
+                page_number=doc.page_number or 1,
+                spool_path=spool_path,
+            )
+            if ok:
+                recovered += 1
+            else:
+                # Buffer full at recovery — extremely unlikely (no
+                # ingest yet); log and let the next sweep retry.
+                logger.warning(
+                    "spool recovery: buffer rejected re-enqueue of doc %s; will retry on next sweep",
+                    doc.id,
+                )
+                skipped += 1
+        if recovered or skipped:
+            logger.info(
+                "spool recovery complete: re-enqueued=%d skipped=%d",
+                recovered,
+                skipped,
+            )
+        return recovered
+
+    def start_spool_cleanup(self) -> None:
+        """Start the background sweeper that removes terminal spool files.
+
+        Safe to call multiple times — only starts a task when one isn't
+        already running.  Must be called from inside the asyncio loop
+        the service runs on.
+        """
+        if self._spool_store is None:
+            return
+        if self._spool_cleanup_task is not None and not self._spool_cleanup_task.done():
+            return
+        self._spool_cleanup_task = self._event_loop.create_task(self._spool_cleanup_loop())
+
+    async def _spool_cleanup_loop(self) -> None:
+        """Periodically delete spool files for documents in a terminal state."""
+        assert self._spool_store is not None
+        interval = float(self._config.spool.cleanup_interval_s)
+        batch = int(self._config.spool.cleanup_batch_size)
+        while True:
+            try:
+                await asyncio.sleep(interval)
+                evictable = await asyncio.to_thread(
+                    Repository(self._db_engine).list_evictable_spooled_documents,
+                    batch,
+                )
+                if not evictable:
+                    continue
+                deleted = await asyncio.to_thread(self._spool_store.cleanup_terminal, evictable)
+                # Clear spool_path on the rows whose files we successfully
+                # removed (re-using the same repo instance per call so the
+                # connection sticks to this thread).
+                if deleted:
+                    repo_main = Repository(self._db_engine)
+                    for doc_id, _path in evictable:
+                        await asyncio.to_thread(repo_main.update_document_spool_path, doc_id, None)
+            except asyncio.CancelledError:
+                logger.info("Spool cleanup loop stopped")
+                return
+            except Exception:  # noqa: BLE001 — sweeper must be resilient
+                logger.exception("Spool cleanup loop iteration failed (continuing)")
 
     @property
     def pool_size(self) -> int:
@@ -944,16 +1129,51 @@ class ProcessingPool:
     # ------------------------------------------------------------------
 
     def _publish_event(self, document_id: str, event: dict[str, Any]) -> None:
-        asyncio.run_coroutine_threadsafe(
+        """Fan an event out under the configured overflow policy.
+
+        Under ``drop_low_priority`` (default) this is fire-and-forget —
+        the future is ignored and the worker callback thread returns
+        immediately.  Under ``backpressure`` or ``block`` the call WAITS
+        on the publish future so a slow consumer naturally back-presses
+        the worker pool.  We bound the wait at twice the configured
+        publish timeout (or 5 minutes for ``block``) as a safety net so
+        a truly stuck consumer can never deadlock the worker thread
+        forever.
+        """
+        # We always submit both publish coroutines; whether to wait
+        # depends on the bus's policy.
+        doc_fut = asyncio.run_coroutine_threadsafe(
             self._event_bus.publish(document_id, event),
             self._event_loop,
         )
         job_id = event.get("job_id")
-        if job_id:
+        job_fut = (
             asyncio.run_coroutine_threadsafe(
                 self._event_bus.publish(job_id, event),
                 self._event_loop,
             )
+            if job_id
+            else None
+        )
+
+        if self._event_bus.overflow_policy == "drop_low_priority":
+            return
+
+        # Bound the worker-side wait independently of the bus's own
+        # timeout so a misconfigured ``block`` mode can't pin a worker
+        # thread forever.
+        if self._event_bus.overflow_policy == "block":
+            wait_s: float | None = 300.0
+        else:
+            wait_s = max(self._config.event_bus.publish_timeout_s * 2.0, 1.0)
+
+        for fut in (doc_fut, job_fut):
+            if fut is None:
+                continue
+            try:
+                fut.result(timeout=wait_s)
+            except Exception:  # noqa: BLE001 — publish exceptions logged inside the bus
+                pass
 
     # ------------------------------------------------------------------
     # Batch dispatch (called by _BatchBuffer from its timer/flush)
@@ -1148,12 +1368,19 @@ class ProcessingPool:
         *,
         job_id: str | None = None,
         page_number: int = 1,
+        spool_path: str | None = None,
     ) -> bool:
         """Enqueue a page for batched processing.
 
         Returns ``True`` if the page was accepted, ``False`` if the buffer
         is full or the pool is draining / job is cancelled (caller should
         translate to a 503 with the appropriate detail).
+
+        When ``spool_path`` is provided the page bytes are NOT carried
+        in-memory through the IPC payload — the worker reads them from
+        the spool file inside its own process.  This keeps the
+        cross-process descriptor small (a few KB) and means a worker
+        crash mid-batch leaves the bytes available for re-enqueue.
         """
         if self._executor is None:
             raise RuntimeError("ProcessingPool has not been started")
@@ -1165,14 +1392,15 @@ class ProcessingPool:
         if self.is_job_cancelled(job_id):
             return False
 
-        page_dict = dataclasses.asdict(
-            PageDescriptor(
-                document_id=document_id,
-                content_sha256=content_sha256,
-                file_bytes=file_bytes,
-                filename=filename,
-                job_id=job_id,
-                page_number=page_number,
-            )
+        # When the bytes have been spooled, do NOT also pickle them into
+        # the descriptor — the worker will read them from disk.
+        descriptor = PageDescriptor(
+            document_id=document_id,
+            content_sha256=content_sha256,
+            file_bytes=b"" if spool_path else file_bytes,
+            filename=filename,
+            job_id=job_id,
+            page_number=page_number,
+            spool_path=spool_path,
         )
-        return self._buffer.enqueue(page_dict)
+        return self._buffer.enqueue(dataclasses.asdict(descriptor))

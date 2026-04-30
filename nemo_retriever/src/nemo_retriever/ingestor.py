@@ -59,11 +59,14 @@ def create_ingestor(
     if run_mode == "service":
         from nemo_retriever.service_ingestor import ServiceIngestor
 
-        return ServiceIngestor(
-            base_url=parsed.base_url,
-            documents=parsed.documents,
-            api_token=parsed.api_key,
-        )
+        service_kwargs: dict[str, Any] = {
+            "base_url": parsed.base_url,
+            "documents": parsed.documents,
+            "api_token": parsed.api_key,
+        }
+        if parsed.max_concurrency is not None:
+            service_kwargs["max_concurrency"] = parsed.max_concurrency
+        return ServiceIngestor(**service_kwargs)
 
     if run_mode not in {"batch", "inprocess"}:
         raise ValueError(f"create_ingestor supports run modes 'inprocess', 'batch', and 'service'; got {run_mode!r}.")

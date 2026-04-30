@@ -36,6 +36,7 @@ class Document:
         pages_received: int = 0,
         processing_status: str | ProcessingStatus = ProcessingStatus.QUEUED,
         metadata_json: str = "{}",
+        spool_path: str | None = None,
         created_at: str | None = None,
         updated_at: str | None = None,
     ) -> None:
@@ -51,6 +52,7 @@ class Document:
         self.pages_received = pages_received
         self.processing_status = processing_status if isinstance(processing_status, str) else processing_status.value
         self.metadata_json = metadata_json
+        self.spool_path = spool_path
         self.created_at = created_at or now
         self.updated_at = updated_at or now
 
@@ -67,6 +69,7 @@ class Document:
             "pages_received": self.pages_received,
             "processing_status": self.processing_status,
             "metadata_json": self.metadata_json,
+            "spool_path": self.spool_path,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }

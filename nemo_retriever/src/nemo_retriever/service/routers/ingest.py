@@ -221,6 +221,24 @@ async def ingest_document(
         )
     logger.info("Document accepted: id=%s filename=%s sha=%s", doc.id, filename, content_sha256[:12])
 
+    spool_path: str | None = None
+    spool_store = getattr(pool, "_spool_store", None)
+    if spool_store is not None:
+        try:
+            spool_path = spool_store.write(content_sha256, file_bytes)
+            repo.update_document_spool_path(doc.id, spool_path)
+        except OSError as exc:
+            logger.exception("Spool write failed for doc %s", doc.id)
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "detail": f"Failed to spool page bytes: {exc.__class__.__name__}: {exc}",
+                    "document_id": doc.id,
+                    "retry_after": 5,
+                },
+                headers={"Retry-After": "5"},
+            )
+
     accepted = pool.try_submit(
         doc.id,
         content_sha256,
@@ -228,6 +246,7 @@ async def ingest_document(
         filename,
         job_id=job_id,
         page_number=meta.page_number or 1,
+        spool_path=spool_path,
     )
     if not accepted:
         repo.update_document_status(doc.id, ProcessingStatus.QUEUED)
@@ -624,6 +643,26 @@ def _enqueue_one_page(
     if job_id is not None:
         repo.increment_job_pages_submitted(job_id)
 
+    # Spool the bytes to disk BEFORE submitting to the pool so a crash
+    # between accept and processing doesn't lose the work.  Falls back
+    # to in-memory transport when spooling is disabled or unavailable.
+    spool_path: str | None = None
+    spool_store = getattr(pool, "_spool_store", None)
+    if spool_store is not None:
+        try:
+            spool_path = spool_store.write(content_sha256, page_bytes)
+            repo.update_document_spool_path(doc.id, spool_path)
+        except OSError as exc:
+            # Spooling failed (disk full, permissions, …).  Surface as a
+            # 503 so the caller retries; we'd rather refuse work than
+            # silently lose it on the next pod restart.
+            return False, {
+                "document_id": doc.id,
+                "filename": filename,
+                "page_number": page_number,
+                "reason": f"spool_write_failed: {exc.__class__.__name__}: {exc}",
+            }
+
     accepted = pool.try_submit(
         doc.id,
         content_sha256,
@@ -631,6 +670,7 @@ def _enqueue_one_page(
         filename,
         job_id=job_id,
         page_number=page_number,
+        spool_path=spool_path,
     )
     if not accepted:
         repo.update_document_status(doc.id, ProcessingStatus.QUEUED)

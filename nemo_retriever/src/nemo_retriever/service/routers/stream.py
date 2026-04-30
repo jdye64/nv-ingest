@@ -40,6 +40,47 @@ router = APIRouter(tags=["stream"])
 
 
 # ------------------------------------------------------------------
+# Per-endpoint event-type interest sets
+# ------------------------------------------------------------------
+#
+# Each SSE endpoint declares the set of event types its subscribers
+# actually consume.  The EventBus uses these as a hard filter so chatty
+# per-page events that the endpoint doesn't forward (``metrics_update``,
+# ``page_complete``, ``document_complete``) never even reach the
+# subscriber's queue.  This is the principal mechanism that keeps
+# ``stream_overflow`` from being triggered under normal load.
+
+# Doc-level (single-document) endpoint — caller wants the whole story
+# for one document, so accept everything.
+_DOC_STREAM_EVENT_TYPES: frozenset[str] | None = None
+
+# Multi-doc / session endpoint — caller needs status transitions and
+# per-page completion + (optionally) per-page content; aggregate metrics
+# don't help a session-level consumer.
+_SESSION_STREAM_BASE_EVENTS: frozenset[str] = frozenset(
+    {
+        "page_complete",
+        "document_complete",
+        "status_change",
+        "stream_overflow",
+    }
+)
+
+# Job-level endpoint — caller is interested in job life-cycle events
+# only (plus optionally the full per-page content payloads when content
+# was requested).  Per-model metrics and per-page progress events are
+# server-side-only details for this endpoint.
+_JOB_STREAM_BASE_EVENTS: frozenset[str] = frozenset(
+    {
+        "job_started",
+        "job_complete",
+        "status_change",
+        "stream_overflow",
+    }
+)
+
+
+# ------------------------------------------------------------------
 # Shared SSE formatting
 # ------------------------------------------------------------------
 
@@ -121,7 +162,10 @@ async def _multi_doc_generator(
     async for frame in _replay_buffered(event_bus, document_ids, after_seq, include_content):
         yield frame
 
-    queue = event_bus.subscribe_many(document_ids)
+    wanted = set(_SESSION_STREAM_BASE_EVENTS)
+    if include_content:
+        wanted.add("page_result")
+    queue = event_bus.subscribe_many(document_ids, event_types=wanted)
     pending = set(document_ids)
     try:
         while pending:
@@ -165,7 +209,10 @@ async def _job_stream_generator(
     async for frame in _replay_buffered(event_bus, job_ids, after_seq, include_content):
         yield frame
 
-    queue = event_bus.subscribe_many(job_ids)
+    wanted = set(_JOB_STREAM_BASE_EVENTS)
+    if include_content:
+        wanted.add("page_result")
+    queue = event_bus.subscribe_many(job_ids, event_types=wanted)
     pending = set(job_ids)
     try:
         while pending:
