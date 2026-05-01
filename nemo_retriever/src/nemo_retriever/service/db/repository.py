@@ -210,6 +210,123 @@ class Repository:
         cur = self._conn.execute("SELECT processing_status, COUNT(*) AS n FROM jobs GROUP BY processing_status")
         return {row["processing_status"]: int(row["n"]) for row in cur.fetchall()}
 
+    def delete_job(self, job_id: str) -> dict[str, int]:
+        """Delete a job and all related documents, results, metrics, and logs.
+
+        Returns counts of deleted rows per table.
+        """
+
+        def _do() -> dict[str, int]:
+            doc_ids_cur = self._conn.execute("SELECT id FROM documents WHERE job_id = ?", (job_id,))
+            doc_ids = [r["id"] for r in doc_ids_cur.fetchall()]
+
+            metrics_deleted = 0
+            results_deleted = 0
+            logs_deleted = 0
+            for did in doc_ids:
+                cur = self._conn.execute("DELETE FROM processing_metrics WHERE document_id = ?", (did,))
+                metrics_deleted += cur.rowcount or 0
+                cur = self._conn.execute("DELETE FROM page_results WHERE document_id = ?", (did,))
+                results_deleted += cur.rowcount or 0
+                cur = self._conn.execute("DELETE FROM page_processing_log WHERE document_id = ?", (did,))
+                logs_deleted += cur.rowcount or 0
+
+            cur = self._conn.execute("DELETE FROM documents WHERE job_id = ?", (job_id,))
+            docs_deleted = cur.rowcount or 0
+            cur = self._conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+            job_deleted = cur.rowcount or 0
+            self._conn.commit()
+            return {
+                "job_deleted": job_deleted,
+                "documents_deleted": docs_deleted,
+                "metrics_deleted": metrics_deleted,
+                "results_deleted": results_deleted,
+                "logs_deleted": logs_deleted,
+            }
+
+        return execute_with_retry(_do)
+
+    def purge_terminal_jobs(self, statuses: list[str] | None = None) -> dict[str, int]:
+        """Bulk-delete jobs in terminal states and all their related rows.
+
+        *statuses* defaults to ``["complete", "failed", "cancelled"]``.
+        Returns aggregate counts.
+        """
+        if statuses is None:
+            statuses = ["complete", "failed", "cancelled"]
+
+        def _do() -> dict[str, int]:
+            placeholders = ", ".join("?" for _ in statuses)
+            cur = self._conn.execute(
+                f"SELECT id FROM jobs WHERE processing_status IN ({placeholders})",
+                statuses,
+            )
+            job_ids = [r["id"] for r in cur.fetchall()]
+            if not job_ids:
+                return {"jobs_deleted": 0, "documents_deleted": 0, "metrics_deleted": 0}
+
+            doc_ids_cur = self._conn.execute(
+                f"SELECT id FROM documents WHERE job_id IN ({', '.join('?' for _ in job_ids)})",
+                job_ids,
+            )
+            doc_ids = [r["id"] for r in doc_ids_cur.fetchall()]
+
+            metrics_deleted = 0
+            for did in doc_ids:
+                cur = self._conn.execute("DELETE FROM processing_metrics WHERE document_id = ?", (did,))
+                metrics_deleted += cur.rowcount or 0
+                self._conn.execute("DELETE FROM page_results WHERE document_id = ?", (did,))
+                self._conn.execute("DELETE FROM page_processing_log WHERE document_id = ?", (did,))
+
+            docs_cur = self._conn.execute(
+                f"DELETE FROM documents WHERE job_id IN ({', '.join('?' for _ in job_ids)})",
+                job_ids,
+            )
+            docs_deleted = docs_cur.rowcount or 0
+
+            jobs_cur = self._conn.execute(
+                f"DELETE FROM jobs WHERE id IN ({', '.join('?' for _ in job_ids)})",
+                job_ids,
+            )
+            jobs_deleted = jobs_cur.rowcount or 0
+            self._conn.commit()
+            return {
+                "jobs_deleted": jobs_deleted,
+                "documents_deleted": docs_deleted,
+                "metrics_deleted": metrics_deleted,
+            }
+
+        return execute_with_retry(_do)
+
+    def requeue_job(self, job_id: str) -> bool:
+        """Reset a failed/cancelled job back to ``queued`` so it can be reprocessed.
+
+        Returns True if the job was updated, False if not found or not terminal.
+        """
+
+        def _do() -> bool:
+            cur = self._conn.execute("SELECT processing_status FROM jobs WHERE id = ?", (job_id,))
+            row = cur.fetchone()
+            if row is None:
+                return False
+            if row["processing_status"] not in ("failed", "cancelled"):
+                return False
+            now = datetime.now(timezone.utc).isoformat()
+            self._conn.execute(
+                "UPDATE jobs SET processing_status = 'queued', "
+                "pages_completed = 0, updated_at = ? WHERE id = ?",
+                (now, job_id),
+            )
+            self._conn.execute(
+                "UPDATE documents SET processing_status = 'queued', "
+                "updated_at = ? WHERE job_id = ?",
+                (now, job_id),
+            )
+            self._conn.commit()
+            return True
+
+        return execute_with_retry(_do)
+
     # ------------------------------------------------------------------
     # Documents
     # ------------------------------------------------------------------

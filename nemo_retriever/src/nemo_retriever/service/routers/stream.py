@@ -12,12 +12,13 @@ Three endpoints are provided:
 - ``POST /v1/ingest/stream/jobs`` — job-level stream for tracking pages
   across one or more jobs
 
-All three honour the standard SSE ``Last-Event-ID`` header.  When set, the
-generator first replays buffered events with ``seq > last_event_id``
-before subscribing to new ones, so a client that briefly disconnects can
-resume without losing events.  Each frame includes an ``id: <seq>`` line
-suitable for the browser ``EventSource`` API to track and re-send on
-reconnect.
+All three honour the standard SSE ``Last-Event-ID`` header.  Generators use
+a subscribe-first-then-replay pattern: the subscription is created BEFORE
+replaying buffered events so no events published during the replay window
+are lost.  Events that appear in both the replay and the live queue are
+deduplicated by their monotonic ``seq`` number.  Each frame includes an
+``id: <seq>`` line suitable for the browser ``EventSource`` API to track
+and re-send on reconnect.
 """
 
 from __future__ import annotations
@@ -106,20 +107,6 @@ def _parse_last_event_id(value: str | None) -> int:
         return 0
 
 
-async def _replay_buffered(
-    event_bus: EventBus,
-    keys: list[str],
-    after_seq: int,
-    include_content: bool,
-) -> AsyncIterator[str]:
-    if after_seq <= 0:
-        return
-    for evt in event_bus.replay(keys, after_seq=after_seq):
-        frame = _format_event(evt, include_content)
-        if frame is not None:
-            yield frame
-
-
 async def _single_doc_generator(
     event_bus: EventBus,
     document_id: str,
@@ -127,17 +114,31 @@ async def _single_doc_generator(
     after_seq: int = 0,
     include_content: bool = True,
 ) -> AsyncIterator[str]:
-    """Yield SSE frames for a single document until ``document_complete``."""
-    async for frame in _replay_buffered(event_bus, [document_id], after_seq, include_content):
-        yield frame
+    """Yield SSE frames for a single document until ``document_complete``.
 
+    Uses subscribe-first-then-replay to guarantee no events are lost
+    between initial buffering and the live subscription.
+    """
     queue = event_bus.subscribe(document_id)
+    replayed_max_seq = after_seq
     try:
+        for evt in event_bus.replay([document_id], after_seq=after_seq):
+            frame = _format_event(evt, include_content)
+            if frame is not None:
+                yield frame
+            seq = evt.get("seq", 0)
+            if isinstance(seq, int) and seq > replayed_max_seq:
+                replayed_max_seq = seq
+
         while True:
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=30.0)
             except asyncio.TimeoutError:
                 yield f"event: keepalive\ndata: {json.dumps({'pending': 1})}\n\n"
+                continue
+
+            seq = event.get("seq", 0)
+            if isinstance(seq, int) and seq <= replayed_max_seq:
                 continue
 
             event_type = event.get("event", "message")
@@ -159,17 +160,34 @@ async def _multi_doc_generator(
     include_content: bool = False,
     repository: Repository | None = None,
 ) -> AsyncIterator[str]:
-    """Yield SSE frames for *all* listed documents on a single connection."""
-    async for frame in _replay_buffered(event_bus, document_ids, after_seq, include_content):
-        yield frame
+    """Yield SSE frames for *all* listed documents on a single connection.
 
+    Uses subscribe-first-then-replay to guarantee no events are lost
+    between initial buffering and the live subscription.
+    """
     wanted = set(_SESSION_STREAM_BASE_EVENTS)
     if include_content:
         wanted.add("page_result")
     queue = event_bus.subscribe_many(document_ids, event_types=wanted)
+    replayed_max_seq = after_seq
     pending = set(document_ids)
     stale_keepalives = 0
     try:
+        for evt in event_bus.replay(document_ids, after_seq=after_seq):
+            frame = _format_event(evt, include_content)
+            if frame is not None:
+                yield frame
+            seq = evt.get("seq", 0)
+            if isinstance(seq, int) and seq > replayed_max_seq:
+                replayed_max_seq = seq
+            event_type = evt.get("event", "message")
+            doc_id = evt.get("document_id")
+            if event_type == "document_complete" and doc_id in pending:
+                pending.discard(doc_id)
+            elif event_type == "status_change" and evt.get("status") == "failed":
+                if doc_id in pending:
+                    pending.discard(doc_id)
+
         while pending:
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=_STALE_POLL_INTERVAL_S)
@@ -186,6 +204,10 @@ async def _multi_doc_generator(
                     if not pending:
                         break
                 yield f"event: keepalive\ndata: {json.dumps({'pending': len(pending)})}\n\n"
+                continue
+
+            seq = event.get("seq", 0)
+            if isinstance(seq, int) and seq <= replayed_max_seq:
                 continue
 
             stale_keepalives = 0
@@ -205,7 +227,8 @@ async def _multi_doc_generator(
             if event_type == "document_complete" and doc_id in pending:
                 pending.discard(doc_id)
             elif event_type == "status_change" and event.get("status") == "failed":
-                pending.discard(doc_id)
+                if doc_id in pending:
+                    pending.discard(doc_id)
 
         yield f"event: session_complete\ndata: {json.dumps({'completed': len(document_ids)})}\n\n"
     finally:
@@ -238,17 +261,36 @@ async def _job_stream_generator(
     include_content: bool = False,
     repository: Repository | None = None,
 ) -> AsyncIterator[str]:
-    """Yield SSE frames for one or more jobs until every job completes."""
-    async for frame in _replay_buffered(event_bus, job_ids, after_seq, include_content):
-        yield frame
+    """Yield SSE frames for one or more jobs until every job completes.
 
+    Uses subscribe-first-then-replay to guarantee no events are lost
+    between initial buffering and the live subscription.  Events that
+    appear in both the replay buffer and the live queue are deduplicated
+    by their monotonic ``seq`` number.
+    """
     wanted = set(_JOB_STREAM_BASE_EVENTS)
     if include_content:
         wanted.add("page_result")
     queue = event_bus.subscribe_many(job_ids, event_types=wanted)
+    replayed_max_seq = after_seq
     pending = set(job_ids)
     stale_keepalives = 0
     try:
+        for evt in event_bus.replay(job_ids, after_seq=after_seq):
+            frame = _format_event(evt, include_content)
+            if frame is not None:
+                yield frame
+            seq = evt.get("seq", 0)
+            if isinstance(seq, int) and seq > replayed_max_seq:
+                replayed_max_seq = seq
+            event_type = evt.get("event", "message")
+            jid = evt.get("job_id")
+            if event_type == "job_complete" and jid in pending:
+                pending.discard(jid)
+            elif event_type == "status_change" and evt.get("status") == "failed":
+                if jid in pending:
+                    pending.discard(jid)
+
         while pending:
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=_STALE_POLL_INTERVAL_S)
@@ -265,6 +307,10 @@ async def _job_stream_generator(
                     if not pending:
                         break
                 yield f"event: keepalive\ndata: {json.dumps({'pending': len(pending)})}\n\n"
+                continue
+
+            seq = event.get("seq", 0)
+            if isinstance(seq, int) and seq <= replayed_max_seq:
                 continue
 
             stale_keepalives = 0
@@ -293,12 +339,18 @@ async def _job_stream_generator(
 
 
 async def _poll_terminal_jobs(repo: Repository, pending: set[str]) -> list[str]:
-    """Check DB for jobs that reached terminal state without an SSE event."""
+    """Check DB for jobs that reached terminal state without an SSE event.
+
+    Jobs that return None (unknown to the server — e.g. all uploads failed)
+    are also treated as resolved to prevent infinite hangs.
+    """
     resolved: list[str] = []
     for jid in list(pending):
         try:
             job = await asyncio.to_thread(repo.get_job, jid)
             if job is None:
+                logger.warning("Job %s not found in DB during stale poll — treating as resolved", jid[:8])
+                resolved.append(jid)
                 continue
             if job.processing_status in ("complete", "failed", "cancelled"):
                 resolved.append(jid)

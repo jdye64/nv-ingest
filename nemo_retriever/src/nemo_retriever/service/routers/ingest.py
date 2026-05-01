@@ -2,7 +2,7 @@
 # All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""POST /v1/ingest, GET /v1/ingest/status/{document_id}, GET /v1/ingest/job/{job_id}."""
+"""Ingest endpoints: POST/GET/PATCH/DELETE for jobs and documents."""
 
 from __future__ import annotations
 
@@ -29,12 +29,15 @@ from nemo_retriever.service.models.responses import (
     IngestStatus,
     JobAccepted,
     JobCancelResponse,
+    JobDeleteResponse,
     JobInputPage,
     JobListEntry,
     JobResults,
     JobsList,
+    JobsPurgeResponse,
     JobsSummary,
     JobStatus,
+    JobUpdateResponse,
     MetricSummary,
     PageSummary,
 )
@@ -1012,4 +1015,141 @@ async def cancel_job(
         status=job.processing_status if job else "cancelled",
         documents_cancelled=int(info.get("documents_cancelled", 0)),
         already_terminal=bool(info.get("already_terminal", 0)),
+    )
+
+
+@router.delete(
+    "/ingest/job/{job_id}",
+    response_model=JobDeleteResponse,
+    summary="Delete a job and all of its documents, metrics, and results",
+    responses={
+        404: {"description": "Job not found."},
+        409: {"description": "Job is still actively processing."},
+    },
+)
+async def delete_job(
+    request: Request,
+    job_id: str,
+    force: bool = Query(
+        False,
+        description="Force deletion even if the job is still queued or processing. "
+        "Default: only terminal jobs (complete/failed/cancelled) can be deleted.",
+    ),
+) -> JobDeleteResponse:
+    """Remove a job and all associated data from the database.
+
+    By default only terminal jobs (complete, failed, cancelled) can be deleted.
+    Pass ``?force=true`` to delete a queued or in-flight job (the pipeline will
+    discard any remaining buffered pages silently).
+    """
+    repo: Repository = request.app.state.repository
+    job = await asyncio.to_thread(repo.get_job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    if not force and job.processing_status in ("queued", "processing"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Job {job_id} is still {job.processing_status}. "
+            "Cancel it first or pass ?force=true to delete anyway.",
+        )
+
+    if job.processing_status in ("queued", "processing"):
+        pool = request.app.state.processing_pool
+        pool.cancel_job(job_id)
+
+    counts = await asyncio.to_thread(repo.delete_job, job_id)
+    return JobDeleteResponse(
+        job_id=job_id,
+        deleted=bool(counts.get("job_deleted")),
+        documents_deleted=counts.get("documents_deleted", 0),
+        metrics_deleted=counts.get("metrics_deleted", 0),
+    )
+
+
+@router.delete(
+    "/ingest/jobs",
+    response_model=JobsPurgeResponse,
+    summary="Bulk-delete all terminal jobs (complete / failed / cancelled)",
+)
+async def purge_jobs(
+    request: Request,
+    status: list[str] | None = Query(
+        None,
+        description="Which terminal statuses to purge. "
+        "Defaults to complete, failed, cancelled. "
+        "Active statuses (queued, processing) are never purged.",
+    ),
+) -> JobsPurgeResponse:
+    """Remove all finished jobs and their associated data to free up space.
+
+    Only terminal statuses can be purged. Attempting to include ``queued``
+    or ``processing`` in the status list is silently ignored.
+    """
+    allowed = {"complete", "failed", "cancelled"}
+    if status:
+        statuses = [s for s in status if s in allowed]
+    else:
+        statuses = sorted(allowed)
+
+    if not statuses:
+        return JobsPurgeResponse(jobs_deleted=0, documents_deleted=0, metrics_deleted=0, statuses_purged=[])
+
+    repo: Repository = request.app.state.repository
+    counts = await asyncio.to_thread(repo.purge_terminal_jobs, statuses)
+    return JobsPurgeResponse(
+        jobs_deleted=counts.get("jobs_deleted", 0),
+        documents_deleted=counts.get("documents_deleted", 0),
+        metrics_deleted=counts.get("metrics_deleted", 0),
+        statuses_purged=statuses,
+    )
+
+
+@router.patch(
+    "/ingest/job/{job_id}",
+    response_model=JobUpdateResponse,
+    summary="Update a job — currently supports re-queuing failed or cancelled jobs",
+    responses={
+        404: {"description": "Job not found."},
+        409: {"description": "Job is not in a re-queueable state."},
+    },
+)
+async def update_job(
+    request: Request,
+    job_id: str,
+    action: str = Query(
+        ...,
+        description="Action to perform. Currently only ``requeue`` is supported.",
+    ),
+) -> JobUpdateResponse:
+    """Modify job state.
+
+    ``?action=requeue`` resets a failed or cancelled job to ``queued`` so
+    its pages can be reprocessed on the next dispatch cycle. The
+    ``pages_completed`` counter is reset to 0 and every document's status
+    is set back to ``queued``.
+    """
+    if action != "requeue":
+        raise HTTPException(status_code=400, detail=f"Unknown action '{action}'. Supported: requeue")
+
+    repo: Repository = request.app.state.repository
+    job = await asyncio.to_thread(repo.get_job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    if job.processing_status not in ("failed", "cancelled"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Job {job_id} is '{job.processing_status}' — only failed or cancelled jobs can be re-queued.",
+        )
+
+    updated = await asyncio.to_thread(repo.requeue_job, job_id)
+    if not updated:
+        raise HTTPException(status_code=409, detail=f"Job {job_id} could not be re-queued.")
+
+    refreshed = await asyncio.to_thread(repo.get_job, job_id)
+    return JobUpdateResponse(
+        job_id=job_id,
+        status=refreshed.processing_status if refreshed else "queued",
+        updated_at=refreshed.updated_at if refreshed else "",
     )

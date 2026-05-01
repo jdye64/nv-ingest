@@ -16,8 +16,11 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import base64
 import io
+import logging
 import time
 import traceback
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 import pandas as pd
@@ -584,12 +587,25 @@ def ocr_page_elements(
             page_image_b64 = page_image.get("image_b64") if isinstance(page_image, dict) else None
 
             if not isinstance(page_image_b64, str) or not page_image_b64:
-                # No image available — nothing to crop/OCR.
+                meta = getattr(row, "metadata", None) or {}
+                upstream_err = meta.get("error") if isinstance(meta, dict) else None
+                page_num = getattr(row, "page_number", "?")
+                path = getattr(row, "path", "?")
+                if upstream_err:
+                    logger.warning(
+                        "OCR skipping page %s of %s — no page image (upstream error: %s)",
+                        page_num, path, upstream_err,
+                    )
+                else:
+                    logger.debug(
+                        "OCR skipping page %s of %s — no page image (text-only or raster not requested)",
+                        page_num, path,
+                    )
                 all_table.append(table_items)
                 all_chart.append(chart_items)
                 all_infographic.append(infographic_items)
                 all_text.append(None)
-                all_ocr_meta.append({"timing": None, "error": None})
+                all_ocr_meta.append({"timing": None, "error": upstream_err, "num_detections": 0, "counts_by_label": {}})
                 continue
 
             # --- determine per-row labels (text/title only for pages needing OCR) ---

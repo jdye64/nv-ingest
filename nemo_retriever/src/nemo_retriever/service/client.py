@@ -1112,21 +1112,19 @@ class RetrieverServiceClient:
         """
         upload_queue: asyncio.Queue[tuple[bytes, str, str, int, int] | None] = asyncio.Queue()
         result_queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
-        job_ids: list[str] = []
-        # Signal: every input file has been split and its job_id appended to
-        # ``job_ids``.  The SSE consumer waits for this before subscribing so
-        # the subscription covers ALL jobs (the server's subscribe_many takes
-        # a fixed key set — events for jobs added after subscribe are not
-        # delivered to that subscriber).
+        # Pre-generate job_ids for all files so the SSE subscription can
+        # be opened IMMEDIATELY (before splitting/uploading begins).  This
+        # eliminates the window where page_result events are published with
+        # no subscriber listening.
+        job_ids: list[str] = [str(uuid4()) for _ in files]
+        file_job_map: list[tuple[Path, str]] = list(zip(files, job_ids))
         splits_done = asyncio.Event()
         loop = asyncio.get_running_loop()
 
         async def _split_files() -> None:
             try:
-                for fpath in files:
+                for fpath, job_id in file_job_map:
                     pages = await loop.run_in_executor(None, self._prepare_file, fpath)
-                    job_id = str(uuid4())
-                    job_ids.append(job_id)
                     await result_queue.put(
                         {
                             "event": "job_started",
@@ -1177,7 +1175,6 @@ class RetrieverServiceClient:
                 """
                 _STALE_TIMEOUT = 120.0
 
-                await splits_done.wait()
                 if not job_ids:
                     return
 
@@ -1190,12 +1187,34 @@ class RetrieverServiceClient:
                 last_progress_time = time.monotonic()
 
                 async def _check_stale_jobs() -> None:
-                    """Poll REST API for each pending job and resolve terminal ones."""
+                    """Poll REST API for each pending job and resolve terminal ones.
+
+                    A 404 means the server never received any pages for the job
+                    (e.g. all uploads failed with 4xx). Treat it as terminal so the
+                    client doesn't hang forever.
+                    """
                     nonlocal last_progress_time
                     resolved_any = False
                     for jid in list(pending_jobs):
                         try:
                             r = await client.get(f"{self._base_url}/v1/ingest/job/{jid}")
+                            if r.status_code == 404:
+                                logger.warning(
+                                    "[job %s] server returned 404 — job was never created "
+                                    "(uploads likely failed); discarding",
+                                    jid[:8],
+                                )
+                                pending_jobs.discard(jid)
+                                await result_queue.put(
+                                    {
+                                        "event": "job_complete",
+                                        "job_id": jid,
+                                        "synthetic": True,
+                                        "error": "job unknown to server (upload failed)",
+                                    }
+                                )
+                                resolved_any = True
+                                continue
                             r.raise_for_status()
                             body = r.json()
                             status = body.get("status", "")

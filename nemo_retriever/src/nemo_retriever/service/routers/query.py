@@ -234,7 +234,7 @@ def _search_lancedb(
                     .to_list()
                 )
 
-            results.append([{k: v for k, v in h.items() if k in _KEEP_KEYS} for h in hits])
+            results.append([{k: v for k, v in h.items() if k in _KEEP_KEYS or k == "_distance"} for h in hits])
         except Exception as exc:
             raise RuntimeError(
                 f"Vector search failed on table {lancedb_table!r} for query #{i + 1}: " f"{type(exc).__name__}: {exc}"

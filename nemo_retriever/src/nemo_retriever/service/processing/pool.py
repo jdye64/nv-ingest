@@ -18,11 +18,17 @@ processes in batches (default 32) so that NIM endpoints and GPUs see
 larger inference batches.  A configurable timeout ensures small jobs
 are dispatched promptly without waiting for a full batch.
 
-Workers write results directly to SQLite (WAL mode supports concurrent
-multi-process writers) and return a lightweight ``BatchWorkerResult`` to
-the main process.  The main process uses the result to publish SSE
-events and track job completion — the only operations that require the
-in-process ``EventBus`` / ``asyncio`` event loop.
+Workers return a lightweight ``BatchWorkerResult`` to the main process.
+The main process publishes SSE events **immediately** on the callback
+thread, then enqueues all DB persistence to a single ``_DbWriterThread``
+that batches writes into one transaction — eliminating WAL lock
+contention across 16+ worker processes.
+
+Embedding vectors, base64 page images, and other large intermediates
+are stripped from both ``content_json`` (SQLite) and SSE payloads via
+``_SERIALIZE_SKIP``.  Embeddings are already persisted in LanceDB by
+the pipeline.  Page result storage in SQLite is optional and controlled
+by ``processing.store_page_results`` (default: off).
 """
 
 from __future__ import annotations
@@ -33,6 +39,7 @@ import json
 import logging
 import multiprocessing
 import os
+import queue as _queue_mod
 import signal
 import threading
 import time
@@ -51,7 +58,7 @@ from nemo_retriever.service.event_bus import EventBus
 from nemo_retriever.service.event_logger import record_event
 from nemo_retriever.service.failure_types import EventCategory, FailureType, categorize_exception
 from nemo_retriever.service.models.document import ProcessingStatus
-from nemo_retriever.service.models.event_log import EventOutcome, EventSeverity
+from nemo_retriever.service.models.event_log import EventOutcome, EventRecord, EventSeverity
 from nemo_retriever.service.models.metrics import ProcessingMetric
 from nemo_retriever.service.models.page_processing_log import PageProcessingLog
 from nemo_retriever.service.models.page_result import PageResult
@@ -61,12 +68,35 @@ logger = logging.getLogger(__name__)
 
 _SERIALIZE_SKIP = frozenset(
     {
+        # Internal provenance / routing columns
         "bytes",
         "_page_document_id",
         "_page_job_id",
         "_page_number",
         "_page_filename",
+        # Embedding vectors — already persisted in LanceDB; duplicating
+        # 2048-float JSON arrays into SQLite content_json and SSE payloads
+        # causes massive write contention and memory pressure.
+        "text_embeddings_1b_v2",
+        "text_embeddings_1b_v2_dim",
+        "text_embeddings_1b_v2_has_embedding",
+        "embedding_v1_num_detections",
+        "embedding_v1_counts_by_label",
+        "_contains_embeddings",
+        "_embed_modality",
+        # metadata dict carries a duplicate copy of the embedding vector
+        # under metadata["embedding"] as well as other large intermediates
+        "metadata",
+        # Large base64-encoded page/element images
+        "page_image_b64",
+        "page_image",
+        "_image_b64",
     }
+)
+
+_SERIALIZE_SKIP_PREFIXES = (
+    "text_embeddings_",
+    "embedding_v",
 )
 
 
@@ -89,7 +119,11 @@ def _safe_value(v: Any) -> Any:
 
 
 def _row_to_page_content(row: dict[str, Any]) -> dict[str, Any]:
-    return {k: _safe_value(v) for k, v in row.items() if k not in _SERIALIZE_SKIP}
+    return {
+        k: _safe_value(v)
+        for k, v in row.items()
+        if k not in _SERIALIZE_SKIP and not k.startswith(_SERIALIZE_SKIP_PREFIXES)
+    }
 
 
 def _extract_metrics_from_row(row: dict[str, Any]) -> list[dict[str, Any]]:
@@ -736,9 +770,10 @@ def _split_batch_results(
     """Split the batched pipeline output back into per-page results.
 
     Groups output rows by ``_page_document_id``, extracts metrics from
-    the first row of each group (before explosion duplicates), persists
-    page results and metrics to SQLite, and assembles per-page
-    :class:`WorkerResult` objects.
+    the first row of each group, and assembles per-page
+    :class:`WorkerResult` objects.  **No SQLite writes happen here** —
+    all persistence is deferred to :class:`_DbWriterThread` in the
+    main process.
     """
     pid = os.getpid()
     page_lookup = {p.document_id: p for p in pages}
@@ -747,20 +782,6 @@ def _split_batch_results(
         logger.warning("[worker %d] Provenance column missing — cannot split batch results", pid)
         results: list[WorkerResult] = []
         for p in pages:
-            record_event(
-                repo,
-                category=EventCategory.INTERNAL.value,
-                severity=EventSeverity.ERROR,
-                outcome=EventOutcome.FAILED,
-                summary="Provenance column lost during pipeline execution",
-                detail="Provenance column lost during pipeline execution",
-                stage="split_results",
-                endpoint="pipeline",
-                job_id=p.job_id,
-                document_id=p.document_id,
-                source_file=p.filename,
-                page_number=p.page_number,
-            )
             results.append(
                 WorkerResult(
                     document_id=p.document_id,
@@ -786,66 +807,15 @@ def _split_batch_results(
         source_file = _resolve_source_file(repo, p)
         total_rows = len(group_df)
 
-        repo.update_document_status(doc_id, ProcessingStatus.PROCESSING, total_pages=total_rows)
-
         page_metrics = _extract_metrics_from_row(group_df.iloc[0].to_dict())
-        if page_metrics:
-            metric_objs = [
-                ProcessingMetric(
-                    document_id=doc_id,
-                    model_name=m["model_name"],
-                    invocation_count=m.get("invocation_count", 1),
-                    pages_processed=m.get("pages_processed", 1),
-                    detections_count=m.get("detections_count", 0),
-                    counts_by_label_json=json.dumps(m.get("counts_by_label", {})),
-                )
-                for m in page_metrics
-            ]
-            repo.insert_metrics(metric_objs)
 
         page_contents: list[dict[str, Any]] = []
-        for page_num, (_, row) in enumerate(group_df.iterrows()):
+        for _page_num, (_, row) in enumerate(group_df.iterrows()):
             row_dict = row.to_dict()
             content = _row_to_page_content(row_dict)
             page_contents.append(content)
-            page_result = PageResult(
-                document_id=doc_id,
-                page_number=p.page_number,
-                content_json=json.dumps(content),
-            )
-            repo.insert_page_result(page_result)
-            repo.increment_pages_received(doc_id)
 
         det_total = sum(m.get("detections_count", 0) for m in page_metrics)
-
-        log_entry = PageProcessingLog(
-            id=PageProcessingLog.make_id(source_file, p.page_number),
-            document_id=doc_id,
-            job_id=p.job_id,
-            source_file=source_file,
-            page_number=p.page_number,
-            detection_count=det_total,
-            processing_duration_ms=elapsed_ms,
-            started_at=started_at,
-            completed_at=completed_at,
-        )
-        repo.insert_page_processing_log(log_entry)
-        repo.update_document_status(doc_id, ProcessingStatus.COMPLETE)
-
-        record_event(
-            repo,
-            category=EventCategory.INTERNAL.value,
-            severity=EventSeverity.INFO,
-            outcome=EventOutcome.IN_PROGRESS,
-            summary=f"Page processed successfully ({det_total} detections, {elapsed_ms:.0f}ms)",
-            stage="pipeline",
-            endpoint="pipeline",
-            job_id=p.job_id,
-            document_id=doc_id,
-            source_file=source_file,
-            page_number=p.page_number,
-            extra={"detection_count": det_total, "processing_duration_ms": elapsed_ms},
-        )
 
         results.append(
             WorkerResult(
@@ -867,28 +837,6 @@ def _split_batch_results(
     seen = {r.document_id for r in results}
     for p in pages:
         if p.document_id not in seen:
-            _mark_page_failed(
-                repo,
-                p,
-                "Page produced no output rows after pipeline execution",
-                started_at,
-                completed_at,
-                FailureType.INTERNAL.value,
-            )
-            record_event(
-                repo,
-                category=EventCategory.INTERNAL.value,
-                severity=EventSeverity.ERROR,
-                outcome=EventOutcome.FAILED,
-                summary="Page produced no output rows after pipeline execution",
-                detail="Page produced no output rows after pipeline execution",
-                stage="split_results",
-                endpoint="pipeline",
-                job_id=p.job_id,
-                document_id=p.document_id,
-                source_file=p.filename,
-                page_number=p.page_number,
-            )
             results.append(
                 WorkerResult(
                     document_id=p.document_id,
@@ -898,6 +846,8 @@ def _split_batch_results(
                     success=False,
                     error_message="Page produced no output rows after pipeline execution",
                     failure_type=FailureType.INTERNAL.value,
+                    started_at=started_at,
+                    completed_at=completed_at,
                 )
             )
 
@@ -1035,15 +985,225 @@ class _BatchBuffer:
             self._safe_dispatch(batch)
 
 
+@dataclasses.dataclass
+class _DbWriteItem:
+    """All the data needed to persist one page's results to SQLite.
+
+    Built by `_handle_single_result` and enqueued to `_DbWriterThread`.
+    The background thread drains multiple items and writes them all
+    in a single transaction — one lock acquisition for N pages instead
+    of 7*N individual commits.
+    """
+
+    document_id: str
+    job_id: str | None
+    source_file: str
+    page_number: int
+    success: bool
+    # Only populated on success:
+    metrics: list[ProcessingMetric] = dataclasses.field(default_factory=list)
+    page_results: list[PageResult] = dataclasses.field(default_factory=list)
+    pages_received_increment: int = 0
+    log_entry: PageProcessingLog | None = None
+    total_pages: int = 0
+    detection_count: int = 0
+    processing_duration_ms: float = 0.0
+    # Only populated on failure:
+    error_message: str | None = None
+    failure_type: str | None = None
+    started_at: str = ""
+    completed_at: str = ""
+
+
+_SENTINEL = object()
+
+
+class _DbWriterThread:
+    """Single-threaded background writer that batches DB writes.
+
+    All per-page SQLite persistence is funnelled through this thread
+    so that worker processes and the callback thread never contend for
+    the WAL write lock.  Items are batched: the thread wakes every
+    ``flush_interval_s`` or when ``max_batch`` items accumulate.
+    """
+
+    def __init__(
+        self,
+        db_engine: DatabaseEngine,
+        *,
+        store_page_results: bool = False,
+        flush_interval_s: float = 0.1,
+        max_batch: int = 64,
+    ) -> None:
+        self._db_engine = db_engine
+        self._store_page_results = store_page_results
+        self._flush_interval_s = flush_interval_s
+        self._max_batch = max_batch
+        self._queue: _queue_mod.Queue[_DbWriteItem | object] = _queue_mod.Queue(maxsize=4096)
+        self._thread = threading.Thread(target=self._run, name="db-writer", daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self, timeout: float = 10.0) -> None:
+        self._queue.put(_SENTINEL)
+        self._thread.join(timeout=timeout)
+
+    def enqueue(self, item: _DbWriteItem) -> None:
+        try:
+            self._queue.put_nowait(item)
+        except _queue_mod.Full:
+            logger.warning("DB writer queue full — dropping write for doc %s", item.document_id[:8])
+
+    def _run(self) -> None:
+        repo = Repository(self._db_engine)
+        while True:
+            batch = self._drain_batch()
+            if batch is None:
+                return
+            if batch:
+                self._write_batch(repo, batch)
+
+    def _drain_batch(self) -> list[_DbWriteItem] | None:
+        """Block until at least one item arrives, then drain up to max_batch.
+
+        Returns None when the sentinel is received (shutdown).
+        """
+        try:
+            first = self._queue.get(timeout=self._flush_interval_s)
+        except _queue_mod.Empty:
+            return []
+        if first is _SENTINEL:
+            return None
+        batch: list[_DbWriteItem] = [first]  # type: ignore[list-item]
+        while len(batch) < self._max_batch:
+            try:
+                item = self._queue.get_nowait()
+            except _queue_mod.Empty:
+                break
+            if item is _SENTINEL:
+                self._queue.put(_SENTINEL)
+                break
+            batch.append(item)  # type: ignore[arg-type]
+        return batch
+
+    def _write_batch(self, repo: Repository, batch: list[_DbWriteItem]) -> None:
+        from nemo_retriever.service.db.engine import execute_with_retry
+
+        def _do() -> None:
+            conn = repo._conn
+            now = datetime.now(timezone.utc).isoformat()
+
+            for item in batch:
+                if item.success:
+                    conn.execute(
+                        "UPDATE documents SET processing_status = ?, total_pages = ?, updated_at = ? WHERE id = ?",
+                        (ProcessingStatus.PROCESSING.value, item.total_pages, now, item.document_id),
+                    )
+
+                    for m in item.metrics:
+                        row = m.to_row()
+                        cols = ", ".join(row.keys())
+                        placeholders = ", ".join(f":{k}" for k in row.keys())
+                        conn.execute(f"INSERT INTO processing_metrics ({cols}) VALUES ({placeholders})", row)
+
+                    if self._store_page_results:
+                        for pr in item.page_results:
+                            row = pr.to_row()
+                            cols = ", ".join(row.keys())
+                            placeholders = ", ".join(f":{k}" for k in row.keys())
+                            conn.execute(f"INSERT INTO page_results ({cols}) VALUES ({placeholders})", row)
+
+                    if item.pages_received_increment > 0:
+                        conn.execute(
+                            "UPDATE documents SET pages_received = pages_received + ?, updated_at = ? WHERE id = ?",
+                            (item.pages_received_increment, now, item.document_id),
+                        )
+
+                    if item.log_entry is not None:
+                        row = item.log_entry.to_row()
+                        cols = ", ".join(row.keys())
+                        placeholders = ", ".join(f":{k}" for k in row.keys())
+                        conn.execute(
+                            f"INSERT OR REPLACE INTO page_processing_log ({cols}) VALUES ({placeholders})", row
+                        )
+
+                    conn.execute(
+                        "UPDATE documents SET processing_status = ?, updated_at = ? WHERE id = ?",
+                        (ProcessingStatus.COMPLETE.value, now, item.document_id),
+                    )
+
+                    event = EventRecord(
+                        category=EventCategory.INTERNAL.value,
+                        severity=EventSeverity.INFO,
+                        outcome=EventOutcome.IN_PROGRESS,
+                        summary=f"Page processed ({item.detection_count} det, {item.processing_duration_ms:.0f}ms)",
+                        stage="pipeline",
+                        endpoint="pipeline",
+                        job_id=item.job_id,
+                        document_id=item.document_id,
+                        source_file=item.source_file,
+                        page_number=item.page_number,
+                        extra_json=json.dumps({
+                            "detection_count": item.detection_count,
+                            "processing_duration_ms": item.processing_duration_ms,
+                        }),
+                    )
+                    erow = event.to_row()
+                    ecols = ", ".join(erow.keys())
+                    eph = ", ".join(f":{k}" for k in erow.keys())
+                    conn.execute(f"INSERT INTO event_log ({ecols}) VALUES ({eph})", erow)
+
+                else:
+                    conn.execute(
+                        "UPDATE documents SET processing_status = ?, updated_at = ? WHERE id = ?",
+                        (ProcessingStatus.FAILED.value, now, item.document_id),
+                    )
+                    if item.log_entry is not None:
+                        row = item.log_entry.to_row()
+                        cols = ", ".join(row.keys())
+                        placeholders = ", ".join(f":{k}" for k in row.keys())
+                        conn.execute(
+                            f"INSERT OR REPLACE INTO page_processing_log ({cols}) VALUES ({placeholders})", row
+                        )
+
+                if item.job_id:
+                    conn.execute(
+                        "UPDATE jobs SET pages_completed = pages_completed + 1, updated_at = ? WHERE id = ?",
+                        (now, item.job_id),
+                    )
+
+            conn.commit()
+
+            for item in batch:
+                if item.job_id:
+                    cur = conn.execute(
+                        "SELECT pages_completed, total_pages, processing_status FROM jobs WHERE id = ?",
+                        (item.job_id,),
+                    )
+                    row = cur.fetchone()
+                    if row and row["pages_completed"] >= row["total_pages"] > 0:
+                        if row["processing_status"] not in ("complete", "failed", "cancelled"):
+                            conn.execute(
+                                "UPDATE jobs SET processing_status = ?, updated_at = ? WHERE id = ?",
+                                (ProcessingStatus.COMPLETE.value, now, item.job_id),
+                            )
+                            conn.commit()
+
+        try:
+            execute_with_retry(_do)
+        except Exception:
+            logger.exception("DB writer batch failed (%d items)", len(batch))
+
+
 class ProcessingPool:
     """Manages a ``ProcessPoolExecutor`` of isolated worker processes.
 
     Pages are accumulated in a ``_BatchBuffer`` and dispatched in
-    batches (default 32) to worker processes.  Each worker process
-    builds its own operator chain at startup, completely eliminating
-    C-library thread-safety issues.  Workers write results to SQLite
-    directly and return a ``BatchWorkerResult`` to the main process
-    for SSE event publishing and job-completion tracking.
+    batches (default 32) to worker processes.  Workers return a
+    lightweight ``BatchWorkerResult`` to the main process for SSE
+    event publishing.  All SQLite persistence is handled by a
+    dedicated ``_DbWriterThread`` to eliminate WAL lock contention.
     """
 
     def __init__(
@@ -1062,14 +1222,20 @@ class ProcessingPool:
         self._num_workers = config.processing.num_workers
         self._batch_size = config.processing.batch_size
         self._batch_timeout_s = config.processing.batch_timeout_s
+        self._store_page_results = config.processing.store_page_results
         self._executor: ProcessPoolExecutor | None = None
         self._buffer: _BatchBuffer | None = None
+        self._db_writer: _DbWriterThread | None = None
         self._in_flight = 0
         self._in_flight_lock = threading.Lock()
         # Cancellation + drain state
         self._cancelled_jobs: set[str] = set()
         self._cancel_lock = threading.Lock()
         self._draining = threading.Event()
+        # In-memory job page counters for immediate SSE job_complete
+        # detection without waiting for the DB writer thread.
+        self._job_page_counts: dict[str, int] = {}
+        self._job_page_counts_lock = threading.Lock()
         # Background spool sweeper (started in start()).
         self._spool_cleanup_task: asyncio.Task | None = None
 
@@ -1122,6 +1288,16 @@ class ProcessingPool:
             pids.add(fut.result())
         logger.info("All %d worker process(es) initialised and ready", len(pids))
 
+        self._db_writer = _DbWriterThread(
+            self._db_engine,
+            store_page_results=self._store_page_results,
+        )
+        self._db_writer.start()
+        logger.info(
+            "Background DB writer started (store_page_results=%s)",
+            self._store_page_results,
+        )
+
         max_buffered = self._num_workers * self._batch_size
         self._buffer = _BatchBuffer(
             batch_size=self._batch_size,
@@ -1148,6 +1324,9 @@ class ProcessingPool:
             logger.info("Shutting down processing pool …")
             self._executor.shutdown(wait=True, cancel_futures=True)
             self._executor = None
+        if self._db_writer is not None:
+            self._db_writer.stop()
+            self._db_writer = None
 
     # ------------------------------------------------------------------
     # Spool integration: recovery + periodic cleanup
@@ -1500,7 +1679,7 @@ class ProcessingPool:
             self._handle_single_result(result)
 
     def _handle_single_result(self, result: WorkerResult) -> None:
-        """Process one per-page result: publish SSE events and check job completion."""
+        """Process one per-page result: publish SSE events immediately, then enqueue DB writes."""
         doc_id = result.document_id
         job_id = result.job_id
 
@@ -1548,6 +1727,56 @@ class ProcessingPool:
                     "total_pages": result.total_pages,
                 },
             )
+
+            metric_objs = [
+                ProcessingMetric(
+                    document_id=doc_id,
+                    model_name=m["model_name"],
+                    invocation_count=m.get("invocation_count", 1),
+                    pages_processed=m.get("pages_processed", 1),
+                    detections_count=m.get("detections_count", 0),
+                    counts_by_label_json=json.dumps(m.get("counts_by_label", {})),
+                )
+                for m in result.metrics
+            ]
+
+            page_result_objs = [
+                PageResult(
+                    document_id=doc_id,
+                    page_number=result.page_number,
+                    content_json=json.dumps(c),
+                )
+                for c in result.page_contents
+            ]
+
+            log_entry = PageProcessingLog(
+                id=PageProcessingLog.make_id(result.source_file, result.page_number),
+                document_id=doc_id,
+                job_id=job_id,
+                source_file=result.source_file,
+                page_number=result.page_number,
+                detection_count=result.detection_count,
+                processing_duration_ms=result.processing_duration_ms,
+                started_at=result.started_at,
+                completed_at=result.completed_at,
+            )
+
+            write_item = _DbWriteItem(
+                document_id=doc_id,
+                job_id=job_id,
+                source_file=result.source_file,
+                page_number=result.page_number,
+                success=True,
+                metrics=metric_objs,
+                page_results=page_result_objs,
+                pages_received_increment=len(result.page_contents),
+                log_entry=log_entry,
+                total_pages=result.total_pages,
+                detection_count=result.detection_count,
+                processing_duration_ms=result.processing_duration_ms,
+                started_at=result.started_at,
+                completed_at=result.completed_at,
+            )
         else:
             self._publish_event(
                 doc_id,
@@ -1563,19 +1792,58 @@ class ProcessingPool:
                 },
             )
 
+            fail_log = PageProcessingLog(
+                id=PageProcessingLog.make_id(result.source_file, result.page_number),
+                document_id=doc_id,
+                job_id=job_id,
+                source_file=result.source_file,
+                page_number=result.page_number,
+                status="failed",
+                error_message=result.error_message,
+                failure_type=result.failure_type,
+                detection_count=0,
+                processing_duration_ms=0.0,
+                started_at=result.started_at,
+                completed_at=result.completed_at,
+            )
+
+            write_item = _DbWriteItem(
+                document_id=doc_id,
+                job_id=job_id,
+                source_file=result.source_file,
+                page_number=result.page_number,
+                success=False,
+                error_message=result.error_message,
+                failure_type=result.failure_type,
+                log_entry=fail_log,
+                started_at=result.started_at,
+                completed_at=result.completed_at,
+            )
+
+        if self._db_writer is not None:
+            self._db_writer.enqueue(write_item)
+
         if job_id:
             self._handle_job_completion(job_id)
 
     def _handle_job_completion(self, job_id: str) -> None:
-        """Increment job progress; if all pages are done, mark the job complete."""
+        """Track page completion in-memory and publish job_complete SSE immediately.
+
+        Uses an in-memory counter so the SSE fires as soon as the last
+        page result arrives, without waiting for the DB writer thread.
+        """
+        with self._job_page_counts_lock:
+            self._job_page_counts[job_id] = self._job_page_counts.get(job_id, 0) + 1
+            pages_completed = self._job_page_counts[job_id]
+
         repo = Repository(self._db_engine)
-        pages_completed = repo.increment_job_pages_completed(job_id)
         job = repo.get_job(job_id)
         if job is None:
             return
 
         if pages_completed >= job.total_pages and job.total_pages > 0:
-            repo.update_job_status(job_id, ProcessingStatus.COMPLETE)
+            with self._job_page_counts_lock:
+                self._job_page_counts.pop(job_id, None)
             logger.info("[job %s] All %d pages of %s complete", job_id[:8], job.total_pages, job.filename)
             asyncio.run_coroutine_threadsafe(
                 self._event_bus.publish(

@@ -197,6 +197,32 @@ class JobCancelResponse(BaseModel):
     )
 
 
+class JobDeleteResponse(BaseModel):
+    """Response for ``DELETE /v1/ingest/job/{job_id}``."""
+
+    job_id: str
+    deleted: bool = True
+    documents_deleted: int = 0
+    metrics_deleted: int = 0
+
+
+class JobsPurgeResponse(BaseModel):
+    """Response for ``DELETE /v1/ingest/jobs``."""
+
+    jobs_deleted: int = 0
+    documents_deleted: int = 0
+    metrics_deleted: int = 0
+    statuses_purged: list[str] = Field(default_factory=list)
+
+
+class JobUpdateResponse(BaseModel):
+    """Response for ``PATCH /v1/ingest/job/{job_id}``."""
+
+    job_id: str
+    status: str
+    updated_at: str
+
+
 class QueryHit(BaseModel):
     """A single search result from the vector store."""
 

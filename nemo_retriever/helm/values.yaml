@@ -46,9 +46,9 @@ service:
     # `repository` / `tag` to pin a different build, e.g. one produced by:
     #   docker build -f nemo_retriever/Dockerfile --target service \
     #       -t <your-registry>/nemo-retriever-service:<tag> .
-    repository: nvcr.io/nvstaging/nim/nemo-retriever-service
-    tag: "043020205-003"
-    pullPolicy: IfNotPresent
+    repository: localhost:32000/nemo-retriever-service
+    tag: "latest"
+    pullPolicy: Always
 
   # Number of pod replicas. Must stay at 1 while persistence is SQLite-backed
   # (RWO PVC + single writer). Bumping this requires switching to a shared

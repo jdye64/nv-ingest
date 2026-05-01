@@ -58,9 +58,24 @@ PROGRESS_INTERVAL_S = 2.0
 # ======================================================================
 
 
+_INGESTABLE_EXTENSIONS = {
+    ".pdf", ".txt", ".html", ".htm", ".doc", ".docx",
+    ".ppt", ".pptx", ".xls", ".xlsx", ".md", ".rst",
+    ".wav", ".mp3", ".flac", ".ogg", ".m4a",
+}
+
+
 def _iter_input_files(input_dir: Path) -> list[str]:
-    """Return every regular file under ``input_dir`` (recursive), sorted."""
-    return [str(p) for p in sorted(input_dir.rglob("*")) if p.is_file()]
+    """Return ingestable files under ``input_dir`` (recursive), sorted.
+
+    Excludes non-document files (CSVs, JSONs, images, etc.) that would
+    be sent to the service but cannot be meaningfully processed.
+    """
+    return [
+        str(p)
+        for p in sorted(input_dir.rglob("*"))
+        if p.is_file() and p.suffix.lower() in _INGESTABLE_EXTENSIONS
+    ]
 
 
 def _print_progress(counts: Counter, files_total: int, elapsed: float) -> None:
@@ -183,7 +198,13 @@ def _load_ground_truth(csv_path: Path) -> list[dict[str, str]]:
 
 
 def _hit_matches(hit: dict[str, Any], gt_pdf: str, gt_page: int) -> bool:
-    """Check if a query/rerank hit matches the ground-truth PDF + page."""
+    """Check if a query/rerank hit matches the ground-truth PDF + page.
+
+    The ground-truth annotations CSV uses 0-indexed page numbers while the
+    pipeline stores 1-indexed page numbers (page_idx + 1).  We accept a
+    match if the hit page equals gt_page (legacy) OR gt_page + 1 (correct
+    offset), and also check the composite pdf_page field.
+    """
     source = str(hit.get("source", ""))
     pdf_basename = str(hit.get("pdf_basename", ""))
     pdf_page = str(hit.get("pdf_page", ""))
@@ -191,7 +212,11 @@ def _hit_matches(hit: dict[str, Any], gt_pdf: str, gt_page: int) -> bool:
 
     pdf_id = gt_pdf.strip()
     source_match = pdf_id in source or pdf_id in pdf_basename
-    page_match = hit_page == gt_page or pdf_page == str(gt_page)
+    page_match = (
+        hit_page == gt_page
+        or hit_page == gt_page + 1
+        or pdf_page == f"{pdf_id}_{gt_page + 1}"
+    )
 
     return source_match and page_match
 

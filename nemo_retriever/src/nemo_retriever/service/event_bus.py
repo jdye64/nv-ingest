@@ -65,7 +65,7 @@ logger = logging.getLogger(__name__)
 
 
 _DEFAULT_MAXSIZE = 8192
-_DEFAULT_BUFFER_SIZE = 1024
+_DEFAULT_BUFFER_SIZE = 4096
 _OVERFLOW_EVENT = {"event": "stream_overflow", "reason": "subscriber_too_slow"}
 
 # How `publish()` reacts when a subscriber's queue is full:
