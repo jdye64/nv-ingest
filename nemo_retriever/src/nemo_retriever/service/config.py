@@ -45,6 +45,7 @@ class NimEndpointsConfig(BaseModel):
     table_structure_invoke_url: str | None = None
     graphic_elements_invoke_url: str | None = None
     embed_invoke_url: str | None = None
+    rerank_invoke_url: str | None = None
     api_key: str | None = None
 
 
@@ -112,6 +113,29 @@ class SpoolConfig(BaseModel):
     cleanup_batch_size: int = 1000
 
 
+class RerankerConfig(BaseModel):
+    """Defaults for the ``/v1/rerank`` endpoint."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model_name: str = "nvidia/llama-nemotron-rerank-1b-v2"
+    default_top_n: int = 10
+
+
+class VectorStoreConfig(BaseModel):
+    """LanceDB vector store settings used by the ``/v1/query`` endpoint."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    lancedb_uri: str = "/var/lib/nemo-retriever/lancedb"
+    lancedb_table: str = "nv-ingest"
+    top_k: int = 10
+    vector_column_name: str = "vector"
+    nprobes: int = 16
+    refine_factor: int = 10
+    embedding_model: str = "nvidia/llama-nemotron-embed-1b-v2"
+
+
 class EventBusConfig(BaseModel):
     """SSE event-bus back-pressure policy.
 
@@ -167,6 +191,8 @@ class ServiceConfig(BaseModel):
     drain: DrainConfig = Field(default_factory=DrainConfig)
     spool: SpoolConfig = Field(default_factory=SpoolConfig)
     event_bus: EventBusConfig = Field(default_factory=EventBusConfig)
+    vector_store: VectorStoreConfig = Field(default_factory=VectorStoreConfig)
+    reranker: RerankerConfig = Field(default_factory=RerankerConfig)
 
 
 def _bundled_yaml_path() -> Path:

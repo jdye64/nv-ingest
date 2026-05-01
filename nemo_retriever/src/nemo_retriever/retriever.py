@@ -4,12 +4,16 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Literal, Optional, Sequence
+
 from tqdm import tqdm
 
 from nemo_retriever.model import VL_EMBED_MODEL, VL_RERANK_MODEL
+
+logger = logging.getLogger(__name__)
 
 _KEEP_KEYS = frozenset(
     {
@@ -32,8 +36,31 @@ _KEEP_KEYS = frozenset(
 class Retriever:
     """Simple query helper over LanceDB with configurable embedders.
 
-    Retrieval pipeline
-    ------------------
+    Run modes
+    ---------
+    ``run_mode="local"`` (default)
+        Embed queries locally (NIM endpoint or HuggingFace model) and
+        search a local LanceDB directory.  All processing happens in
+        this process.
+
+    ``run_mode="service"``
+        Delegate embedding and vector search to a running
+        nemo-retriever service via ``POST /v1/query``.  Set
+        ``service_url`` to the base URL of the service (e.g.
+        ``"http://localhost:7670"``).  When ``reranker`` is enabled,
+        the service's ``POST /v1/rerank`` endpoint is called to
+        re-score and sort results.
+
+    Example — service mode::
+
+        retriever = Retriever(
+            run_mode="service",
+            service_url="http://localhost:7670",
+        )
+        results = retriever.query("What is machine learning?")
+
+    Retrieval pipeline (local mode)
+    -------------------------------
     1. Embed query strings (NIM endpoint or local HuggingFace model).
     2. Search LanceDB (vector or hybrid vector+BM25).
     3. Optionally rerank the results with ``nvidia/llama-nemotron-rerank-1b-v2``
@@ -56,6 +83,17 @@ class Retriever:
         results = retriever.query("What is machine learning?")
     """
 
+    # Run-mode selection ---------------------------------------------------
+    run_mode: Literal["local", "service"] = "local"
+    """``'local'`` for direct LanceDB + NIM/HF embedding; ``'service'`` to
+    delegate to a running nemo-retriever service."""
+    service_url: Optional[str] = None
+    """Base URL of the nemo-retriever service (e.g. ``http://localhost:7670``).
+    Required when ``run_mode='service'``."""
+    service_api_token: Optional[str] = None
+    """Optional bearer token for authenticating with the service."""
+
+    # Local-mode settings --------------------------------------------------
     lancedb_uri: str = "lancedb"
     lancedb_table: str = "nv-ingest"
     embedder: str = VL_EMBED_MODEL
@@ -282,6 +320,132 @@ class Retriever:
         return reranked
 
     # ------------------------------------------------------------------
+    # Service-mode helpers
+    # ------------------------------------------------------------------
+
+    def _validate_service_config(self) -> str:
+        """Return the normalized service base URL, or raise."""
+        url = (self.service_url or "").strip().rstrip("/")
+        if not url:
+            raise ValueError(
+                "service_url is required when run_mode='service'. "
+                "Set it to the base URL of the nemo-retriever service "
+                "(e.g. 'http://localhost:7670')."
+            )
+        if not url.lower().startswith("http"):
+            raise ValueError(f"service_url must be an HTTP(S) URL, got: {url!r}")
+        return url
+
+    def _service_headers(self) -> dict[str, str]:
+        """Build HTTP headers for service requests (auth + content-type)."""
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        token = (self.service_api_token or "").strip()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        return headers
+
+    def _service_post(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """POST JSON to a service endpoint with standard error handling."""
+        import httpx
+
+        base_url = self._validate_service_config()
+        full_url = f"{base_url}{url}"
+
+        try:
+            with httpx.Client(timeout=httpx.Timeout(300.0, connect=30.0)) as client:
+                resp = client.post(full_url, json=payload, headers=self._service_headers())
+        except httpx.ConnectError as exc:
+            raise ConnectionError(
+                f"Failed to connect to the nemo-retriever service at {base_url!r}: " f"{type(exc).__name__}: {exc}"
+            ) from exc
+        except httpx.TimeoutException as exc:
+            raise TimeoutError(
+                f"Request to nemo-retriever service timed out ({base_url!r}): " f"{type(exc).__name__}: {exc}"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise RuntimeError(
+                f"HTTP error communicating with nemo-retriever service ({base_url!r}): " f"{type(exc).__name__}: {exc}"
+            ) from exc
+
+        if resp.status_code != 200:
+            detail = ""
+            try:
+                detail = resp.json().get("detail", resp.text)
+            except Exception:
+                detail = resp.text
+            raise RuntimeError(f"Service request to {url} failed with HTTP {resp.status_code}: {detail}")
+
+        return resp.json()
+
+    def _queries_via_service(
+        self,
+        query_texts: list[str],
+        *,
+        lancedb_uri: Optional[str] = None,
+        lancedb_table: Optional[str] = None,
+    ) -> list[list[dict[str, Any]]]:
+        """Delegate retrieval to the nemo-retriever service ``POST /v1/query``."""
+        payload: dict[str, Any] = {
+            "query": query_texts if len(query_texts) > 1 else query_texts[0],
+            "top_k": self.top_k if not self.reranker else self.top_k * self.reranker_refine_factor,
+            "hybrid": self.hybrid,
+        }
+        if lancedb_uri is not None:
+            payload["lancedb_uri"] = lancedb_uri
+        if lancedb_table is not None:
+            payload["lancedb_table"] = lancedb_table
+
+        logger.debug("Service query: %d queries", len(query_texts))
+        body = self._service_post("/v1/query", payload)
+
+        all_results: list[list[dict[str, Any]]] = []
+        for result_set in body.get("results", []):
+            hits: list[dict[str, Any]] = []
+            for hit in result_set.get("hits", []):
+                row: dict[str, Any] = {}
+                for key in _KEEP_KEYS:
+                    if key in hit:
+                        row[key] = hit[key]
+                hits.append(row)
+            all_results.append(hits)
+
+        return all_results
+
+    def _rerank_via_service(
+        self,
+        query_texts: list[str],
+        results: list[list[dict[str, Any]]],
+    ) -> list[list[dict[str, Any]]]:
+        """Rerank each per-query result list via ``POST /v1/rerank``."""
+        reranked: list[list[dict[str, Any]]] = []
+        for query_text, hits in zip(query_texts, results):
+            if not hits:
+                reranked.append([])
+                continue
+
+            payload: dict[str, Any] = {
+                "query": query_text,
+                "passages": hits,
+                "top_n": self.top_k,
+            }
+            if self.reranker_model_name:
+                payload["model_name"] = self.reranker_model_name
+
+            logger.debug("Service rerank: query=%r, %d passages", query_text[:80], len(hits))
+            body = self._service_post("/v1/rerank", payload)
+
+            ranked_hits: list[dict[str, Any]] = []
+            for hit in body.get("results", []):
+                row: dict[str, Any] = {"_rerank_score": hit.get("rerank_score", 0.0)}
+                for key in _KEEP_KEYS:
+                    if key in hit:
+                        row[key] = hit[key]
+                ranked_hits.append(row)
+            reranked.append(ranked_hits)
+
+        return reranked
+
+    # ------------------------------------------------------------------
     # Public query API
     # ------------------------------------------------------------------
 
@@ -311,14 +475,35 @@ class Retriever:
     ) -> list[list[dict[str, Any]]]:
         """Run retrieval for multiple query strings.
 
-        If ``reranker`` is set on this instance the initial vector-search
-        results are re-scored with ``nvidia/llama-nemotron-rerank-1b-v2``
-        (or the configured endpoint) and returned sorted by cross-encoder
-        score.  Each hit gains a ``"_rerank_score"`` key.
+        When ``run_mode='local'``:
+            Embeds locally, searches LanceDB directly, and optionally
+            reranks with the configured reranker.
+
+        When ``run_mode='service'``:
+            Delegates embedding and vector search to the nemo-retriever
+            service at ``service_url``.  When ``reranker`` is set the
+            service's ``/v1/rerank`` endpoint is called to re-score and
+            sort the results; each hit gains a ``"_rerank_score"`` key.
+
+        If ``reranker`` is set on this instance (local mode) the initial
+        vector-search results are re-scored with
+        ``nvidia/llama-nemotron-rerank-1b-v2`` (or the configured endpoint)
+        and returned sorted by cross-encoder score.  Each hit gains a
+        ``"_rerank_score"`` key.
         """
         query_texts = [str(q) for q in queries]
         if not query_texts:
             return []
+
+        if self.run_mode == "service":
+            results = self._queries_via_service(
+                query_texts,
+                lancedb_uri=lancedb_uri,
+                lancedb_table=lancedb_table,
+            )
+            if self.reranker:
+                results = self._rerank_via_service(query_texts, results)
+            return results
 
         resolved_embedder = str(embedder or self.embedder)
         resolved_lancedb_uri = str(lancedb_uri or self.lancedb_uri)

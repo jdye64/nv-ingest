@@ -199,11 +199,13 @@ def create_app(config: ServiceConfig) -> FastAPI:
     else:
         logger.info("Bearer-token authentication DISABLED (no api_token configured)")
 
-    from nemo_retriever.service.routers import ingest, internal, metrics, stream, system
+    from nemo_retriever.service.routers import ingest, internal, metrics, query, rerank, stream, system
 
     app.include_router(ingest.router, prefix="/v1")
     app.include_router(internal.router, prefix="/v1")
     app.include_router(metrics.router, prefix="/v1")
+    app.include_router(query.router, prefix="/v1")
+    app.include_router(rerank.router, prefix="/v1")
     app.include_router(stream.router, prefix="/v1")
     app.include_router(system.router, prefix="/v1")
 

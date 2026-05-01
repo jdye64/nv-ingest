@@ -197,6 +197,72 @@ class JobCancelResponse(BaseModel):
     )
 
 
+class QueryHit(BaseModel):
+    """A single search result from the vector store."""
+
+    text: str = ""
+    source: str = ""
+    page_number: int = 0
+    pdf_page: str = ""
+    pdf_basename: str = ""
+    source_id: str = ""
+    path: str = ""
+    stored_image_uri: str = ""
+    content_type: str = ""
+    bbox_xyxy_norm: str = ""
+    score: float = Field(description="Distance score from the vector search (lower is closer for L2).")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class QueryResultSet(BaseModel):
+    """Results for one query string inside a batch response."""
+
+    query: str
+    hits: list[QueryHit] = Field(default_factory=list)
+    total_hits: int = Field(description="Number of hits returned for this query.")
+
+
+class QueryResponse(BaseModel):
+    """Response for ``POST /v1/query``.
+
+    Always returns one :class:`QueryResultSet` per input query, even when
+    the request contained a single string (in that case ``results`` has
+    exactly one entry).
+    """
+
+    results: list[QueryResultSet] = Field(default_factory=list)
+    total_queries: int = Field(description="Number of queries processed.")
+    lancedb_uri: str = Field(description="The LanceDB URI that was queried.")
+    lancedb_table: str = Field(description="The LanceDB table that was queried.")
+    embedding_model: str = Field(description="The embedding model used to vectorise the queries.")
+
+
+class RerankHit(BaseModel):
+    """A single reranked passage with its score and all original fields."""
+
+    rerank_score: float = Field(description="Reranker logit score (higher is more relevant).")
+    text: str = ""
+    source: str = ""
+    page_number: int = 0
+    pdf_page: str = ""
+    pdf_basename: str = ""
+    source_id: str = ""
+    path: str = ""
+    stored_image_uri: str = ""
+    content_type: str = ""
+    bbox_xyxy_norm: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class RerankResponse(BaseModel):
+    """Response for ``POST /v1/rerank``."""
+
+    query: str
+    results: list[RerankHit] = Field(default_factory=list)
+    total_results: int = Field(description="Number of reranked results returned.")
+    model_name: str = Field(description="The reranker model that was used.")
+
+
 class HealthResponse(BaseModel):
     """Response for ``GET /v1/health``."""
 
@@ -229,6 +295,7 @@ class CapabilitiesResponse(BaseModel):
     table_structure: CapabilityFlag
     graphic_elements: CapabilityFlag
     embed: CapabilityFlag
+    rerank: CapabilityFlag
     auth_required: bool
     server_pdf_split: bool
     bulk_upload: bool

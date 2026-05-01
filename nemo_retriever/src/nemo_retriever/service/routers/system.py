@@ -78,6 +78,7 @@ async def capabilities(request: Request) -> CapabilitiesResponse:
         table_structure=_flag_for(nim.table_structure_invoke_url),
         graphic_elements=_flag_for(nim.graphic_elements_invoke_url),
         embed=_flag_for(nim.embed_invoke_url),
+        rerank=_flag_for(nim.rerank_invoke_url),
         auth_required=auth_required,
         server_pdf_split=True,
         bulk_upload=True,
