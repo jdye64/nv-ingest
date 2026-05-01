@@ -86,14 +86,14 @@ OverflowPolicy = Literal["drop_low_priority", "backpressure", "block"]
 # carry observability/progress information that a recovering client can
 # reconstruct from the REST status endpoints; losing one does not change
 # the final result of a job.  Terminal events (``job_complete``,
-# ``status_change``, ``page_result``, ``stream_overflow``,
-# ``session_complete``) are intentionally NOT in this set — they must be
-# preserved or the consumer cannot make forward progress.
+# ``document_complete``, ``status_change``, ``page_result``,
+# ``stream_overflow``, ``session_complete``) are intentionally NOT in
+# this set — they must be preserved or the consumer cannot make forward
+# progress.
 _DEFAULT_PRIORITY_DROP: frozenset[str] = frozenset(
     {
         "metrics_update",
         "page_complete",
-        "document_complete",
     }
 )
 

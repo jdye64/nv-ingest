@@ -104,7 +104,7 @@ spool:
 # Override lancedb_uri for local development — the container default
 # (/var/lib/nemo-retriever/lancedb) won't exist on the host.
 vector_store:
-  lancedb_uri: "/var/lib/nemo-retriever/lancedb"
+  lancedb_uri: "/home/local/jdyer/Development/NeMo-Retriever/lancedb"
   lancedb_table: "nv-ingest"
   top_k: 10
   vector_column_name: "vector"

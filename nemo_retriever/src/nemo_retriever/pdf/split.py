@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 import traceback
 
 import pandas as pd
+from nemo_retriever.nim.error_reporter import report_error
 from nemo_retriever.params import PdfSplitParams
 from nemo_retriever.graph.abstract_operator import AbstractOperator
 from nemo_retriever.graph.cpu_operator import CPUOperator
@@ -165,6 +166,7 @@ def split_pdf_batch(pdf_batch: Any, params: PdfSplitParams | None = None) -> pd.
                 out_row.update(extra)
                 out_rows.append(out_row)
         except BaseException as e:
+            report_error("pdf_split", e)
             err = _error_record(
                 source_path=str(pdf_path) if pdf_path is not None else None,
                 stage="split_pdf",

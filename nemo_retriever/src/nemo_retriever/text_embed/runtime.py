@@ -13,6 +13,7 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
+from nemo_retriever.nim.error_reporter import report_error
 from nemo_retriever.model import resolve_embed_model
 from nemo_retriever.params.models import IMAGE_MODALITIES
 from nemo_retriever.text_embed.main_text_embed import TextEmbeddingConfig, create_text_embeddings_for_df
@@ -161,6 +162,7 @@ def embed_text_main_text_embed(
             out_df = pd.concat(parts).sort_index()
     except Exception as exc:
         logger.error("Embedding failed: %s: %s", type(exc).__name__, exc, exc_info=True)
+        report_error("embed", exc)
         out_df = batch_df.copy()
         out_df[output_column] = [{"embedding": [], "error": str(exc)}] * len(out_df)
         out_df[embedding_dim_column] = 0

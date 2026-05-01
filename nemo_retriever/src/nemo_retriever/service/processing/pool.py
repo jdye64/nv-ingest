@@ -33,6 +33,7 @@ import json
 import logging
 import multiprocessing
 import os
+import signal
 import threading
 import time
 import traceback as _traceback
@@ -288,6 +289,41 @@ _worker_chain: list[tuple[str, Any]] | None = None
 _worker_db_path: str | None = None
 
 
+def _record_probe_events(db_path: str) -> None:
+    """Persist NIM probe failures collected during operator-chain init."""
+    from nemo_retriever.nim.probe import drain_probe_results
+
+    results = drain_probe_results()
+    failures = [r for r in results if r.status != "ok"]
+    if not failures:
+        return
+
+    try:
+        engine = DatabaseEngine(db_path)
+        repo = Repository(engine)
+    except Exception:
+        logger.warning("[pid %d] Could not open DB to record probe events", os.getpid())
+        return
+
+    for result in failures:
+        category = (
+            EventCategory.NIM_UNREACHABLE.value
+            if result.status == "unreachable"
+            else EventCategory.NIM_TIMEOUT.value
+        )
+        record_event(
+            repo,
+            category=category,
+            severity=EventSeverity.ERROR,
+            outcome=EventOutcome.FAILED,
+            summary=f"{result.prefix}: {result.name} endpoint unreachable at startup",
+            detail=result.detail,
+            stage="probe",
+            endpoint="pipeline",
+            extra={"probe_url": result.url, "nim_name": result.name},
+        )
+
+
 def _worker_initializer(
     db_path: str,
     nim_config_queue: multiprocessing.Queue,  # type: ignore[type-arg]
@@ -302,6 +338,12 @@ def _worker_initializer(
     config is used so the worker still functions.
     """
     global _worker_chain, _worker_db_path
+
+    # Workers should not handle SIGINT — the main process owns shutdown.
+    # Without this, Ctrl+C causes noisy KeyboardInterrupt tracebacks from
+    # every worker blocked on call_queue.get().
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
     try:
         import setproctitle
 
@@ -318,6 +360,8 @@ def _worker_initializer(
 
     nim = NimEndpointsConfig(**nim_config_dict)
     _worker_chain = _build_operator_chain(os.getpid(), nim, vector_store_config=vector_store_config)
+
+    _record_probe_events(db_path)
 
 
 @dataclasses.dataclass
@@ -522,30 +566,68 @@ def _run_pipeline_batch(
     started_at = datetime.now(timezone.utc).isoformat()
     t0 = time.monotonic()
 
-    try:
-        if _worker_chain is None:
-            raise RuntimeError("Worker operator chain not initialised — _worker_initializer was never called")
-        for stage_name, op in _worker_chain:
+    from nemo_retriever.nim.error_reporter import drain_errors
+
+    if _worker_chain is None:
+        raise RuntimeError("Worker operator chain not initialised — _worker_initializer was never called")
+
+    failed_stage: str | None = None
+    failed_exc: BaseException | None = None
+    for stage_name, op in _worker_chain:
+        try:
             df = op.run(df)
             if df is None:
                 raise RuntimeError(
                     f"Operator '{stage_name}' ({type(op).__name__}) returned None instead of a DataFrame"
                 )
-    except BaseException as exc:
+        except BaseException as exc:
+            failed_stage = stage_name
+            failed_exc = exc
+            break
+
+        # Drain any exceptions caught internally by this operator
+        for err in drain_errors():
+            record_event(
+                repo,
+                category=EventCategory.from_failure_type(categorize_exception(ValueError(err.message))).value,
+                severity=EventSeverity.WARNING,
+                outcome=EventOutcome.RECOVERED,
+                summary=f"{stage_name}: {err.exc_type}: {err.message[:150]}",
+                detail=err.message,
+                stack_trace=err.traceback,
+                stage=err.stage or stage_name,
+                endpoint="pipeline",
+                job_id=runnable_pages[0].job_id if runnable_pages else None,
+                document_id=runnable_pages[err.row_index].document_id
+                if err.row_index is not None and err.row_index < len(runnable_pages)
+                else None,
+                source_file=runnable_pages[err.row_index].filename
+                if err.row_index is not None and err.row_index < len(runnable_pages)
+                else "",
+                page_number=runnable_pages[err.row_index].page_number
+                if err.row_index is not None and err.row_index < len(runnable_pages)
+                else None,
+            )
+
+    if failed_exc is not None:
+        # Drain any remaining errors from the failed stage
+        drain_errors()
+
         elapsed_ms = (time.monotonic() - t0) * 1000.0
-        error_msg = f"{type(exc).__name__}: {exc}"
-        failure_type = categorize_exception(exc).value
-        tb_str = _traceback.format_exc()
+        error_msg = f"{type(failed_exc).__name__}: {failed_exc}"
+        failure_type = categorize_exception(failed_exc).value
+        tb_str = "".join(_traceback.format_exception(type(failed_exc), failed_exc, failed_exc.__traceback__))
         logger.error(
-            "[worker %d] BATCH FAILED (%d pages, failure_type=%s): %s",
+            "[worker %d] BATCH FAILED at stage '%s' (%d pages, failure_type=%s): %s",
             pid,
+            failed_stage,
             n_pages,
             failure_type,
             error_msg,
-            exc_info=True,
+            exc_info=failed_exc,
         )
         completed_at = datetime.now(timezone.utc).isoformat()
-        event_category = EventCategory.from_failure_type(categorize_exception(exc)).value
+        event_category = EventCategory.from_failure_type(categorize_exception(failed_exc)).value
         fail_results: list[WorkerResult] = list(skipped)
         for p in runnable_pages:
             _mark_page_failed(repo, p, error_msg, started_at, completed_at, failure_type)
@@ -554,10 +636,10 @@ def _run_pipeline_batch(
                 category=event_category,
                 severity=EventSeverity.ERROR,
                 outcome=EventOutcome.FAILED,
-                summary=f"Pipeline batch failed: {error_msg[:200]}",
+                summary=f"Pipeline failed at stage '{failed_stage}': {error_msg[:180]}",
                 detail=error_msg,
                 stack_trace=tb_str,
-                stage="pipeline",
+                stage=failed_stage or "pipeline",
                 endpoint="pipeline",
                 job_id=p.job_id,
                 document_id=p.document_id,
@@ -851,11 +933,13 @@ class _BatchBuffer:
         timeout_s: float,
         max_buffered: int,
         dispatch_fn: "typing.Callable[[list[dict[str, Any]]], None]",
+        db_engine: DatabaseEngine | None = None,
     ) -> None:
         self._batch_size = batch_size
         self._timeout_s = timeout_s
         self._max_buffered = max_buffered
         self._dispatch_fn = dispatch_fn
+        self._db_engine = db_engine
         self._lock = threading.Lock()
         self._buffer: list[dict[str, Any]] = []
         self._timer: threading.Timer | None = None
@@ -913,8 +997,24 @@ class _BatchBuffer:
         """Dispatch a batch outside the lock, handling errors."""
         try:
             self._dispatch_fn(batch)
-        except Exception:
+        except Exception as exc:
             logger.exception("Failed to dispatch batch of %d pages", len(batch))
+            if self._db_engine is not None:
+                try:
+                    repo = Repository(self._db_engine)
+                    record_event(
+                        repo,
+                        category=EventCategory.DISPATCH.value,
+                        severity=EventSeverity.ERROR,
+                        outcome=EventOutcome.FAILED,
+                        summary=f"Batch dispatch failed: {type(exc).__name__}: {exc}"[:200],
+                        detail=str(exc),
+                        stack_trace=_traceback.format_exc(),
+                        stage="dispatch",
+                        endpoint="pipeline",
+                    )
+                except Exception:
+                    pass
 
     def _start_timer_locked(self) -> None:
         self._cancel_timer_locked()
@@ -1028,6 +1128,7 @@ class ProcessingPool:
             timeout_s=self._batch_timeout_s,
             max_buffered=max_buffered,
             dispatch_fn=self._dispatch_batch,
+            db_engine=self._db_engine,
         )
         logger.info(
             "Batch buffer ready — batch_size=%d, timeout=%.1fs, max_buffered=%d",
@@ -1378,6 +1479,21 @@ class ProcessingPool:
             batch_result = future.result()
         except Exception as exc:
             logger.exception("Worker process raised an unhandled exception: %s", exc)
+            try:
+                repo = Repository(self._db_engine)
+                record_event(
+                    repo,
+                    category=EventCategory.INTERNAL.value,
+                    severity=EventSeverity.ERROR,
+                    outcome=EventOutcome.FAILED,
+                    summary=f"Worker process crashed: {type(exc).__name__}: {exc}"[:200],
+                    detail=str(exc),
+                    stack_trace=_traceback.format_exc(),
+                    stage="worker_process",
+                    endpoint="pipeline",
+                )
+            except Exception:
+                pass
             return
 
         for result in batch_result.results:

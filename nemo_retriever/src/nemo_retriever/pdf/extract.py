@@ -23,6 +23,7 @@ from nv_ingest_api.util.pdf.pdfium import (
 
 import pandas as pd
 
+from nemo_retriever.nim.error_reporter import report_error
 from nemo_retriever.graph.abstract_operator import AbstractOperator
 from nemo_retriever.graph.cpu_operator import CPUOperator
 from nemo_retriever.graph.designer import designer_component
@@ -397,6 +398,7 @@ def pdf_extraction(
                     except Exception:
                         pass
             except BaseException as e:
+                report_error("pdf_extraction:page_processing", e)
                 err = _error_record(
                     source_path=str(pdf_path) if pdf_path is not None else None,
                     stage="page_processing",

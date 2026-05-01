@@ -161,7 +161,7 @@ class EventBusConfig(BaseModel):
     overflow_policy: Literal["drop_low_priority", "backpressure", "block"] = "drop_low_priority"
     # Per-subscription queue size.  Larger queues smooth bigger bursts
     # before back-pressure or shedding kicks in, at the cost of memory.
-    queue_maxsize: int = 8192
+    queue_maxsize: int = 16384
     # Per-key replay buffer size.  When a client reconnects with
     # ``Last-Event-ID`` the server replays from this deque, so it should
     # comfortably cover one document's full event history.

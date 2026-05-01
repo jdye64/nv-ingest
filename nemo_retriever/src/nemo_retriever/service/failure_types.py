@@ -63,6 +63,7 @@ class EventCategory(str, enum.Enum):
     DEDUP = "dedup"
 
     # -- NIM transport --------------------------------------------------
+    NIM_UNREACHABLE = "nim_unreachable"
     NIM_TIMEOUT = "nim_timeout"
     NIM_5XX = "nim_5xx"
     NIM_4XX = "nim_4xx"
@@ -81,6 +82,7 @@ class EventCategory(str, enum.Enum):
     # -- Infrastructure -------------------------------------------------
     OOM = "oom"
     SPOOL = "spool"
+    DISPATCH = "dispatch"
 
     # -- Lifecycle ------------------------------------------------------
     CANCELLED = "cancelled"

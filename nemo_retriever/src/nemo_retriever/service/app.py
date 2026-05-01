@@ -15,7 +15,10 @@ from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 from typing import AsyncIterator
 
+import traceback as _traceback
+
 from fastapi import FastAPI, Request, Response
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
 from pathlib import Path
@@ -134,8 +137,26 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             recovered = await asyncio.to_thread(pool.recover_from_spool)
             if recovered:
                 logger.info("Spool recovery re-enqueued %d page(s)", recovered)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             logger.exception("Spool recovery failed — continuing with cold start")
+            try:
+                from nemo_retriever.service.event_logger import record_event
+                from nemo_retriever.service.failure_types import EventCategory
+                from nemo_retriever.service.models.event_log import EventOutcome, EventSeverity
+
+                record_event(
+                    app.state.repository,
+                    category=EventCategory.SPOOL.value,
+                    severity=EventSeverity.ERROR,
+                    outcome=EventOutcome.FAILED,
+                    summary=f"Spool recovery failed at startup: {type(exc).__name__}: {exc}"[:200],
+                    detail=str(exc),
+                    stack_trace=_traceback.format_exc(),
+                    stage="spool_recovery",
+                    endpoint="startup",
+                )
+            except Exception:
+                pass
         pool.start_spool_cleanup()
 
     metrics_task = start_metrics_refresh_loop(app)
@@ -231,5 +252,32 @@ def create_app(config: ServiceConfig) -> FastAPI:
     # Prometheus instrumentation must be wired before the app starts —
     # the lifespan only kicks off the periodic gauge-refresh task.
     setup_metrics_instrumentation(app)
+
+    @app.exception_handler(Exception)
+    async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        """Catch-all for unhandled exceptions: persist to provenance log."""
+        from nemo_retriever.service.event_logger import record_event
+        from nemo_retriever.service.failure_types import EventCategory
+        from nemo_retriever.service.models.event_log import EventOutcome, EventSeverity
+
+        logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+        req_id = getattr(request.state, "request_id", "")
+        try:
+            repo = Repository(app.state.db_engine)
+            record_event(
+                repo,
+                category=EventCategory.INTERNAL.value,
+                severity=EventSeverity.ERROR,
+                outcome=EventOutcome.FAILED,
+                summary=f"Unhandled exception: {type(exc).__name__}: {exc}"[:200],
+                detail=str(exc),
+                stack_trace=_traceback.format_exc(),
+                stage="http_handler",
+                endpoint=request.url.path,
+                request_id=req_id,
+            )
+        except Exception:
+            pass
+        return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
     return app

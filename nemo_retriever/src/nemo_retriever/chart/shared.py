@@ -12,6 +12,7 @@ import time
 import traceback
 
 import pandas as pd
+from nemo_retriever.nim.error_reporter import report_error
 from nemo_retriever.nim.nim import NIMClient, invoke_image_inference_batches
 from nemo_retriever.params import RemoteRetryParams
 
@@ -434,6 +435,7 @@ def graphic_elements_ocr_page_elements(
 
         except BaseException as e:
             print(f"Warning: chart crop collection failed for row {row_i}: {type(e).__name__}: {e}")
+            report_error("graphic_elements_ocr_page_elements:crop", e, row_index=row_i)
             all_meta[row_i]["error"] = {
                 "stage": "graphic_elements_ocr_page_elements:crop",
                 "type": e.__class__.__name__,
@@ -500,6 +502,7 @@ def graphic_elements_ocr_page_elements(
                 ge_results[ci] = [d for d in ge_dets if (d.get("score") or 0.0) >= YOLOX_GRAPHIC_MIN_SCORE]
     except BaseException as e:
         print(f"Warning: graphic-elements batch inference failed: {type(e).__name__}: {e}")
+        report_error("graphic_elements_ocr_page_elements:graphic_elements", e)
         err_payload = {
             "stage": "graphic_elements_ocr_page_elements:graphic_elements",
             "type": e.__class__.__name__,
@@ -540,6 +543,7 @@ def graphic_elements_ocr_page_elements(
                 ocr_results[ci] = ocr_model.invoke(crop_array, merge_level="word")
     except BaseException as e:
         print(f"Warning: chart OCR batch inference failed: {type(e).__name__}: {e}")
+        report_error("graphic_elements_ocr_page_elements:ocr", e)
         err_payload = {
             "stage": "graphic_elements_ocr_page_elements:ocr",
             "type": e.__class__.__name__,

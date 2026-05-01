@@ -1171,12 +1171,12 @@ class RetrieverServiceClient:
                 failures so a single dropped TCP connection (common on
                 Kubernetes NodePort / kube-proxy paths under burst load)
                 does not silently truncate the result stream.
+
+                If ``pending_jobs`` hasn't shrunk for 120s, polls the REST
+                API to detect silently-completed jobs and removes them.
                 """
-                # Wait until every file has been split so the SSE subscription
-                # covers the full set of job_ids in one shot.  Subscribing
-                # earlier would miss events for jobs created after the SSE
-                # POST opened, since the server's subscribe_many takes an
-                # immutable key set.
+                _STALE_TIMEOUT = 120.0
+
                 await splits_done.wait()
                 if not job_ids:
                     return
@@ -1187,6 +1187,28 @@ class RetrieverServiceClient:
                 transport_attempts = 0
                 overflow_count = 0
                 terminal = False
+                last_progress_time = time.monotonic()
+
+                async def _check_stale_jobs() -> None:
+                    """Poll REST API for each pending job and resolve terminal ones."""
+                    nonlocal last_progress_time
+                    resolved_any = False
+                    for jid in list(pending_jobs):
+                        try:
+                            r = await client.get(f"{self._base_url}/v1/ingest/job/{jid}")
+                            r.raise_for_status()
+                            body = r.json()
+                            status = body.get("status", "")
+                            if status in ("complete", "failed"):
+                                pending_jobs.discard(jid)
+                                await result_queue.put(
+                                    {"event": "job_complete", "job_id": jid, "synthetic": True}
+                                )
+                                resolved_any = True
+                        except Exception:
+                            pass
+                    if resolved_any:
+                        last_progress_time = time.monotonic()
 
                 try:
                     while not terminal and (pending_jobs or not uploads_done.is_set()):
@@ -1209,6 +1231,12 @@ class RetrieverServiceClient:
                                     try:
                                         chunk = await asyncio.wait_for(stream_iter.__anext__(), timeout=5.0)
                                     except asyncio.TimeoutError:
+                                        if (
+                                            pending_jobs
+                                            and uploads_done.is_set()
+                                            and (time.monotonic() - last_progress_time) >= _STALE_TIMEOUT
+                                        ):
+                                            await _check_stale_jobs()
                                         continue
                                     except StopAsyncIteration:
                                         break
@@ -1230,9 +1258,11 @@ class RetrieverServiceClient:
                                         elif event_type == "status_change" and event.get("status") == "failed":
                                             await result_queue.put({**event, "event": "page_failed"})
                                             pending_jobs.discard(event.get("job_id"))
+                                            last_progress_time = time.monotonic()
                                         elif event_type == "job_complete":
                                             await result_queue.put(event)
                                             pending_jobs.discard(event.get("job_id"))
+                                            last_progress_time = time.monotonic()
                                         elif event_type == "stream_overflow":
                                             # Recoverable: server's subscriber
                                             # queue saturated.  Reconnect with

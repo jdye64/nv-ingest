@@ -265,6 +265,19 @@ async def ingest_document(
             repo.update_document_spool_path(doc.id, spool_path)
         except OSError as exc:
             logger.exception("Spool write failed for doc %s", doc.id)
+            record_event(
+                repo,
+                category=EventCategory.SPOOL.value,
+                severity=EventSeverity.ERROR,
+                outcome=EventOutcome.FAILED,
+                summary=f"Spool write failed: {exc.__class__.__name__}: {exc}",
+                detail=str(exc),
+                stage="spool_write",
+                endpoint="/v1/ingest",
+                document_id=doc.id,
+                source_file=filename,
+                request_id=req_id,
+            )
             return JSONResponse(
                 status_code=503,
                 content={
@@ -287,6 +300,19 @@ async def ingest_document(
     if not accepted:
         repo.update_document_status(doc.id, ProcessingStatus.QUEUED)
         logger.warning("Document %s queued but buffer became full between check and submit", doc.id)
+        record_event(
+            repo,
+            category=EventCategory.INTERNAL.value,
+            severity=EventSeverity.WARNING,
+            outcome=EventOutcome.FAILED,
+            summary="Batch buffer full — page not submitted",
+            detail="Buffer became full between capacity check and submit",
+            stage="submit",
+            endpoint="/v1/ingest",
+            document_id=doc.id,
+            source_file=filename,
+            request_id=req_id,
+        )
         return JSONResponse(
             status_code=503,
             content={
@@ -739,8 +765,19 @@ async def ingest_whole_job(
     """
     pool = request.app.state.processing_pool
     repo: Repository = request.app.state.repository
+    req_id = getattr(request.state, "request_id", "")
 
     if pool.is_draining:
+        record_event(
+            repo,
+            category=EventCategory.INTERNAL.value,
+            severity=EventSeverity.WARNING,
+            outcome=EventOutcome.RECOVERED,
+            summary="Ingest job rejected: server draining",
+            stage="accept",
+            endpoint="/v1/ingest/job",
+            request_id=req_id,
+        )
         return JSONResponse(
             status_code=503,
             content={"detail": "Server is draining for shutdown; not accepting new uploads."},
@@ -748,6 +785,16 @@ async def ingest_whole_job(
         )
 
     if not pool.has_capacity():
+        record_event(
+            repo,
+            category=EventCategory.INTERNAL.value,
+            severity=EventSeverity.WARNING,
+            outcome=EventOutcome.RECOVERED,
+            summary="Ingest job rejected: server at capacity",
+            stage="accept",
+            endpoint="/v1/ingest/job",
+            request_id=req_id,
+        )
         return JSONResponse(
             status_code=503,
             content={
@@ -847,8 +894,19 @@ async def ingest_batch(
     """
     pool = request.app.state.processing_pool
     repo: Repository = request.app.state.repository
+    req_id = getattr(request.state, "request_id", "")
 
     if pool.is_draining:
+        record_event(
+            repo,
+            category=EventCategory.INTERNAL.value,
+            severity=EventSeverity.WARNING,
+            outcome=EventOutcome.RECOVERED,
+            summary="Batch ingest rejected: server draining",
+            stage="accept",
+            endpoint="/v1/ingest/batch",
+            request_id=req_id,
+        )
         return JSONResponse(
             status_code=503,
             content={"detail": "Server is draining for shutdown; not accepting new uploads."},
@@ -856,6 +914,16 @@ async def ingest_batch(
         )
 
     if not pool.has_capacity():
+        record_event(
+            repo,
+            category=EventCategory.INTERNAL.value,
+            severity=EventSeverity.WARNING,
+            outcome=EventOutcome.RECOVERED,
+            summary="Batch ingest rejected: server at capacity",
+            stage="accept",
+            endpoint="/v1/ingest/batch",
+            request_id=req_id,
+        )
         return JSONResponse(
             status_code=503,
             content={

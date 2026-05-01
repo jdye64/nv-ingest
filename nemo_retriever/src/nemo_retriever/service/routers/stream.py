@@ -137,7 +137,7 @@ async def _single_doc_generator(
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=30.0)
             except asyncio.TimeoutError:
-                yield ": keepalive\n\n"
+                yield f"event: keepalive\ndata: {json.dumps({'pending': 1})}\n\n"
                 continue
 
             event_type = event.get("event", "message")
@@ -157,6 +157,7 @@ async def _multi_doc_generator(
     *,
     after_seq: int = 0,
     include_content: bool = False,
+    repository: Repository | None = None,
 ) -> AsyncIterator[str]:
     """Yield SSE frames for *all* listed documents on a single connection."""
     async for frame in _replay_buffered(event_bus, document_ids, after_seq, include_content):
@@ -167,14 +168,27 @@ async def _multi_doc_generator(
         wanted.add("page_result")
     queue = event_bus.subscribe_many(document_ids, event_types=wanted)
     pending = set(document_ids)
+    stale_keepalives = 0
     try:
         while pending:
             try:
-                event = await asyncio.wait_for(queue.get(), timeout=30.0)
+                event = await asyncio.wait_for(queue.get(), timeout=_STALE_POLL_INTERVAL_S)
             except asyncio.TimeoutError:
-                yield ": keepalive\n\n"
+                stale_keepalives += 1
+                if stale_keepalives >= 1 and repository is not None:
+                    resolved = await _poll_terminal_documents(repository, pending)
+                    for doc_id in resolved:
+                        pending.discard(doc_id)
+                        synth = {"event": "document_complete", "document_id": doc_id, "synthetic": True}
+                        frame = _format_event(synth, include_content)
+                        if frame is not None:
+                            yield frame
+                    if not pending:
+                        break
+                yield f"event: keepalive\ndata: {json.dumps({'pending': len(pending)})}\n\n"
                 continue
 
+            stale_keepalives = 0
             event_type = event.get("event", "message")
 
             if event_type == "stream_overflow":
@@ -198,12 +212,31 @@ async def _multi_doc_generator(
         event_bus.unsubscribe_many(document_ids, queue)
 
 
+async def _poll_terminal_documents(repo: Repository, pending: set[str]) -> list[str]:
+    """Check DB for documents that reached terminal state without an SSE event."""
+    resolved: list[str] = []
+    for doc_id in list(pending):
+        try:
+            doc = await asyncio.to_thread(repo.get_document, doc_id)
+            if doc is None:
+                continue
+            if doc.processing_status in ("complete", "failed", "cancelled"):
+                resolved.append(doc_id)
+        except Exception:
+            pass
+    return resolved
+
+
+_STALE_POLL_INTERVAL_S = 30.0
+
+
 async def _job_stream_generator(
     event_bus: EventBus,
     job_ids: list[str],
     *,
     after_seq: int = 0,
     include_content: bool = False,
+    repository: Repository | None = None,
 ) -> AsyncIterator[str]:
     """Yield SSE frames for one or more jobs until every job completes."""
     async for frame in _replay_buffered(event_bus, job_ids, after_seq, include_content):
@@ -214,14 +247,27 @@ async def _job_stream_generator(
         wanted.add("page_result")
     queue = event_bus.subscribe_many(job_ids, event_types=wanted)
     pending = set(job_ids)
+    stale_keepalives = 0
     try:
         while pending:
             try:
-                event = await asyncio.wait_for(queue.get(), timeout=30.0)
+                event = await asyncio.wait_for(queue.get(), timeout=_STALE_POLL_INTERVAL_S)
             except asyncio.TimeoutError:
-                yield ": keepalive\n\n"
+                stale_keepalives += 1
+                if stale_keepalives >= 1 and repository is not None:
+                    resolved = await _poll_terminal_jobs(repository, pending)
+                    for jid in resolved:
+                        pending.discard(jid)
+                        synth = {"event": "job_complete", "job_id": jid, "synthetic": True}
+                        frame = _format_event(synth, include_content)
+                        if frame is not None:
+                            yield frame
+                    if not pending:
+                        break
+                yield f"event: keepalive\ndata: {json.dumps({'pending': len(pending)})}\n\n"
                 continue
 
+            stale_keepalives = 0
             event_type = event.get("event", "message")
 
             if event_type == "stream_overflow":
@@ -244,6 +290,21 @@ async def _job_stream_generator(
         yield f"event: session_complete\ndata: {json.dumps({'completed': len(job_ids)})}\n\n"
     finally:
         event_bus.unsubscribe_many(job_ids, queue)
+
+
+async def _poll_terminal_jobs(repo: Repository, pending: set[str]) -> list[str]:
+    """Check DB for jobs that reached terminal state without an SSE event."""
+    resolved: list[str] = []
+    for jid in list(pending):
+        try:
+            job = await asyncio.to_thread(repo.get_job, jid)
+            if job is None:
+                continue
+            if job.processing_status in ("complete", "failed", "cancelled"):
+                resolved.append(jid)
+        except Exception:
+            pass
+    return resolved
 
 
 # ------------------------------------------------------------------
@@ -315,6 +376,7 @@ async def stream_session_events(
             body.document_ids,
             after_seq=_parse_last_event_id(last_event_id),
             include_content=body.include_content,
+            repository=repo,
         ),
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
@@ -346,12 +408,14 @@ async def stream_job_events(
     # early events.  The EventBus is purely in-memory and doesn't need
     # the job row to exist.
     event_bus: EventBus = request.app.state.event_bus
+    repo: Repository = request.app.state.repository
     return StreamingResponse(
         _job_stream_generator(
             event_bus,
             body.job_ids,
             after_seq=_parse_last_event_id(last_event_id),
             include_content=body.include_content,
+            repository=repo,
         ),
         media_type="text/event-stream",
         headers=_SSE_HEADERS,

@@ -10,6 +10,7 @@ import time
 import traceback
 
 import pandas as pd
+from nemo_retriever.nim.error_reporter import report_error
 from nemo_retriever.params import RemoteRetryParams
 
 if TYPE_CHECKING:
@@ -362,6 +363,7 @@ def table_structure_ocr_page_elements(
 
         except BaseException as e:
             print(f"Warning: table crop collection failed for row {row_i}: {type(e).__name__}: {e}")
+            report_error("table_structure_ocr_page_elements:crop", e, row_index=row_i)
             all_meta[row_i]["error"] = {
                 "stage": "table_structure_ocr_page_elements:crop",
                 "type": e.__class__.__name__,
@@ -435,6 +437,7 @@ def table_structure_ocr_page_elements(
                 structure_results[ci] = [d for d in dets if (d.get("score") or 0.0) >= YOLOX_TABLE_MIN_SCORE]
     except BaseException as e:
         print(f"Warning: table-structure failed: {type(e).__name__}: {e}")
+        report_error("table_structure_ocr_page_elements:table_structure", e)
         err_payload = {
             "stage": "table_structure_ocr_page_elements",
             "type": e.__class__.__name__,
