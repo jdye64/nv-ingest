@@ -226,6 +226,9 @@ class TriggerRequest(BaseModel):
     git_commit: str | None = None
     nsys_profile: bool = False
     graph_id: int | None = None
+    run_mode: str | None = None
+    service_url: str | None = None
+    service_max_concurrency: int | None = None
 
 
 class TriggerResponse(BaseModel):
@@ -2198,6 +2201,13 @@ async def trigger_run(req: TriggerRequest):
         req.git_commit,
     )
 
+    if req.run_mode == "service":
+        merged_overrides["run_mode"] = "service"
+        if req.service_url:
+            merged_overrides["service_url"] = req.service_url
+        if req.service_max_concurrency:
+            merged_overrides["service_max_concurrency"] = req.service_max_concurrency
+
     base_job: dict[str, Any] = {
         "dataset": req.dataset,
         "dataset_path": dataset_path,
@@ -3153,6 +3163,7 @@ class PortalSettingsUpdateRequest(BaseModel):
     mcp_allowed_origins: str | None = None
     slack_webhook_url: str | None = None
     portal_base_url: str | None = None
+    service_url: str | None = None
 
 
 @app.put("/api/portal-settings")
@@ -3165,6 +3176,7 @@ async def update_portal_settings(req: PortalSettingsUpdateRequest):
         "mcp_allowed_origins",
         "slack_webhook_url",
         "portal_base_url",
+        "service_url",
     ):
         value = getattr(req, key, None)
         if value is not None:
