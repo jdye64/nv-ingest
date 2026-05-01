@@ -152,6 +152,32 @@ CREATE TABLE IF NOT EXISTS page_processing_log (
 
 CREATE INDEX IF NOT EXISTS idx_ppl_source ON page_processing_log(source_file);
 CREATE INDEX IF NOT EXISTS idx_ppl_job ON page_processing_log(job_id);
+
+CREATE TABLE IF NOT EXISTS event_log (
+    id           TEXT PRIMARY KEY,
+    timestamp    TEXT NOT NULL,
+    job_id       TEXT REFERENCES jobs(id),
+    document_id  TEXT REFERENCES documents(id),
+    source_file  TEXT NOT NULL DEFAULT '',
+    page_number  INTEGER,
+    category     TEXT NOT NULL,
+    severity     TEXT NOT NULL DEFAULT 'error',
+    outcome      TEXT NOT NULL DEFAULT 'failed',
+    stage        TEXT NOT NULL DEFAULT '',
+    summary      TEXT NOT NULL DEFAULT '',
+    detail       TEXT NOT NULL DEFAULT '',
+    stack_trace  TEXT NOT NULL DEFAULT '',
+    endpoint     TEXT NOT NULL DEFAULT '',
+    request_id   TEXT NOT NULL DEFAULT '',
+    extra_json   TEXT NOT NULL DEFAULT '{}',
+    created_at   TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_event_log_job ON event_log(job_id);
+CREATE INDEX IF NOT EXISTS idx_event_log_doc ON event_log(document_id);
+CREATE INDEX IF NOT EXISTS idx_event_log_cat ON event_log(category);
+CREATE INDEX IF NOT EXISTS idx_event_log_ts  ON event_log(timestamp);
+CREATE INDEX IF NOT EXISTS idx_event_log_req ON event_log(request_id);
 """
 
 

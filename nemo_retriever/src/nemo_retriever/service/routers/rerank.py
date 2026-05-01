@@ -14,12 +14,31 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 from nemo_retriever.service.config import RerankerConfig, ServiceConfig
+from nemo_retriever.service.db.repository import Repository
+from nemo_retriever.service.event_logger import record_event
+from nemo_retriever.service.failure_types import EventCategory
+from nemo_retriever.service.models.event_log import EventOutcome, EventSeverity
 from nemo_retriever.service.models.requests import RerankRequest
 from nemo_retriever.service.models.responses import RerankHit, RerankResponse
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["rerank"])
+
+_rerank_rr_idx = 0
+
+
+def _pick_endpoint(csv_url: str) -> str:
+    """Round-robin select one URL from a comma-separated NIM endpoint string."""
+    global _rerank_rr_idx
+    urls = [u.strip() for u in csv_url.split(",") if u.strip()]
+    if not urls:
+        return csv_url
+    if len(urls) == 1:
+        return urls[0]
+    chosen = urls[_rerank_rr_idx % len(urls)]
+    _rerank_rr_idx += 1
+    return chosen
 
 
 # ------------------------------------------------------------------
@@ -119,7 +138,8 @@ async def rerank(request: Request, body: RerankRequest) -> RerankResponse:
     reranker_cfg: RerankerConfig = config.reranker
 
     # --- Validate endpoint ---
-    rerank_endpoint = (config.nim_endpoints.rerank_invoke_url or "").strip()
+    rerank_raw = (config.nim_endpoints.rerank_invoke_url or "").strip()
+    rerank_endpoint = _pick_endpoint(rerank_raw) if rerank_raw else ""
     if not rerank_endpoint:
         logger.error("Rerank rejected: nim_endpoints.rerank_invoke_url is not configured")
         raise HTTPException(
@@ -157,6 +177,9 @@ async def rerank(request: Request, body: RerankRequest) -> RerankResponse:
         top_n,
     )
 
+    repo: Repository = request.app.state.repository
+    req_id = getattr(request.state, "request_id", "")
+
     # --- Call the reranker NIM ---
     try:
         ranked = await asyncio.to_thread(
@@ -169,15 +192,47 @@ async def rerank(request: Request, body: RerankRequest) -> RerankResponse:
             top_n=top_n,
         )
     except ValueError as exc:
+        record_event(
+            repo,
+            category=EventCategory.VALIDATION.value,
+            severity=EventSeverity.WARNING,
+            outcome=EventOutcome.FAILED,
+            summary=f"Rerank validation error: {exc}",
+            detail=str(exc),
+            stage="rerank",
+            endpoint="/v1/rerank",
+            request_id=req_id,
+        )
         raise HTTPException(status_code=400, detail=str(exc))
     except RuntimeError as exc:
         logger.error("Reranking failed: %s", exc)
+        record_event(
+            repo,
+            category=EventCategory.RERANK.value,
+            severity=EventSeverity.ERROR,
+            outcome=EventOutcome.FAILED,
+            summary=f"Reranker NIM failure: {exc}",
+            detail=str(exc),
+            stack_trace=traceback.format_exc(),
+            stage="rerank",
+            endpoint="/v1/rerank",
+            request_id=req_id,
+        )
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:
-        logger.error(
-            "Unexpected error during reranking: %s\n%s",
-            exc,
-            traceback.format_exc(),
+        tb = traceback.format_exc()
+        logger.error("Unexpected error during reranking: %s\n%s", exc, tb)
+        record_event(
+            repo,
+            category=EventCategory.RERANK.value,
+            severity=EventSeverity.ERROR,
+            outcome=EventOutcome.FAILED,
+            summary=f"Unexpected reranker error: {type(exc).__name__}: {exc}",
+            detail=str(exc),
+            stack_trace=tb,
+            stage="rerank",
+            endpoint="/v1/rerank",
+            request_id=req_id,
         )
         raise HTTPException(
             status_code=503,

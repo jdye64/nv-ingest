@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 
 from nemo_retriever.service.db.engine import DatabaseEngine, execute_with_retry
 from nemo_retriever.service.models.document import Document, ProcessingStatus
+from nemo_retriever.service.models.event_log import EventRecord
 from nemo_retriever.service.models.job import Job
 from nemo_retriever.service.models.metrics import ProcessingMetric
 from nemo_retriever.service.models.page_processing_log import PageProcessingLog
@@ -459,3 +460,207 @@ class Repository:
         )
         row = cur.fetchone()
         return PageProcessingLog(**dict(row)) if row else None
+
+    # ------------------------------------------------------------------
+    # Event log (provenance)
+    # ------------------------------------------------------------------
+
+    def insert_event(self, event: EventRecord) -> None:
+        """Persist a single provenance event."""
+
+        def _do() -> None:
+            row = event.to_row()
+            cols = ", ".join(row.keys())
+            placeholders = ", ".join(f":{k}" for k in row.keys())
+            self._conn.execute(f"INSERT INTO event_log ({cols}) VALUES ({placeholders})", row)
+            self._conn.commit()
+
+        execute_with_retry(_do)
+
+    def insert_events(self, events: list[EventRecord]) -> None:
+        """Persist multiple provenance events in a single transaction."""
+        if not events:
+            return
+
+        def _do() -> None:
+            for ev in events:
+                row = ev.to_row()
+                cols = ", ".join(row.keys())
+                placeholders = ", ".join(f":{k}" for k in row.keys())
+                self._conn.execute(f"INSERT INTO event_log ({cols}) VALUES ({placeholders})", row)
+            self._conn.commit()
+
+        execute_with_retry(_do)
+
+    def get_event(self, event_id: str) -> EventRecord | None:
+        """Return a single event by primary key."""
+        cur = self._conn.execute("SELECT * FROM event_log WHERE id = ?", (event_id,))
+        row = cur.fetchone()
+        return EventRecord(**dict(row)) if row else None
+
+    def list_events(
+        self,
+        *,
+        job_id: str | None = None,
+        document_id: str | None = None,
+        category: str | None = None,
+        severity: str | None = None,
+        outcome: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[EventRecord]:
+        """Query the event log with optional filters and pagination."""
+        sql_parts = ["SELECT * FROM event_log"]
+        params: list[object] = []
+        clauses: list[str] = []
+
+        if job_id is not None:
+            clauses.append("job_id = ?")
+            params.append(job_id)
+        if document_id is not None:
+            clauses.append("document_id = ?")
+            params.append(document_id)
+        if category is not None:
+            clauses.append("category = ?")
+            params.append(category)
+        if severity is not None:
+            clauses.append("severity = ?")
+            params.append(severity)
+        if outcome is not None:
+            clauses.append("outcome = ?")
+            params.append(outcome)
+        if since is not None:
+            clauses.append("timestamp >= ?")
+            params.append(since)
+        if until is not None:
+            clauses.append("timestamp <= ?")
+            params.append(until)
+
+        if clauses:
+            sql_parts.append("WHERE " + " AND ".join(clauses))
+
+        sql_parts.append("ORDER BY timestamp DESC LIMIT ? OFFSET ?")
+        params.extend([int(limit), int(offset)])
+
+        cur = self._conn.execute(" ".join(sql_parts), params)
+        return [EventRecord(**dict(r)) for r in cur.fetchall()]
+
+    def count_events_by_category(
+        self,
+        *,
+        job_id: str | None = None,
+        severity: str | None = None,
+    ) -> dict[str, int]:
+        """Return ``{category: count}`` for dashboard summaries."""
+        sql_parts = ["SELECT category, COUNT(*) AS n FROM event_log"]
+        params: list[object] = []
+        clauses: list[str] = []
+
+        if job_id is not None:
+            clauses.append("job_id = ?")
+            params.append(job_id)
+        if severity is not None:
+            clauses.append("severity = ?")
+            params.append(severity)
+
+        if clauses:
+            sql_parts.append("WHERE " + " AND ".join(clauses))
+
+        sql_parts.append("GROUP BY category ORDER BY n DESC")
+
+        cur = self._conn.execute(" ".join(sql_parts), params)
+        return {row["category"]: int(row["n"]) for row in cur.fetchall()}
+
+    def get_events_for_request(self, request_id: str) -> list[EventRecord]:
+        """Return all events sharing a ``request_id``, ordered by time."""
+        cur = self._conn.execute(
+            "SELECT * FROM event_log WHERE request_id = ? ORDER BY timestamp",
+            (request_id,),
+        )
+        return [EventRecord(**dict(r)) for r in cur.fetchall()]
+
+    def update_event_outcome(self, event_id: str, outcome: str) -> bool:
+        """Update the ``outcome`` of a single event. Returns True if found."""
+
+        def _do() -> bool:
+            cur = self._conn.execute(
+                "UPDATE event_log SET outcome = ? WHERE id = ?",
+                (outcome, event_id),
+            )
+            self._conn.commit()
+            return (cur.rowcount or 0) > 0
+
+        return execute_with_retry(_do)
+
+    def bulk_update_event_outcome(
+        self,
+        event_ids: list[str],
+        outcome: str,
+    ) -> int:
+        """Update ``outcome`` for multiple events. Returns count updated."""
+        if not event_ids:
+            return 0
+
+        def _do() -> int:
+            placeholders = ",".join("?" for _ in event_ids)
+            cur = self._conn.execute(
+                f"UPDATE event_log SET outcome = ? WHERE id IN ({placeholders})",
+                [outcome, *event_ids],
+            )
+            self._conn.commit()
+            return cur.rowcount or 0
+
+        return execute_with_retry(_do)
+
+    def delete_event(self, event_id: str) -> bool:
+        """Delete a single event. Returns True if found."""
+
+        def _do() -> bool:
+            cur = self._conn.execute("DELETE FROM event_log WHERE id = ?", (event_id,))
+            self._conn.commit()
+            return (cur.rowcount or 0) > 0
+
+        return execute_with_retry(_do)
+
+    def bulk_delete_events(
+        self,
+        *,
+        event_ids: list[str] | None = None,
+        category: str | None = None,
+        severity: str | None = None,
+        outcome: str | None = None,
+    ) -> int:
+        """Delete events matching the given filters. Returns count deleted."""
+
+        def _do() -> int:
+            if event_ids is not None:
+                placeholders = ",".join("?" for _ in event_ids)
+                cur = self._conn.execute(
+                    f"DELETE FROM event_log WHERE id IN ({placeholders})",
+                    event_ids,
+                )
+            else:
+                clauses: list[str] = []
+                params: list[object] = []
+                if category is not None:
+                    clauses.append("category = ?")
+                    params.append(category)
+                if severity is not None:
+                    clauses.append("severity = ?")
+                    params.append(severity)
+                if outcome is not None:
+                    clauses.append("outcome = ?")
+                    params.append(outcome)
+                if not clauses:
+                    cur = self._conn.execute("DELETE FROM event_log")
+                else:
+                    cur = self._conn.execute(
+                        "DELETE FROM event_log WHERE " + " AND ".join(clauses),
+                        params,
+                    )
+            self._conn.commit()
+            return cur.rowcount or 0
+
+        return execute_with_retry(_do)

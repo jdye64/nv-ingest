@@ -49,6 +49,62 @@ class FailureType(str, enum.Enum):
     """Doesn't match any of the heuristics above."""
 
 
+class EventCategory(str, enum.Enum):
+    """Superset of :class:`FailureType` used by the ``event_log`` table.
+
+    Covers every NIM endpoint type, query/rerank operations, file-format
+    errors, dedup, spool, auth, and validation — everything the
+    provenance UI needs to filter and group on.
+    """
+
+    # -- Pipeline / file-level -----------------------------------------
+    PDF_PARSE = "pdf_parse"
+    HTML = "html"
+    DEDUP = "dedup"
+
+    # -- NIM transport --------------------------------------------------
+    NIM_TIMEOUT = "nim_timeout"
+    NIM_5XX = "nim_5xx"
+    NIM_4XX = "nim_4xx"
+
+    # -- NIM endpoint types ---------------------------------------------
+    PAGE_ELEMENTS = "page_elements"
+    OCR = "ocr"
+    TABLE_STRUCTURE = "table_structure"
+    GRAPHIC_ELEMENTS = "graphic_elements"
+    EMBED = "embed"
+    RERANK = "rerank"
+
+    # -- Vector store ---------------------------------------------------
+    LANCEDB = "lancedb"
+
+    # -- Infrastructure -------------------------------------------------
+    OOM = "oom"
+    SPOOL = "spool"
+
+    # -- Lifecycle ------------------------------------------------------
+    CANCELLED = "cancelled"
+    INTERNAL = "internal"
+    AUTH = "auth"
+    VALIDATION = "validation"
+    UNKNOWN = "unknown"
+
+    @classmethod
+    def from_failure_type(cls, ft: FailureType) -> "EventCategory":
+        """Map a legacy :class:`FailureType` to the corresponding category."""
+        _MAP = {
+            FailureType.PDF_PARSE: cls.PDF_PARSE,
+            FailureType.NIM_TIMEOUT: cls.NIM_TIMEOUT,
+            FailureType.NIM_5XX: cls.NIM_5XX,
+            FailureType.NIM_4XX: cls.NIM_4XX,
+            FailureType.OOM: cls.OOM,
+            FailureType.INTERNAL: cls.INTERNAL,
+            FailureType.CANCELLED: cls.CANCELLED,
+            FailureType.UNKNOWN: cls.UNKNOWN,
+        }
+        return _MAP.get(ft, cls.UNKNOWN)
+
+
 _HTTP_STATUS_RE = re.compile(r"\b([45]\d{2})\b")
 
 

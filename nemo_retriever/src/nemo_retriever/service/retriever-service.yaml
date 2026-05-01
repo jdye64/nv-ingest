@@ -97,6 +97,21 @@ spool:
   cleanup_interval_s: 60.0
   cleanup_batch_size: 1000
 
+# LanceDB vector store settings.  The ingest pipeline writes embeddings
+# to this table after every batch; the /v1/query endpoint reads from it.
+# Both sides MUST point at the same URI + table for query to work.
+#
+# Override lancedb_uri for local development — the container default
+# (/var/lib/nemo-retriever/lancedb) won't exist on the host.
+vector_store:
+  lancedb_uri: "/var/lib/nemo-retriever/lancedb"
+  lancedb_table: "nv-ingest"
+  top_k: 10
+  vector_column_name: "vector"
+  nprobes: 16
+  refine_factor: 10
+  embedding_model: "nvidia/llama-nemotron-embed-1b-v2"
+
 # SSE event-bus back-pressure policy.
 #
 # - drop_low_priority (default): silently shed metrics_update /

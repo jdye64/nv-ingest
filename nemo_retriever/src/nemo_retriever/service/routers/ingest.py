@@ -16,7 +16,10 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, Request, Upload
 from fastapi.responses import JSONResponse
 
 from nemo_retriever.service.db.repository import Repository
+from nemo_retriever.service.event_logger import record_event
+from nemo_retriever.service.failure_types import EventCategory
 from nemo_retriever.service.models.document import Document, ProcessingStatus
+from nemo_retriever.service.models.event_log import EventOutcome, EventSeverity
 from nemo_retriever.service.models.job import Job
 from nemo_retriever.service.models.requests import IngestRequest
 from nemo_retriever.service.models.responses import (
@@ -68,8 +71,19 @@ async def ingest_document(
     metadata: str = Form(default="{}", description="JSON-encoded IngestRequest metadata"),
 ) -> IngestAccepted | JSONResponse:
     pool = request.app.state.processing_pool
+    req_id = getattr(request.state, "request_id", "")
 
     if pool.is_draining:
+        repo_ref: Repository = request.app.state.repository
+        record_event(
+            repo_ref,
+            category=EventCategory.INTERNAL.value,
+            severity=EventSeverity.WARNING,
+            outcome=EventOutcome.RECOVERED,
+            summary="Ingest rejected: server is draining for shutdown",
+            endpoint="/v1/ingest",
+            request_id=req_id,
+        )
         return JSONResponse(
             status_code=503,
             content={"detail": "Server is draining for shutdown; not accepting new uploads."},
@@ -81,6 +95,16 @@ async def ingest_document(
             "Ingest rejected — pool at capacity (%d/%d)",
             pool.pool_size,
             pool.pool_size,
+        )
+        repo_ref = request.app.state.repository
+        record_event(
+            repo_ref,
+            category=EventCategory.INTERNAL.value,
+            severity=EventSeverity.WARNING,
+            outcome=EventOutcome.RECOVERED,
+            summary="Ingest rejected: server busy (all worker slots in use)",
+            endpoint="/v1/ingest",
+            request_id=req_id,
         )
         return JSONResponse(
             status_code=503,
@@ -106,6 +130,18 @@ async def ingest_document(
     existing = repo.get_document_by_sha(content_sha256)
     if existing is not None:
         logger.info("Duplicate document detected (sha=%s), returning existing record", content_sha256[:12])
+        record_event(
+            repo,
+            category=EventCategory.DEDUP.value,
+            severity=EventSeverity.INFO,
+            outcome=EventOutcome.RECOVERED,
+            summary=f"Duplicate document skipped (sha={content_sha256[:12]})",
+            detail=f"SHA-256 collision with existing document {existing.id}",
+            endpoint="/v1/ingest",
+            document_id=existing.id,
+            source_file=existing.filename,
+            request_id=req_id,
+        )
 
         job_id = meta.job_id
         if job_id is not None:

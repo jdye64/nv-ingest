@@ -16,12 +16,32 @@ import numpy as np
 from fastapi import APIRouter, HTTPException, Request
 
 from nemo_retriever.service.config import ServiceConfig, VectorStoreConfig
+from nemo_retriever.service.db.repository import Repository
+from nemo_retriever.service.event_logger import record_event
+from nemo_retriever.service.failure_types import EventCategory
+from nemo_retriever.service.models.event_log import EventOutcome, EventSeverity
 from nemo_retriever.service.models.requests import QueryRequest
 from nemo_retriever.service.models.responses import QueryHit, QueryResponse, QueryResultSet
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["query"])
+
+_embed_rr_idx = 0
+
+
+def _pick_endpoint(csv_url: str) -> str:
+    """Round-robin select one URL from a comma-separated NIM endpoint string."""
+    global _embed_rr_idx
+    urls = [u.strip() for u in csv_url.split(",") if u.strip()]
+    if not urls:
+        return csv_url
+    if len(urls) == 1:
+        return urls[0]
+    chosen = urls[_embed_rr_idx % len(urls)]
+    _embed_rr_idx += 1
+    return chosen
+
 
 _KEEP_KEYS = frozenset(
     {
@@ -287,7 +307,8 @@ async def query(request: Request, body: QueryRequest) -> QueryResponse:
     vs: VectorStoreConfig = config.vector_store
 
     # --- Validate embed endpoint ---
-    embed_endpoint = (config.nim_endpoints.embed_invoke_url or "").strip()
+    embed_raw = (config.nim_endpoints.embed_invoke_url or "").strip()
+    embed_endpoint = _pick_endpoint(embed_raw) if embed_raw else ""
     if not embed_endpoint:
         logger.error("Query rejected: nim_endpoints.embed_invoke_url is not configured")
         raise HTTPException(
@@ -330,6 +351,9 @@ async def query(request: Request, body: QueryRequest) -> QueryResponse:
         body.hybrid,
     )
 
+    repo: Repository = request.app.state.repository
+    req_id = getattr(request.state, "request_id", "")
+
     # --- Step 1: embed all queries via the NIM ---
     try:
         query_vectors = await asyncio.to_thread(
@@ -341,12 +365,33 @@ async def query(request: Request, body: QueryRequest) -> QueryResponse:
         )
     except RuntimeError as exc:
         logger.error("Embedding failed: %s", exc)
+        record_event(
+            repo,
+            category=EventCategory.EMBED.value,
+            severity=EventSeverity.ERROR,
+            outcome=EventOutcome.FAILED,
+            summary=f"Embedding NIM failure: {exc}",
+            detail=str(exc),
+            stack_trace=traceback.format_exc(),
+            stage="embed",
+            endpoint="/v1/query",
+            request_id=req_id,
+        )
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:
-        logger.error(
-            "Unexpected error during embedding: %s\n%s",
-            exc,
-            traceback.format_exc(),
+        tb = traceback.format_exc()
+        logger.error("Unexpected error during embedding: %s\n%s", exc, tb)
+        record_event(
+            repo,
+            category=EventCategory.EMBED.value,
+            severity=EventSeverity.ERROR,
+            outcome=EventOutcome.FAILED,
+            summary=f"Unexpected embedding error: {type(exc).__name__}: {exc}",
+            detail=str(exc),
+            stack_trace=tb,
+            stage="embed",
+            endpoint="/v1/query",
+            request_id=req_id,
         )
         raise HTTPException(
             status_code=503,
@@ -378,12 +423,33 @@ async def query(request: Request, body: QueryRequest) -> QueryResponse:
         )
     except RuntimeError as exc:
         logger.error("LanceDB search failed: %s", exc)
+        record_event(
+            repo,
+            category=EventCategory.LANCEDB.value,
+            severity=EventSeverity.ERROR,
+            outcome=EventOutcome.FAILED,
+            summary=f"LanceDB search failure: {exc}",
+            detail=str(exc),
+            stack_trace=traceback.format_exc(),
+            stage="lancedb_search",
+            endpoint="/v1/query",
+            request_id=req_id,
+        )
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:
-        logger.error(
-            "Unexpected error during LanceDB search: %s\n%s",
-            exc,
-            traceback.format_exc(),
+        tb = traceback.format_exc()
+        logger.error("Unexpected error during LanceDB search: %s\n%s", exc, tb)
+        record_event(
+            repo,
+            category=EventCategory.LANCEDB.value,
+            severity=EventSeverity.ERROR,
+            outcome=EventOutcome.FAILED,
+            summary=f"Unexpected LanceDB error: {type(exc).__name__}: {exc}",
+            detail=str(exc),
+            stack_trace=tb,
+            stage="lancedb_search",
+            endpoint="/v1/query",
+            request_id=req_id,
         )
         raise HTTPException(
             status_code=503,

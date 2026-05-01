@@ -35,6 +35,7 @@ import multiprocessing
 import os
 import threading
 import time
+import traceback as _traceback
 import typing
 from concurrent.futures import Future, ProcessPoolExecutor
 from datetime import datetime, timezone
@@ -46,8 +47,10 @@ from nemo_retriever.service.config import NimEndpointsConfig, ServiceConfig
 from nemo_retriever.service.db.engine import DatabaseEngine
 from nemo_retriever.service.db.repository import Repository
 from nemo_retriever.service.event_bus import EventBus
-from nemo_retriever.service.failure_types import FailureType, categorize_exception
+from nemo_retriever.service.event_logger import record_event
+from nemo_retriever.service.failure_types import EventCategory, FailureType, categorize_exception
 from nemo_retriever.service.models.document import ProcessingStatus
+from nemo_retriever.service.models.event_log import EventOutcome, EventSeverity
 from nemo_retriever.service.models.metrics import ProcessingMetric
 from nemo_retriever.service.models.page_processing_log import PageProcessingLog
 from nemo_retriever.service.models.page_result import PageResult
@@ -226,6 +229,7 @@ def _build_params(nim: NimEndpointsConfig) -> tuple[Any, Any]:
 def _build_operator_chain(
     replica_id: int | str,
     nim_endpoints: NimEndpointsConfig,
+    vector_store_config: dict[str, Any] | None = None,
 ) -> list[tuple[str, Any]]:
     """Build a linearised list of ``(name, operator_instance)`` pairs."""
     from nemo_retriever.graph.ingestor_runtime import build_graph
@@ -259,6 +263,19 @@ def _build_operator_chain(
     for node in nodes:
         op = node.operator_class(**node.operator_kwargs)
         operators.append((node.name, op))
+
+    if vector_store_config is not None and nim_endpoints.embed_invoke_url:
+        from nemo_retriever.graph.lancedb_write_operator import LanceDBWriteOperator
+
+        ldb_op = LanceDBWriteOperator(
+            uri=vector_store_config.get("lancedb_uri", "/var/lib/nemo-retriever/lancedb"),
+            table_name=vector_store_config.get("lancedb_table", "nv-ingest"),
+        )
+        operators.append(("lancedb_write", ldb_op))
+        logger.info(
+            "[pid %d] LanceDB write stage appended (uri=%s, table=%s)", os.getpid(), ldb_op._uri, ldb_op._table_name
+        )
+
     logger.info("[pid %d] Operator chain %s ready (%d stages)", os.getpid(), replica_id, len(operators))
     return operators
 
@@ -275,6 +292,7 @@ def _worker_initializer(
     db_path: str,
     nim_config_queue: multiprocessing.Queue,  # type: ignore[type-arg]
     fallback_nim_config: dict[str, Any],
+    vector_store_config: dict[str, Any] | None = None,
 ) -> None:
     """Called exactly once per worker process by ProcessPoolExecutor.
 
@@ -299,7 +317,7 @@ def _worker_initializer(
         nim_config_dict = fallback_nim_config
 
     nim = NimEndpointsConfig(**nim_config_dict)
-    _worker_chain = _build_operator_chain(os.getpid(), nim)
+    _worker_chain = _build_operator_chain(os.getpid(), nim, vector_store_config=vector_store_config)
 
 
 @dataclasses.dataclass
@@ -411,15 +429,25 @@ def _run_pipeline_batch(
                 with open(p.spool_path, "rb") as fh:
                     page_bytes = fh.read()
             except FileNotFoundError:
-                # Spool file vanished — almost certainly because the
-                # cleanup sweeper raced with a re-enqueue after a recent
-                # restart.  Treat as a permanent failure for this page;
-                # the caller will surface it via a status_change event.
                 logger.warning(
                     "[worker %d] spool file missing for doc %s (page %s); marking failed",
                     pid,
                     p.document_id,
                     p.page_number,
+                )
+                record_event(
+                    repo,
+                    category=EventCategory.SPOOL.value,
+                    severity=EventSeverity.ERROR,
+                    outcome=EventOutcome.FAILED,
+                    summary=f"Spool file missing: {p.spool_path}",
+                    detail=f"spool file missing: {p.spool_path}",
+                    stage="byte_fetch",
+                    endpoint="pipeline",
+                    job_id=p.job_id,
+                    document_id=p.document_id,
+                    source_file=p.filename,
+                    page_number=p.page_number,
                 )
                 skipped.append(
                     WorkerResult(
@@ -434,6 +462,20 @@ def _run_pipeline_batch(
                 )
                 continue
         if not page_bytes:
+            record_event(
+                repo,
+                category=EventCategory.INTERNAL.value,
+                severity=EventSeverity.ERROR,
+                outcome=EventOutcome.FAILED,
+                summary="No page bytes available",
+                detail="no page bytes (neither inline nor spooled)",
+                stage="byte_fetch",
+                endpoint="pipeline",
+                job_id=p.job_id,
+                document_id=p.document_id,
+                source_file=p.filename,
+                page_number=p.page_number,
+            )
             skipped.append(
                 WorkerResult(
                     document_id=p.document_id,
@@ -493,6 +535,7 @@ def _run_pipeline_batch(
         elapsed_ms = (time.monotonic() - t0) * 1000.0
         error_msg = f"{type(exc).__name__}: {exc}"
         failure_type = categorize_exception(exc).value
+        tb_str = _traceback.format_exc()
         logger.error(
             "[worker %d] BATCH FAILED (%d pages, failure_type=%s): %s",
             pid,
@@ -502,9 +545,25 @@ def _run_pipeline_batch(
             exc_info=True,
         )
         completed_at = datetime.now(timezone.utc).isoformat()
+        event_category = EventCategory.from_failure_type(categorize_exception(exc)).value
         fail_results: list[WorkerResult] = list(skipped)
         for p in runnable_pages:
             _mark_page_failed(repo, p, error_msg, started_at, completed_at, failure_type)
+            record_event(
+                repo,
+                category=event_category,
+                severity=EventSeverity.ERROR,
+                outcome=EventOutcome.FAILED,
+                summary=f"Pipeline batch failed: {error_msg[:200]}",
+                detail=error_msg,
+                stack_trace=tb_str,
+                stage="pipeline",
+                endpoint="pipeline",
+                job_id=p.job_id,
+                document_id=p.document_id,
+                source_file=p.filename,
+                page_number=p.page_number,
+            )
             fail_results.append(
                 WorkerResult(
                     document_id=p.document_id,
@@ -606,6 +665,20 @@ def _split_batch_results(
         logger.warning("[worker %d] Provenance column missing — cannot split batch results", pid)
         results: list[WorkerResult] = []
         for p in pages:
+            record_event(
+                repo,
+                category=EventCategory.INTERNAL.value,
+                severity=EventSeverity.ERROR,
+                outcome=EventOutcome.FAILED,
+                summary="Provenance column lost during pipeline execution",
+                detail="Provenance column lost during pipeline execution",
+                stage="split_results",
+                endpoint="pipeline",
+                job_id=p.job_id,
+                document_id=p.document_id,
+                source_file=p.filename,
+                page_number=p.page_number,
+            )
             results.append(
                 WorkerResult(
                     document_id=p.document_id,
@@ -677,6 +750,21 @@ def _split_batch_results(
         repo.insert_page_processing_log(log_entry)
         repo.update_document_status(doc_id, ProcessingStatus.COMPLETE)
 
+        record_event(
+            repo,
+            category=EventCategory.INTERNAL.value,
+            severity=EventSeverity.INFO,
+            outcome=EventOutcome.IN_PROGRESS,
+            summary=f"Page processed successfully ({det_total} detections, {elapsed_ms:.0f}ms)",
+            stage="pipeline",
+            endpoint="pipeline",
+            job_id=p.job_id,
+            document_id=doc_id,
+            source_file=source_file,
+            page_number=p.page_number,
+            extra={"detection_count": det_total, "processing_duration_ms": elapsed_ms},
+        )
+
         results.append(
             WorkerResult(
                 document_id=doc_id,
@@ -704,6 +792,20 @@ def _split_batch_results(
                 started_at,
                 completed_at,
                 FailureType.INTERNAL.value,
+            )
+            record_event(
+                repo,
+                category=EventCategory.INTERNAL.value,
+                severity=EventSeverity.ERROR,
+                outcome=EventOutcome.FAILED,
+                summary="Page produced no output rows after pipeline execution",
+                detail="Page produced no output rows after pipeline execution",
+                stage="split_results",
+                endpoint="pipeline",
+                job_id=p.job_id,
+                document_id=p.document_id,
+                source_file=p.filename,
+                page_number=p.page_number,
             )
             results.append(
                 WorkerResult(
@@ -902,12 +1004,16 @@ class ProcessingPool:
             nim_config_queue.put(cfg)
         fallback_nim_config = nim.model_dump()
 
+        vs_dict: dict[str, Any] | None = None
+        if self._config.vector_store is not None:
+            vs_dict = self._config.vector_store.model_dump()
+
         logger.info("Initialising %d worker(s) — building operator chains", self._num_workers)
         self._executor = ProcessPoolExecutor(
             max_workers=self._num_workers,
             mp_context=ctx,
             initializer=_worker_initializer,
-            initargs=(db_path, nim_config_queue, fallback_nim_config),
+            initargs=(db_path, nim_config_queue, fallback_nim_config, vs_dict),
         )
 
         warmup_futures = [self._executor.submit(os.getpid) for _ in range(self._num_workers)]
@@ -1228,6 +1334,21 @@ class ProcessingPool:
         except Exception:  # noqa: BLE001 — best effort
             pass
 
+        record_event(
+            repo,
+            category=EventCategory.CANCELLED.value,
+            severity=EventSeverity.INFO,
+            outcome=EventOutcome.FAILED,
+            summary="Page cancelled before processing",
+            detail="job_cancelled",
+            stage="dispatch",
+            endpoint="pipeline",
+            job_id=job_id,
+            document_id=doc_id,
+            source_file=page.get("filename", ""),
+            page_number=page.get("page_number"),
+        )
+
         self._publish_event(
             doc_id,
             {
@@ -1242,8 +1363,6 @@ class ProcessingPool:
         )
 
         if job_id:
-            # Count cancelled pages toward job completion so a fully-cancelled
-            # job transitions to its terminal state without dangling counters.
             self._handle_job_completion(job_id)
 
     # ------------------------------------------------------------------

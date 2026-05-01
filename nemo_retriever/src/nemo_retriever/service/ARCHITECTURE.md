@@ -22,6 +22,7 @@ This document describes the internal architecture of the `nemo_retriever.service
   - [Authentication](#authentication)
   - [Metrics](#metrics)
   - [Failure Classification](#failure-classification)
+  - [Event Log (Provenance)](#event-log-provenance)
 - [Design Decisions](#design-decisions)
 - [Client Library](#client-library)
 - [Developer Guide: Extending the Service](#developer-guide-extending-the-service)
@@ -32,38 +33,49 @@ This document describes the internal architecture of the `nemo_retriever.service
   - [Adding a Capability Flag](#adding-a-capability-flag)
   - [Adding a Pipeline Stage](#adding-a-pipeline-stage)
   - [Adding a New SSE Event Type](#adding-a-new-sse-event-type)
+  - [Recording a Provenance Event](#recording-a-provenance-event)
 
 ---
 
 ## High-Level Overview
 
 ```
-                 ┌─────────────────────────────────────────────┐
-                 │              FastAPI Application             │
-                 │                                             │
-   HTTP ────────►│  Routers ─────► Processing Pool ──► Workers │
-   requests      │    │                  │                     │
-                 │    │            Batch Buffer                │
-                 │    │                  │                     │
-                 │    ▼                  ▼                     │
-                 │  SQLite DB     Worker Processes             │
-                 │    │           (operator chains)            │
-                 │    │                  │                     │
-                 │    │                  ▼                     │
-                 │    │            NIM Endpoints               │
-                 │    │          (OCR, embed, etc.)            │
-                 │    │                  │                     │
-                 │    ▼                  ▼                     │
-                 │  Event Bus ◄──── Results ──────► SQLite DB  │
-                 │    │                                        │
-                 │    ▼                                        │
-                 │  SSE Stream ──────────────────────► Clients │
-                 └─────────────────────────────────────────────┘
+                 ┌──────────────────────────────────────────────────┐
+                 │              FastAPI Application                  │
+                 │                                                  │
+   HTTP ────────►│  Routers ─────► Processing Pool ──► Workers      │
+   requests      │    │                  │                          │
+                 │    │            Batch Buffer                     │
+                 │    │                  │                          │
+                 │    ▼                  ▼                          │
+                 │  SQLite DB     Worker Processes                  │
+                 │    │           (operator chains)                 │
+                 │    │                  │                          │
+                 │    │                  ▼                          │
+                 │    │            NIM Endpoints                    │
+                 │    │          (OCR, embed, etc.)                 │
+                 │    │                  │                          │
+                 │    │                  ▼                          │
+                 │    │            LanceDB Write                   │
+                 │    │          (append embeddings)                │
+                 │    │                  │                          │
+                 │    ▼                  ▼                          │
+                 │  Event Bus ◄──── Results ──────► SQLite DB       │
+                 │    │                                             │
+                 │    ▼                                             │
+                 │  SSE Stream ──────────────────────► Clients      │
+                 │                                                  │
+                 │  /v1/query  ──► Embed NIM ──► LanceDB Search    │
+                 └──────────────────────────────────────────────────┘
 ```
 
 The service operates as a single-process asyncio application (the "main process") that manages a pool of worker subprocesses via `ProcessPoolExecutor`. Each worker builds its own operator chain at startup and processes document pages in batches. Results are written directly to SQLite by workers and published as SSE events by the main process.
 
-Two orthogonal features — **vector search** (`/v1/query`) and **reranking** (`/v1/rerank`) — run synchronously in the main process via `asyncio.to_thread`, delegating to external NIM endpoints. They do not use the processing pool.
+After the embedding stage, each worker appends the computed vectors to a shared **LanceDB** table (`nv-ingest` at the configured URI). This ensures embeddings are immediately searchable by the `/v1/query` endpoint without a separate ETL step.
+
+Two orthogonal features — **vector search** (`/v1/query`) and **reranking** (`/v1/rerank`) — run synchronously in the main process via `asyncio.to_thread`, delegating to external NIM endpoints. They do not use the processing pool. The query endpoint reads from the same LanceDB table that the ingest workers write to.
+
+A cross-cutting **event log** (provenance subsystem) records every significant event — errors, recoveries, cancellations, and successful page completions — into an append-only `event_log` SQLite table. This data is exposed via `GET /v1/events` and is designed to drive a future auditing and provenance UI.
 
 ---
 
@@ -79,7 +91,8 @@ service/
 ├── client.py                # Async client for ingesting documents
 ├── config.py                # Pydantic configuration models + YAML loader
 ├── event_bus.py             # In-memory pub/sub for SSE streaming
-├── failure_types.py         # FailureType enum + exception classifier
+├── event_logger.py          # record_event() helper for provenance logging
+├── failure_types.py         # FailureType + EventCategory enums + classifier
 ├── metrics.py               # Prometheus instrumentation + gauge refresh
 ├── retriever-service.yaml   # Bundled default configuration
 ├── spool.py                 # Durable page spool (write-ahead)
@@ -90,6 +103,7 @@ service/
 ├── models/
 │   ├── __init__.py
 │   ├── document.py          # Document ORM model + ProcessingStatus enum
+│   ├── event_log.py         # EventRecord Pydantic model + severity/outcome enums
 │   ├── job.py               # Job ORM model
 │   ├── metrics.py           # ProcessingMetric ORM model
 │   ├── page_processing_log.py  # Per-page audit log model
@@ -101,6 +115,7 @@ service/
 │   └── pool.py              # ProcessPoolExecutor + batch buffer
 └── routers/
     ├── __init__.py
+    ├── events.py            # GET /v1/events (provenance event log)
     ├── ingest.py            # POST /v1/ingest, job management, batch upload
     ├── internal.py          # Internal/admin endpoints
     ├── metrics.py           # GET /v1/ingest_metrics
@@ -139,7 +154,8 @@ Client                     Service                    Worker Process
   │                          │                              │  8. Run operator chain
   │                          │                              │     (PDF parse → OCR →
   │                          │                              │      table detect →
-  │                          │                              │      embed → ...)
+  │                          │                              │      embed →
+  │                          │                              │      LanceDB write → ...)
   │                          │                              │  9. Write results to SQLite
   │                          │  BatchWorkerResult ◄─────────│
   │                          │                              │
@@ -210,9 +226,10 @@ The rerank endpoint accepts passages as arbitrary dicts (must contain `text`). A
 
 1. Configures root logging (console + rotating file)
 2. Applies resource limits (CPU affinity, memory rlimit, CUDA devices)
-3. Conditionally attaches `BearerAuthMiddleware`
-4. Registers all routers under `/v1`
-5. Sets up Prometheus instrumentation
+3. Attaches `_RequestIdMiddleware` (assigns a UUID to `request.state.request_id` on every HTTP request for provenance correlation)
+4. Conditionally attaches `BearerAuthMiddleware`
+5. Registers all routers under `/v1`
+6. Sets up Prometheus instrumentation
 
 The `_lifespan` async context manager handles startup and shutdown:
 
@@ -270,6 +287,13 @@ The pool has three main components:
 - `_run_pipeline_batch` receives page descriptors, builds a DataFrame, runs the chain, and writes results to SQLite
 - Provenance columns (`_page_document_id`, etc.) track which output rows belong to which input page through content-explosion stages
 
+**LanceDB write stage** (`LanceDBWriteOperator`):
+- Appended to the operator chain after the embedding stage when `embed_invoke_url` is configured
+- Each batch's embedding rows are appended (not overwritten) to the shared LanceDB table
+- The table is created lazily on the first write; subsequent batches open and append
+- Multiple worker processes can write concurrently (LanceDB uses file-level locking)
+- The operator uses `build_lancedb_rows()` from `vector_store/lancedb_utils.py` for consistent row format across all ingest paths
+
 **Multi-NIM load balancing:** When a NIM URL field contains commas (e.g., `ocr_invoke_url: "http://nim1:8000,http://nim2:8000"`), workers are assigned URLs round-robin so each worker talks to exactly one endpoint per NIM type.
 
 ### Database Layer
@@ -282,7 +306,7 @@ The pool has three main components:
 - Application-level retry with exponential backoff via `execute_with_retry`
 - Additive schema migrations (`_safe_add_column`) so upgrades don't require dropping the DB
 
-**Schema** (5 tables):
+**Schema** (6 tables):
 
 | Table | Purpose |
 |-------|---------|
@@ -291,6 +315,7 @@ The pool has three main components:
 | `page_results` | Pipeline output rows (JSON content), keyed by document. |
 | `processing_metrics` | Per-model detection/invocation counts per document. |
 | `page_processing_log` | Audit trail: timing, failure type, error messages. |
+| `event_log` | Full provenance event stream (errors, recoveries, lifecycle). |
 
 **`Repository`** provides typed CRUD operations. All write methods wrap with `execute_with_retry` to transparently handle `OperationalError: database is locked`.
 
@@ -387,6 +412,72 @@ The `FailureType` enum classifies per-page failures into actionable categories:
 
 `categorize_exception(exc)` inspects the exception type and message string to map real exceptions to these categories.
 
+The broader `EventCategory` enum is a superset of `FailureType` used by the event log. It adds categories for every NIM endpoint type (`page_elements`, `ocr`, `table_structure`, `graphic_elements`, `embed`, `rerank`), infrastructure categories (`lancedb`, `spool`, `auth`, `validation`, `dedup`, `html`), and includes a `from_failure_type()` class method for backward-compatible mapping.
+
+### Event Log (Provenance)
+
+**Files:** `event_logger.py`, `models/event_log.py`, `routers/events.py`
+
+The event log is an append-only provenance subsystem that captures every significant event across all service endpoints. It is designed to eventually drive an auditing and provenance UI.
+
+**Data model** (`EventRecord`, a Pydantic `BaseModel` mirroring the `event_log` table):
+
+| Column | Type | Purpose |
+|--------|------|---------|
+| `id` | TEXT PK | UUID, auto-generated |
+| `timestamp` | TEXT | ISO-8601 UTC instant when the event occurred |
+| `job_id` | TEXT FK | Links to the parent job (nullable) |
+| `document_id` | TEXT FK | Links to the document/page (nullable) |
+| `source_file` | TEXT | Human-readable filename |
+| `page_number` | INTEGER | 1-based input page number (nullable) |
+| `category` | TEXT | `EventCategory` value (e.g., `embed`, `lancedb`, `spool`, `dedup`) |
+| `severity` | TEXT | `info`, `warning`, or `error` |
+| `outcome` | TEXT | `failed`, `recovered`, or `in_progress` |
+| `stage` | TEXT | Pipeline stage or endpoint step name |
+| `summary` | TEXT | One-line human-readable description |
+| `detail` | TEXT | Full error message or extended context |
+| `stack_trace` | TEXT | Python traceback string |
+| `endpoint` | TEXT | Originating path (e.g., `/v1/query`, `pipeline`) |
+| `request_id` | TEXT | Correlates events from the same HTTP request |
+| `extra_json` | TEXT | Extensible JSON blob for future metadata |
+| `created_at` | TEXT | Row insertion timestamp |
+
+**Key enums:**
+- `EventSeverity` — `info` (lifecycle markers), `warning` (transient/recoverable), `error` (permanent failures)
+- `EventOutcome` — `failed` (not retried), `recovered` (transient error, system continued), `in_progress` (normal lifecycle event)
+
+**Instrumentation:** All instrumentation flows through a single entry-point, `record_event()` in `event_logger.py`. This function constructs an `EventRecord`, persists it via `Repository.insert_event()`, and returns the record. Call sites include:
+
+- **Processing pool** (`pool.py`) — spool-file-missing, no-page-bytes, batch pipeline exception (with full stack trace), provenance column lost, page-produced-no-output, per-page success, page cancellation
+- **Query router** (`query.py`) — embedding NIM failure, LanceDB search failure
+- **Rerank router** (`rerank.py`) — validation errors, reranker NIM failure
+- **Ingest router** (`ingest.py`) — server draining/busy (503), dedup detection
+
+**Request ID correlation:** The `_RequestIdMiddleware` in `app.py` assigns a UUID to `request.state.request_id` on every HTTP request. Routers pass this to `record_event()`, allowing the UI to group all events from a single API call. Worker processes generate their own batch-level correlation IDs.
+
+**REST API** (`routers/events.py`):
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/v1/events` | Paginated listing with filters (job_id, document_id, category, severity, outcome, since, until) |
+| GET | `/v1/events/summary` | Aggregated counts by category (for dashboard widgets) |
+| GET | `/v1/events/{event_id}` | Single event detail |
+| PATCH | `/v1/events/{event_id}` | Update an event's outcome (e.g. mark as `recovered` / acknowledged) |
+| DELETE | `/v1/events/{event_id}` | Delete a single event |
+| POST | `/v1/events/acknowledge` | Bulk-acknowledge events (set outcome on many IDs at once) |
+| POST | `/v1/events/delete` | Bulk-delete events by IDs or by filter (category, severity, outcome) |
+
+The full CRUD surface allows programmatic triage: an error-reporting CLI or AI agent can fetch events, acknowledge resolved issues, and purge stale entries without manual DB access.
+
+**Request/response models for mutations:**
+
+- `EventUpdateRequest` — body for `PATCH`, contains a single `outcome` field.
+- `EventBulkAcknowledgeRequest` — body for `POST /acknowledge`, accepts `event_ids` (list) and `outcome` (default `recovered`).
+- `EventBulkDeleteRequest` — body for `POST /delete`, accepts `event_ids` (list) or filter fields (`category`, `severity`, `outcome`). At least one filter is required to prevent accidental blanket deletes.
+- `EventMutationResponse` — returned by all mutation endpoints, reports `affected` (count) and `action` (`updated` or `deleted`).
+
+**Design for extensibility:** The `extra_json` column is the primary extension point. Future provenance metadata (operator timings, retry counts, GPU memory snapshots, downstream lineage links) can be added without schema migrations. The `EventCategory` enum can be extended with new values as new pipeline stages or endpoints are added.
+
 ---
 
 ## Design Decisions
@@ -417,6 +508,10 @@ The default `drop_low_priority` policy ensures the worker callback thread (which
 ### Why `asyncio.to_thread` for query/rerank?
 
 The embedding NIM call and LanceDB search are blocking I/O operations. Running them in `asyncio.to_thread` keeps the event loop responsive for SSE streaming and health checks, without the complexity of a worker process for what is a simple RPC + query.
+
+### Why a separate `event_log` table alongside `page_processing_log`?
+
+`page_processing_log` records one row per page at terminal state (complete or failed). It is a concise audit trail optimized for per-page status queries. `event_log` is a broader provenance stream: it captures transient errors that recovered, lifecycle markers, query/rerank endpoint failures, dedup detections, server-busy rejections, and per-stage timing — none of which belong in the page log. The two tables serve different audiences: `page_processing_log` answers "did this page succeed?", while `event_log` answers "what happened to this job across all subsystems and why?"
 
 ---
 
@@ -622,6 +717,48 @@ _DEFAULT_PRIORITY_DROP: frozenset[str] = frozenset({
 
 **Important:** Terminal events (`job_complete`, `status_change`) must NOT be added to the priority-drop set — they are needed for correctness.
 
+### Recording a Provenance Event
+
+All provenance events flow through `record_event()` in `event_logger.py`. To instrument a new error or lifecycle path:
+
+1. Import the helper and the enums:
+
+```python
+from nemo_retriever.service.event_logger import record_event
+from nemo_retriever.service.failure_types import EventCategory
+from nemo_retriever.service.models.event_log import EventOutcome, EventSeverity
+```
+
+2. Call `record_event()` at the instrumentation site:
+
+```python
+record_event(
+    repo,                                      # Repository instance
+    category=EventCategory.MY_CATEGORY.value,  # from EventCategory enum
+    severity=EventSeverity.ERROR,
+    outcome=EventOutcome.FAILED,
+    summary="Short description for list views",
+    detail=str(exc),                           # full error message
+    stack_trace=traceback.format_exc(),         # Python traceback (or "")
+    stage="my_stage",                          # pipeline stage or step name
+    endpoint="/v1/my_endpoint",                # or "pipeline" for workers
+    job_id=job_id,                             # optional correlation keys
+    document_id=document_id,
+    source_file=filename,
+    page_number=page_num,
+    request_id=req_id,                         # from request.state.request_id
+    extra={"retry_count": 3},                  # arbitrary JSON-safe dict
+)
+```
+
+3. If you need a new category, add it to `EventCategory` in `failure_types.py`. If the new category maps to a `FailureType`, update `from_failure_type()` as well.
+
+**Guidelines:**
+- Use `EventSeverity.ERROR` for permanent failures, `WARNING` for transient/recoverable issues, `INFO` for normal lifecycle events (page completed, dedup detected).
+- Use `EventOutcome.RECOVERED` when the system handled the error and continued (e.g., dedup, retry success). Use `FAILED` when the operation did not succeed. Use `IN_PROGRESS` for informational lifecycle markers.
+- Always pass `request_id` from routers (via `request.state.request_id`). Worker processes can generate a batch-level ID if needed.
+- The `extra` dict is serialized to `extra_json`. Use it for structured metadata that doesn't warrant a schema migration (operator timings, model versions, GPU memory, etc.).
+
 ---
 
 ## API Endpoint Summary
@@ -641,6 +778,13 @@ _DEFAULT_PRIORITY_DROP: frozenset[str] = frozenset({
 | POST | `/v1/ingest/stream/jobs` | `stream` | SSE stream for multiple jobs |
 | POST | `/v1/query` | `query` | Embed queries + search LanceDB |
 | POST | `/v1/rerank` | `rerank` | Rerank passages via NIM |
+| GET | `/v1/events` | `events` | Paginated provenance event listing |
+| GET | `/v1/events/summary` | `events` | Aggregated event counts by category |
+| GET | `/v1/events/{event_id}` | `events` | Single provenance event detail |
+| PATCH | `/v1/events/{event_id}` | `events` | Update event outcome (acknowledge/resolve) |
+| DELETE | `/v1/events/{event_id}` | `events` | Delete a single provenance event |
+| POST | `/v1/events/acknowledge` | `events` | Bulk-acknowledge events |
+| POST | `/v1/events/delete` | `events` | Bulk-delete events by IDs or filters |
 | GET | `/v1/health` | `system` | Liveness probe + pool snapshot |
 | GET | `/v1/capabilities` | `system` | Discover enabled NIM endpoints + features |
 | GET | `/v1/ingest_metrics` | `metrics` | Per-file/per-page processing metrics |

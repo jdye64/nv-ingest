@@ -10,11 +10,13 @@ import asyncio
 import logging
 import os
 import sys
+import uuid
 from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 from typing import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
 from pathlib import Path
 
@@ -173,6 +175,20 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("Retriever service stopped")
 
 
+class _RequestIdMiddleware(BaseHTTPMiddleware):
+    """Attach a unique ``request_id`` to every incoming HTTP request.
+
+    Routers read ``request.state.request_id`` and pass it to
+    :func:`record_event` so all provenance events from one HTTP call
+    can be correlated in the event log.
+    """
+
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        request.state.request_id = uuid.uuid4().hex
+        response = await call_next(request)
+        return response
+
+
 def create_app(config: ServiceConfig) -> FastAPI:
     """Build and return a fully-configured :class:`FastAPI` application."""
     _configure_logging(config)
@@ -187,6 +203,8 @@ def create_app(config: ServiceConfig) -> FastAPI:
     )
     app.state.config = config
 
+    app.add_middleware(_RequestIdMiddleware)
+
     if config.auth.api_token:
         from nemo_retriever.service.auth import BearerAuthMiddleware
 
@@ -199,8 +217,9 @@ def create_app(config: ServiceConfig) -> FastAPI:
     else:
         logger.info("Bearer-token authentication DISABLED (no api_token configured)")
 
-    from nemo_retriever.service.routers import ingest, internal, metrics, query, rerank, stream, system
+    from nemo_retriever.service.routers import events, ingest, internal, metrics, query, rerank, stream, system
 
+    app.include_router(events.router, prefix="/v1")
     app.include_router(ingest.router, prefix="/v1")
     app.include_router(internal.router, prefix="/v1")
     app.include_router(metrics.router, prefix="/v1")

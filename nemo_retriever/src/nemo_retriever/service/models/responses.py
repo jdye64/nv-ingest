@@ -301,3 +301,94 @@ class CapabilitiesResponse(BaseModel):
     bulk_upload: bool
     resumable_sse: bool
     cancel: bool
+
+
+# ------------------------------------------------------------------
+# Event log (provenance) responses
+# ------------------------------------------------------------------
+
+
+class EventLogEntry(BaseModel):
+    """A single provenance event surfaced via ``GET /v1/events``."""
+
+    id: str
+    timestamp: str
+    job_id: str | None = None
+    document_id: str | None = None
+    source_file: str = ""
+    page_number: int | None = None
+    category: str
+    severity: str
+    outcome: str
+    stage: str = ""
+    summary: str = ""
+    detail: str = ""
+    stack_trace: str = ""
+    endpoint: str = ""
+    request_id: str = ""
+    extra_json: str = "{}"
+    created_at: str = ""
+
+
+class EventLogList(BaseModel):
+    """Paginated response for ``GET /v1/events``."""
+
+    events: list[EventLogEntry] = Field(default_factory=list)
+    limit: int
+    offset: int
+    returned: int = Field(description="Number of events in this page (<= limit).")
+
+
+class EventCategorySummary(BaseModel):
+    """One row of the per-category aggregation."""
+
+    category: str
+    count: int
+
+
+class EventSummaryResponse(BaseModel):
+    """Aggregated event counts for ``GET /v1/events/summary``."""
+
+    categories: list[EventCategorySummary] = Field(default_factory=list)
+    total: int = Field(description="Total events matching the filter.")
+
+
+class EventUpdateRequest(BaseModel):
+    """Body for ``PATCH /v1/events/{event_id}``."""
+
+    outcome: str = Field(
+        description="New outcome value (failed, recovered, in_progress).",
+    )
+
+
+class EventBulkAcknowledgeRequest(BaseModel):
+    """Body for ``POST /v1/events/acknowledge``."""
+
+    event_ids: list[str] = Field(
+        ...,
+        min_length=1,
+        description="IDs of events to mark as recovered/acknowledged.",
+    )
+    outcome: str = Field(
+        default="recovered",
+        description="Outcome to set (default: recovered).",
+    )
+
+
+class EventBulkDeleteRequest(BaseModel):
+    """Body for ``DELETE /v1/events`` (bulk delete)."""
+
+    event_ids: list[str] | None = Field(
+        default=None,
+        description="Specific event IDs to delete. If omitted, filter-based deletion is used.",
+    )
+    category: str | None = Field(default=None, description="Delete all events with this category.")
+    severity: str | None = Field(default=None, description="Delete all events with this severity.")
+    outcome: str | None = Field(default=None, description="Delete all events with this outcome.")
+
+
+class EventMutationResponse(BaseModel):
+    """Response for event update/delete operations."""
+
+    affected: int = Field(description="Number of events affected.")
+    action: str = Field(description="The operation performed (updated, deleted).")
