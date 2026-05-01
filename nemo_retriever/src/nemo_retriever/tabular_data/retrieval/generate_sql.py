@@ -249,8 +249,7 @@ def _dict_to_sql_result(d: dict | None) -> dict:
 
 
 def get_sql_tool_response_top_k(
-    question: str,
-    top_k: int = 15,
+    question: str, embedding_api_key: str = "", embedding_http_endpoint: str = "", top_k: int = 15
 ) -> dict:
     """Retrieve top_k tables from LanceDB, then generate SQL via LLM (JSON schema + markdown fallbacks).
 
@@ -259,7 +258,11 @@ def get_sql_tool_response_top_k(
     from nemo_retriever.retriever import Retriever
 
     retriever = Retriever(
-        lancedb_table="nv-ingest-tabular",
+        vdb="lancedb",
+        vdb_kwargs={"table_name": "nv-ingest-tabular"},
+        embedding_endpoint=embedding_http_endpoint or None,
+        embedding_api_key=embedding_api_key or "",
+        embedding_use_grpc=False if embedding_http_endpoint else None,
         top_k=top_k,
     )
     hits = retriever.query(question)
