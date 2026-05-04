@@ -134,6 +134,18 @@ dev = [
   "pytest>=8.0.2",
 ]
 
+# ── TensorRT engine compilation ──────────────────────────────────────────
+# Installs TensorRT + ONNX tooling needed by ``retriever-build-engines``.
+# Requires a CUDA-capable GPU at compile time (engines are arch-specific).
+tensorrt = [
+  "nemo_retriever[local]",
+  "tensorrt>=10.8",
+  "onnx",
+  "onnxruntime-gpu",
+  "onnxscript",
+  "cuda-python",
+]
+
 # ── Convenience: full install ─────────────────────────────────────────────────
 all = [
   "nemo_retriever[local,multimedia,stores,benchmarks,llm]",
@@ -142,6 +154,7 @@ all = [
 [project.scripts]
 retriever = "nemo_retriever.__main__:main"
 retriever-harness = "nemo_retriever.harness:main"
+retriever-build-engines = "nemo_retriever.tensorrt.compile_all_engines:main"
 
 [tool.setuptools.dynamic]
 version = {attr = "nemo_retriever.version.get_build_version"}
@@ -165,6 +178,8 @@ vllm = [
   { url = "https://github.com/vllm-project/vllm/releases/download/v0.17.0/vllm-0.17.0+cu130-cp38-abi3-manylinux_2_35_x86_64.whl", marker = "platform_machine == 'x86_64'" },
   { url = "https://github.com/vllm-project/vllm/releases/download/v0.17.0/vllm-0.17.0+cu130-cp38-abi3-manylinux_2_35_aarch64.whl", marker = "platform_machine == 'aarch64'" },
 ]
+tensorrt = { index = "nvidia-pypi" }
+cuda-python = { index = "nvidia-pypi" }
 
 [[tool.uv.index]]
 name = "test-pypi"
@@ -174,6 +189,11 @@ explicit = true
 [[tool.uv.index]]
 name = "pytorch-cu130"
 url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[[tool.uv.index]]
+name = "nvidia-pypi"
+url = "https://pypi.nvidia.com/simple/"
 explicit = true
 
 [tool.setuptools.packages.find]

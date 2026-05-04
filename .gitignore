@@ -263,3 +263,5 @@ nemo_retriever/src/nemo_retriever/relational_db/generate_sql/spider2-lite.jsonl
 # Benchmark data files (downloaded by setup scripts)
 nemo_retriever/tabular-dev-tools/benchmarks/**/*.sql
 nemo_retriever/tabular-dev-tools/benchmarks/**/*.json
+
+nemo_retriever/private_scripts
