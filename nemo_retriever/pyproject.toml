@@ -6,6 +6,11 @@ build-backend = "setuptools.build_meta"
 managed = true
 package = true
 no-build-package = ["nemotron-ocr"]
+environments = [
+  "sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "sys_platform == 'darwin'",
+]
 # fastparquet 2026.3.0 has no wheel for Linux x86_64 (manylinux); constrain to last version that does.
 override-dependencies = [
   "fastparquet>=2024.11.0,<2026",
@@ -178,9 +183,6 @@ vllm = [
   { url = "https://github.com/vllm-project/vllm/releases/download/v0.17.0/vllm-0.17.0+cu130-cp38-abi3-manylinux_2_35_x86_64.whl", marker = "platform_machine == 'x86_64'" },
   { url = "https://github.com/vllm-project/vllm/releases/download/v0.17.0/vllm-0.17.0+cu130-cp38-abi3-manylinux_2_35_aarch64.whl", marker = "platform_machine == 'aarch64'" },
 ]
-tensorrt = { index = "nvidia-pypi" }
-cuda-python = { index = "nvidia-pypi" }
-
 [[tool.uv.index]]
 name = "test-pypi"
 url = "https://test.pypi.org/simple/"
@@ -191,10 +193,6 @@ name = "pytorch-cu130"
 url = "https://download.pytorch.org/whl/cu130"
 explicit = true
 
-[[tool.uv.index]]
-name = "nvidia-pypi"
-url = "https://pypi.nvidia.com/simple/"
-explicit = true
 
 [tool.setuptools.packages.find]
 where = ["src"]

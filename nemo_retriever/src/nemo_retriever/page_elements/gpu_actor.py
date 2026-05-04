@@ -36,10 +36,26 @@ class PageElementDetectionActor(AbstractOperator, GPUOperator):
                 max_pool_workers=int(self.detect_kwargs.get("remote_max_pool_workers", 24)),
             )
         else:
-            from nemo_retriever.model.local import NemotronPageElementsV3
-
-            self._model = NemotronPageElementsV3()
+            self._model = self._load_local_model()
             self._nim_client = None
+
+    @staticmethod
+    def _load_local_model() -> Any:
+        """Load TensorRT engine if available, otherwise fall back to PyTorch."""
+        from nemo_retriever.model.local.tensorrt_yolox import find_engine, TensorRTYOLOXModel
+
+        engine_path = find_engine("page_elements_v3")
+        if engine_path is not None:
+            return TensorRTYOLOXModel(
+                str(engine_path),
+                ["table", "chart", "title", "infographic", "text", "header_footer"],
+                conf_thresh=0.01,
+                iou_thresh=0.5,
+            )
+
+        from nemo_retriever.model.local import NemotronPageElementsV3
+
+        return NemotronPageElementsV3()
 
     def preprocess(self, data: Any, **kwargs: Any) -> Any:
         return data

@@ -132,10 +132,6 @@ def _export_onnx(
     print(f"  Model type: {type(export_model).__name__}")
     print(f"  Input shape: {spec.input_shape}")
 
-    dynamic_axes = None
-    if dynamic_batch:
-        dynamic_axes = {"images": {0: "batch_size"}, "output": {0: "batch_size"}}
-
     with torch.inference_mode():
         test_out = export_model(dummy_input)
         if isinstance(test_out, (list, tuple)):
@@ -144,6 +140,12 @@ def _export_onnx(
             output_names = list(test_out.keys())
         else:
             output_names = ["output"]
+
+    dynamic_axes = None
+    if dynamic_batch:
+        dynamic_axes = {"images": {0: "batch_size"}}
+        for oname in output_names:
+            dynamic_axes[oname] = {0: "batch_size"}
 
     torch.onnx.export(
         export_model,
@@ -197,6 +199,7 @@ def _build_engine(
     fp16: bool = True,
     fp4: bool = False,
     workspace_gib: float = 4.0,
+    max_batch: int = 16,
 ) -> bool:
     """Build a TensorRT engine from an ONNX file. Returns True on success."""
     try:
@@ -246,8 +249,15 @@ def _build_engine(
     if input_tensor.shape[0] == -1:
         profile = builder.create_optimization_profile()
         _, c, h, w = input_tensor.shape
-        profile.set_shape(input_tensor.name, min=(1, c, h, w), opt=(1, c, h, w), max=(1, c, h, w))
+        opt_batch = min(8, max_batch)
+        profile.set_shape(
+            input_tensor.name,
+            min=(1, c, h, w),
+            opt=(opt_batch, c, h, w),
+            max=(max_batch, c, h, w),
+        )
         config.add_optimization_profile(profile)
+        print(f"  Dynamic batch: min=1, opt={opt_batch}, max={max_batch}")
 
     serialized = builder.build_serialized_network(network, config)
     if serialized is None:
@@ -270,7 +280,8 @@ def compile_all(
     workspace_gib: float = 4.0,
     keep_onnx: bool = False,
     validate: bool = True,
-    dynamic_batch: bool = False,
+    dynamic_batch: bool = True,
+    max_batch: int = 16,
 ) -> dict[str, bool]:
     """Compile all (or selected) YOLOX models. Returns ``{name: success}`` map."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -308,6 +319,7 @@ def compile_all(
             fp16=fp16,
             fp4=fp4,
             workspace_gib=workspace_gib,
+            max_batch=max_batch,
         )
         results[spec.name] = ok
 
@@ -381,7 +393,12 @@ target GPU (or a GPU with the same SM version).
     parser.add_argument("--workspace", type=float, default=4.0, help="TRT workspace size in GiB (default: 4)")
     parser.add_argument("--keep-onnx", action="store_true", help="Keep intermediate ONNX files")
     parser.add_argument("--no-validate", action="store_true", help="Skip ONNX validation step")
-    parser.add_argument("--dynamic-batch", action="store_true", help="Enable dynamic batch dimension in ONNX")
+    parser.add_argument(
+        "--dynamic-batch", action="store_true", default=True,
+        help="Enable dynamic batch dimension (default: on)",
+    )
+    parser.add_argument("--no-dynamic-batch", action="store_false", dest="dynamic_batch", help="Disable dynamic batch")
+    parser.add_argument("--max-batch", type=int, default=16, help="Max batch size for dynamic-batch engines (default: 16)")
     args = parser.parse_args()
 
     gpu = _detect_gpu_info()
@@ -409,6 +426,7 @@ target GPU (or a GPU with the same SM version).
         keep_onnx=args.keep_onnx,
         validate=not args.no_validate,
         dynamic_batch=args.dynamic_batch,
+        max_batch=args.max_batch,
     )
     t_total = time.perf_counter() - t_start
 

@@ -50,9 +50,7 @@ class GraphicElementsActor(AbstractOperator, GPUOperator):
         if self._graphic_elements_invoke_url:
             self._graphic_elements_model = None
         else:
-            from nemo_retriever.model.local import NemotronGraphicElementsV1
-
-            self._graphic_elements_model = NemotronGraphicElementsV1()
+            self._graphic_elements_model = self._load_graphic_elements_model()
 
         if self._ocr_invoke_url:
             self._ocr_model = None
@@ -71,6 +69,27 @@ class GraphicElementsActor(AbstractOperator, GPUOperator):
             )
         else:
             self._nim_client = None
+
+    @staticmethod
+    def _load_graphic_elements_model() -> Any:
+        """Load TensorRT engine if available, otherwise fall back to PyTorch."""
+        from nemo_retriever.model.local.tensorrt_yolox import find_engine, TensorRTYOLOXModel
+
+        engine_path = find_engine("graphic_elements_v1")
+        if engine_path is not None:
+            return TensorRTYOLOXModel(
+                str(engine_path),
+                [
+                    "chart_title", "x_title", "y_title", "xlabel", "ylabel",
+                    "legend_title", "legend_label", "mark_label", "value_label", "other",
+                ],
+                conf_thresh=0.01,
+                iou_thresh=0.25,
+            )
+
+        from nemo_retriever.model.local import NemotronGraphicElementsV1
+
+        return NemotronGraphicElementsV1()
 
     def preprocess(self, data: Any, **kwargs: Any) -> Any:
         return data
