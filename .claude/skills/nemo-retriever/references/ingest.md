@@ -100,8 +100,7 @@ The default `ingest` runs 8 stages, in order:
 
 ## Related
 
-- [[query]] — search the table this command writes.
-- `retriever vector-store --help` — utilities for inspecting/moving LanceDB
+- [query](query.md) — search the table this command writes.
+- [vector-store](vector-store.md) — utilities for uploading/inspecting LanceDB
   tables.
-- `retriever pipeline --help` — same end-to-end ingest but exposes per-stage
-  knobs.
+- [pipeline](pipeline.md) — same end-to-end ingest, exposes per-stage knobs.

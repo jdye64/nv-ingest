@@ -90,6 +90,6 @@ retriever query "gadget costs" | jq '[.[] | select(.metadata | fromjson.type == 
 
 ## Related
 
-- [[ingest]] — populate the table this command reads.
-- `retriever recall --help` — batch query → recall@k against ground truth.
-- `retriever eval --help` — end-to-end QA evaluation.
+- [ingest](ingest.md) — populate the table this command reads.
+- [recall](recall.md) — batch query → recall@k against ground truth.
+- [eval](eval.md) — end-to-end QA evaluation.
