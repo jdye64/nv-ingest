@@ -1,0 +1,28 @@
+[package]
+name = "nrr-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Command-line interface for the Rust nemo-retriever service."
+
+[[bin]]
+name = "retriever-rs"
+path = "src/main.rs"
+
+[dependencies]
+nrr-core = { path = "../nrr-core" }
+nrr-service = { path = "../nrr-service" }
+nrr-client = { path = "../nrr-client" }
+nrr-pipeline = { path = "../nrr-pipeline" }
+nrr-nim = { path = "../nrr-nim" }
+nrr-vdb = { path = "../nrr-vdb" }
+
+clap.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+axum.workspace = true

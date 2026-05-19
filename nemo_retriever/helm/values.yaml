@@ -16,6 +16,33 @@ nameOverride: ""
 fullnameOverride: ""
 
 # -----------------------------------------------------------------------------
+# Runtime selector
+# -----------------------------------------------------------------------------
+# Pick which implementation of the nemo-retriever service is deployed.
+# * python — the original FastAPI / Ray pipeline (default).
+# * rust   — the experimental Rust rewrite (no batch run_mode, no Ray;
+#            in-memory + service layer only). Runtime is wire-compatible
+#            with the Python implementation for every endpoint exposed by
+#            both, so all client SDKs continue to work unchanged.
+#
+# The active image, container args, and Pod environment switch automatically
+# based on this value via the helpers in `_helpers.tpl`.
+runtime: python
+
+# Image overrides per runtime. The selected runtime's `image` block wins
+# over the legacy `service.image` block. The legacy block is still honoured
+# for python users who haven't migrated their values overrides yet.
+runtimeImages:
+  python:
+    repository: localhost:32000/nemo-retriever-service
+    tag: "latest"
+    pullPolicy: Always
+  rust:
+    repository: localhost:32000/nemo-retriever-rust
+    tag: "latest"
+    pullPolicy: Always
+
+# -----------------------------------------------------------------------------
 # Pull secrets
 # -----------------------------------------------------------------------------
 # Image pull secrets applied to every Pod the chart creates (service + NIMs).
@@ -440,6 +467,16 @@ serviceConfig:
     tableStructureInvokeUrl: ""
     ocrInvokeUrl: ""
     embedInvokeUrl: ""
+    # Backpressure for the embed NIM. Each in-flight embed request can
+    # be a [N_pages, max_seq_len] tensor (dozens of MB of pinned host
+    # memory in Triton), so unbounded fan-out from the worker pools
+    # quickly OOMs the embed pod. Tuned for a single-GPU embed deployment;
+    # raise these only after observing steady-state memory headroom.
+    embedMaxConcurrency: 8
+    # Maximum pages packed into a single embed request. Documents larger
+    # than this are split into multiple sequential calls (each gated by
+    # the semaphore above), bounding peak request size from one worker.
+    embedMaxPagesPerRequest: 4
 
   # Pipeline worker pools.  Workers are abstract dispatchers — sizing
   # depends on whether they do local GPU work or fan out to remote NIMs.
@@ -783,3 +820,12 @@ nims:
       tag: "1.13.0"
       pullPolicy: IfNotPresent
     invokePath: /v1/embeddings
+    # Override the 16Gi default because emptyDir volumes with
+    # `medium: Memory` are charged against the pod's cgroup memory
+    # limit. The 1B embed model only ever uses a few hundred MB of
+    # /dev/shm at steady state (verified via `df -h /dev/shm` and
+    # Triton pinned-memory traces), so 4Gi leaves ~12Gi of headroom
+    # back inside the existing 32Gi memory limit. This was the
+    # smoking gun for the OOMKilled (exit 137) we saw at peak load —
+    # /dev/shm was reserving half the cgroup ceiling at idle.
+    shmSize: "4Gi"

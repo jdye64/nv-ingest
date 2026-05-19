@@ -1,0 +1,83 @@
+# Retriever Service Mode (Rust) — default configuration.
+#
+# Wire-compatible mirror of the Python service's retriever-service.yaml.
+# See nemo_retriever_rust/README.md for an overview of every field.
+
+mode: standalone
+
+server:
+  host: "0.0.0.0"
+  port: 7670
+
+logging:
+  level: "INFO"
+  file: "retriever-service.log"
+  format: "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+
+nim_endpoints:
+  page_elements_invoke_url: null
+  graphic_elements_invoke_url: null
+  table_structure_invoke_url: null
+  ocr_invoke_url: null
+  embed_invoke_url: null
+  caption_invoke_url: null
+  caption_model_name: null
+  api_key: null
+  # Backpressure for the embed NIM. Each in-flight request can be a
+  # [N_pages, max_seq_len] tensor (dozens of MB of pinned memory in
+  # Triton), so unbounded fan-out from the worker pools quickly OOMs the
+  # NIM pod. Tune up only after observing steady-state memory headroom.
+  embed_max_concurrency: 8
+  # Maximum pages per single embed request. Documents larger than this
+  # are split into multiple sequential calls (each gated by the
+  # semaphore above), bounding peak request size from a single worker.
+  embed_max_pages_per_request: 4
+
+pipeline:
+  realtime_workers: 8
+  realtime_queue_size: 2048
+  batch_workers: 16
+  batch_queue_size: 4096
+
+resources:
+  max_memory_mb: null
+  max_cpu_cores: null
+  gpu_devices: []
+  max_upload_bytes: 500000000
+
+gateway:
+  realtime_url: "http://nemo-retriever-realtime:7670"
+  batch_url: "http://nemo-retriever-batch:7670"
+  timeout_s: 300.0
+  max_connections: 100
+
+auth:
+  api_token: null
+  header_name: "Authorization"
+  bypass_paths:
+    - "/v1/health"
+    - "/docs"
+    - "/openapi.json"
+    - "/redoc"
+
+vectordb:
+  enabled: false
+  lancedb_uri: "/data/vectordb"
+  table_name: "nemo_retriever"
+  embed_model: "nvidia/llama-nemotron-embed-1b-v2"
+  vectordb_url: "http://nemo-retriever-vectordb:7671"
+
+pipeline_overrides:
+  mode: allow_list
+  extra_extract_keys: []
+  extra_embed_keys: []
+  extra_dedup_keys: []
+  extra_split_keys: []
+  extra_store_keys: []
+  extra_webhook_keys: []
+  extra_vdb_upload_keys: []
+  extra_caption_keys: []
+  sinks:
+    storage_uri_schemes: []
+    webhook_url_prefixes: []
+    vdb_uri_schemes: []

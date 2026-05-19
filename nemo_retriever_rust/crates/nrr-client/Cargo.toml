@@ -1,0 +1,23 @@
+[package]
+name = "nrr-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Async Rust client SDK for the nemo-retriever service."
+
+[dependencies]
+nrr-core = { path = "../nrr-core" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+tracing.workspace = true
+bytes.workspace = true
+url.workspace = true
+futures.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+uuid.workspace = true

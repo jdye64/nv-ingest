@@ -59,18 +59,14 @@ spec:
       {{- end }}
       containers:
         - name: nemo-retriever
-          image: "{{ $svc.image.repository }}:{{ $svc.image.tag }}"
-          imagePullPolicy: {{ $svc.image.pullPolicy }}
+          image: "{{ include "nemo-retriever.image.repository" . }}:{{ include "nemo-retriever.image.tag" . }}"
+          imagePullPolicy: {{ include "nemo-retriever.image.pullPolicy" . }}
           {{- with $svc.securityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           args:
-            - retriever
-            - service
-            - start
-            - --config
-            - /etc/nemo-retriever/retriever-service.yaml
+            {{- include "nemo-retriever.container.args" . | nindent 12 }}
           ports:
             - name: http
               containerPort: {{ .Values.serviceConfig.server.port }}
@@ -78,6 +74,10 @@ spec:
           env:
             - name: NEMO_RETRIEVER_SERVICE_CONFIG
               value: /etc/nemo-retriever/retriever-service.yaml
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
             {{- if or .Values.nimApiKey.value .Values.nimApiKey.existingSecret }}
             - name: NVIDIA_API_KEY
               valueFrom:
@@ -214,14 +214,10 @@ spec:
       {{- end }}
       containers:
         - name: nemo-retriever
-          image: "{{ $svc.image.repository }}:{{ $svc.image.tag }}"
-          imagePullPolicy: {{ $svc.image.pullPolicy }}
+          image: "{{ include "nemo-retriever.image.repository" $ }}:{{ include "nemo-retriever.image.tag" $ }}"
+          imagePullPolicy: {{ include "nemo-retriever.image.pullPolicy" $ }}
           args:
-            - retriever
-            - service
-            - start
-            - --config
-            - /etc/nemo-retriever/retriever-service.yaml
+            {{- include "nemo-retriever.container.args" $ | nindent 12 }}
           ports:
             - name: http
               containerPort: {{ $.Values.serviceConfig.server.port }}

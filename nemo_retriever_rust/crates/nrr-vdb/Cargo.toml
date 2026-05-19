@@ -1,0 +1,22 @@
+[package]
+name = "nrr-vdb"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Vector-DB writers (LanceDB) for NeMo Retriever (Rust)."
+
+[dependencies]
+nrr-core = { path = "../nrr-core" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+bytes.workspace = true
+
+# LanceDB writes happen via the dedicated VectorDB pod's HTTP API in the Rust
+# rewrite (mirrors the Python service's "vectordb" pod) — keeping a heavy
+# native dep out of the worker binary lets us deploy CPU-only worker pods.
+reqwest.workspace = true

@@ -32,6 +32,8 @@ nim_endpoints:
   ocr_invoke_url: {{ .ocrURL | quote }}
   embed_invoke_url: {{ .embedURL | quote }}
   api_key: null
+  embed_max_concurrency: {{ .Values.serviceConfig.nimEndpoints.embedMaxConcurrency | default 8 }}
+  embed_max_pages_per_request: {{ .Values.serviceConfig.nimEndpoints.embedMaxPagesPerRequest | default 4 }}
 
 pipeline:
   realtime_workers: {{ .Values.serviceConfig.pipeline.realtimeWorkers }}

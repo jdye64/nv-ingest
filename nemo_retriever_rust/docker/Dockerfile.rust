@@ -1,0 +1,56 @@
+# syntax=docker/dockerfile:1.7
+#
+# Multi-stage Dockerfile for the Rust nemo-retriever runtime.
+# Build context is the repository root; the workspace lives at
+# `nemo_retriever_rust/`.
+#
+#   docker build -f nemo_retriever_rust/docker/Dockerfile.rust -t nemo-retriever-rust:dev .
+
+# ─── Stage 1: cargo-chef recipe (cache deps) ──────────────────────────────
+FROM rust:1.95-slim-bookworm AS chef
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends pkg-config libssl-dev ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+RUN cargo install cargo-chef --version ^0.1 --locked
+WORKDIR /workspace
+
+FROM chef AS planner
+COPY nemo_retriever_rust/ /workspace/
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS builder
+COPY --from=planner /workspace/recipe.json /workspace/recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
+COPY nemo_retriever_rust/ /workspace/
+RUN cargo build --release --bin retriever-rs
+
+# ─── Stage 2: minimal runtime image ───────────────────────────────────────
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl tini \
+ && rm -rf /var/lib/apt/lists/* \
+ && groupadd --system --gid 10001 retriever \
+ && useradd --system --uid 10001 --gid retriever --create-home retriever \
+ && mkdir -p /app /data && chown -R retriever:retriever /app /data
+
+WORKDIR /app
+COPY --from=builder /workspace/target/release/retriever-rs /usr/local/bin/retriever-rs
+COPY nemo_retriever_rust/crates/nrr-core/assets/retriever-service.yaml /etc/retriever/retriever-service.yaml
+# Shared dashboard SPA (gateway-mode UI). Single source of truth lives at
+# the repo root; both runtimes COPY from there. The Rust service reads
+# this path via NEMO_RETRIEVER_DASHBOARD_DIR (set below).
+COPY dashboard /app/dashboard
+
+USER retriever
+EXPOSE 7670
+
+ENV RUST_LOG=info \
+    RUST_BACKTRACE=1 \
+    NEMO_RETRIEVER_DASHBOARD_DIR=/app/dashboard/static
+
+# tini PID 1 ensures clean shutdown on SIGTERM (graceful drain).
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/retriever-rs"]
+CMD ["service", "start", "--config", "/etc/retriever/retriever-service.yaml"]
+
+HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
+  CMD curl -fsS http://localhost:7670/v1/health || exit 1

@@ -1,0 +1,27 @@
+[package]
+name = "nrr-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Core types, config, models, policy, and job tracker for NeMo Retriever (Rust)."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+serde_with.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+once_cell.workspace = true
+parking_lot.workspace = true
+dashmap.workspace = true
+url.workspace = true
+bytes.workspace = true
+sha2.workspace = true
+hex.workspace = true

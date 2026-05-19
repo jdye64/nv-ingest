@@ -92,6 +92,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 WORKDIR /workspace
 COPY data data
 COPY nemo_retriever nemo_retriever
+# Shared dashboard SPA (used by both Python and Rust runtimes when in
+# gateway/standalone mode). Resolved by the dashboard router via the
+# NEMO_RETRIEVER_DASHBOARD_DIR env var (set in the service profile below)
+# or by walking parents of the router source file as a dev-mode fallback.
+COPY dashboard /workspace/dashboard
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +147,7 @@ CMD ["/bin/bash"]
 FROM install AS service
 
 ENV NEMO_RETRIEVER_SERVICE_CONFIG=/etc/nemo-retriever/retriever-service.yaml
+ENV NEMO_RETRIEVER_DASHBOARD_DIR=/workspace/dashboard/static
 
 ENV PATH=/opt/retriever_runtime/bin:$PATH
 

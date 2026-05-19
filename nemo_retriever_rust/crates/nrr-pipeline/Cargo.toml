@@ -1,0 +1,33 @@
+[package]
+name = "nrr-pipeline"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "In-memory pipeline executor: extract -> embed -> vdb stages, fanned out across bounded Tokio worker pools."
+
+[dependencies]
+nrr-core = { path = "../nrr-core" }
+nrr-nim = { path = "../nrr-nim" }
+nrr-vdb = { path = "../nrr-vdb" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+bytes.workspace = true
+sha2.workspace = true
+hex.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+futures.workspace = true
+parking_lot.workspace = true
+async-trait.workspace = true
+reqwest.workspace = true
+
+# Lightweight PDF parsing (page count + text). For full chart/table
+# extraction the pipeline calls remote NIMs; this crate just needs to
+# count pages and pull raw text for small PDFs.
+lopdf.workspace = true

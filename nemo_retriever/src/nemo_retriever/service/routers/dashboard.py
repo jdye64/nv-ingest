@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from pathlib import Path
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -23,7 +24,39 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["dashboard"])
 
-_STATIC_DIR = Path(__file__).resolve().parent.parent / "dashboard" / "static"
+
+def _discover_static_dir() -> Path:
+    """Locate the shared ``dashboard/static/`` directory.
+
+    The dashboard SPA assets live at the repo root (``/dashboard/static``)
+    so the Rust runtime can ship the same files. Resolution order:
+
+    1. ``NEMO_RETRIEVER_DASHBOARD_DIR`` env var (explicit override; used
+       by the production container which COPYs the dir to a known path).
+    2. Walk parents of this file looking for ``dashboard/static``.
+    3. Fall back to the legacy in-package path so old builds keep working.
+    """
+    env = os.environ.get("NEMO_RETRIEVER_DASHBOARD_DIR")
+    if env:
+        p = Path(env).resolve()
+        if (p / "index.html").is_file():
+            return p
+        # Allow pointing at the parent that contains static/.
+        if (p / "static" / "index.html").is_file():
+            return p / "static"
+
+    here = Path(__file__).resolve()
+    for parent in (here, *here.parents):
+        candidate = parent / "dashboard" / "static"
+        if (candidate / "index.html").is_file():
+            return candidate
+
+    # Legacy fallback (kept so a partial migration doesn't break the UI).
+    legacy = Path(__file__).resolve().parent.parent / "dashboard" / "static"
+    return legacy
+
+
+_STATIC_DIR = _discover_static_dir()
 
 
 # ── Request models ───────────────────────────────────────────────────
@@ -206,9 +239,7 @@ async def jobs_sse(request: Request) -> StreamingResponse:
                     "type": "snapshot",
                     "summary": tracker.summary(),
                     "jobs": [_serialize_job(j) for j in tracker.all_jobs()],
-                    "documents": [
-                        rec.model_dump() for rec in tracker.all_documents()
-                    ],
+                    "documents": [rec.model_dump() for rec in tracker.all_documents()],
                 }
                 yield f"event: snapshot\ndata: {json.dumps(snapshot)}\n\n"
 
@@ -224,9 +255,7 @@ async def jobs_sse(request: Request) -> StreamingResponse:
                     # distinguished by the ``type`` field set by the
                     # tracker (``job_created`` etc. vs status strings).
                     evt_type = event.get("type", "")
-                    sse_event = (
-                        "job_lifecycle" if evt_type.startswith("job_") else "job_update"
-                    )
+                    sse_event = "job_lifecycle" if evt_type.startswith("job_") else "job_update"
                     yield f"event: {sse_event}\ndata: {json.dumps(event)}\n\n"
                 except asyncio.TimeoutError:
                     pass

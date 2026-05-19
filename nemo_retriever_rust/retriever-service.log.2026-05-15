@@ -1,0 +1,21 @@
+2026-05-15T14:45:52.501741Z  INFO retriever_rs: boot mode="standalone" port=17670
+2026-05-15T14:45:52.502868Z  INFO nrr_pipeline::pool: pipeline pool initialised mode="standalone" realtime_workers=8 realtime_queue=2048 batch_workers=16 batch_queue=4096
+2026-05-15T14:45:52.503610Z  INFO retriever_rs: listening addr=0.0.0.0:17670 role="standalone"
+2026-05-15T14:52:22.245640Z  INFO retriever_rs: boot mode="standalone" port=17670
+2026-05-15T14:52:22.246765Z  INFO nrr_pipeline::pool: pipeline pool initialised mode="standalone" realtime_workers=8 realtime_queue=2048 batch_workers=16 batch_queue=4096
+2026-05-15T14:52:22.247501Z  INFO retriever_rs: listening addr=0.0.0.0:17670 role="standalone"
+2026-05-15T14:53:26.774812Z  INFO retriever_rs: shutdown signal received
+2026-05-15T14:53:28.246442Z  INFO retriever_rs: boot mode="standalone" port=17671
+2026-05-15T14:53:28.247557Z  INFO nrr_pipeline::pool: pipeline pool initialised mode="standalone" realtime_workers=8 realtime_queue=2048 batch_workers=16 batch_queue=4096
+2026-05-15T14:53:28.248286Z  INFO retriever_rs: listening addr=0.0.0.0:17671 role="standalone"
+2026-05-15T14:59:09.555230Z  INFO retriever_rs: shutdown signal received
+2026-05-15T15:11:27.079796Z  INFO retriever_rs: boot mode="standalone" port=17672
+2026-05-15T15:11:27.080220Z  INFO nrr_pipeline::pool: pipeline pool initialised mode="standalone" realtime_workers=8 realtime_queue=2048 batch_workers=16 batch_queue=4096
+2026-05-15T15:11:27.080393Z  INFO retriever_rs: listening addr=0.0.0.0:17672 role="standalone"
+2026-05-15T15:11:54.841511Z  INFO retriever_rs: shutdown signal received
+2026-05-15T15:12:52.578708Z  INFO retriever_rs: boot mode="standalone" port=17673
+2026-05-15T15:12:52.579272Z  INFO nrr_pipeline::pool: pipeline pool initialised mode="standalone" realtime_workers=8 realtime_queue=2048 batch_workers=16 batch_queue=4096
+2026-05-15T15:12:52.579610Z  INFO retriever_rs: listening addr=0.0.0.0:17673 role="standalone"
+2026-05-15T15:21:59.500685Z  INFO retriever_rs: boot mode="standalone" port=17674
+2026-05-15T15:21:59.501436Z  INFO nrr_pipeline::pool: pipeline pool initialised mode="standalone" realtime_workers=8 realtime_queue=2048 batch_workers=16 batch_queue=4096
+2026-05-15T15:21:59.502018Z  INFO retriever_rs: listening addr=0.0.0.0:17674 role="standalone"

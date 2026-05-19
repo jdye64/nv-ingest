@@ -240,14 +240,15 @@ def create_app(config: ServiceConfig) -> FastAPI:
     instrument_app(app, role=config.mode)
 
     if config.mode == "gateway":
-        from pathlib import Path as _Path
-
         from fastapi.staticfiles import StaticFiles
 
         from nemo_retriever.service.routers import dashboard
 
         app.include_router(dashboard.router, prefix="/v1/dashboard")
-        _dashboard_static = _Path(__file__).parent / "dashboard" / "static"
+        # Single source of truth lives at <repo>/dashboard/static; the
+        # router exposes the resolved path via _STATIC_DIR (env override
+        # supported via NEMO_RETRIEVER_DASHBOARD_DIR).
+        _dashboard_static = dashboard._STATIC_DIR
         if _dashboard_static.is_dir():
             app.mount(
                 "/v1/dashboard/static",

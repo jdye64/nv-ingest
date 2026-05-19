@@ -328,3 +328,95 @@ nemo-retriever.nim.endpointURL
 {{- include "nemo-retriever.nim.url" (dict "context" $ctx "shortName" .shortName "key" .key) -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+=============================================================================
+Runtime selector (python | rust)
+=============================================================================
+*/}}
+
+{{/*
+nemo-retriever.runtime
+  Resolved runtime name. Falls back to "python" when unset or invalid.
+*/}}
+{{- define "nemo-retriever.runtime" -}}
+{{- $r := default "python" .Values.runtime -}}
+{{- if and (ne $r "python") (ne $r "rust") -}}
+{{- $r = "python" -}}
+{{- end -}}
+{{- $r -}}
+{{- end -}}
+
+{{/*
+nemo-retriever.image.repository
+  Resolves to runtimeImages.<runtime>.repository, with a back-compat fallback
+  to the legacy service.image.repository for python.
+*/}}
+{{- define "nemo-retriever.image.repository" -}}
+{{- $rt := include "nemo-retriever.runtime" . -}}
+{{- $img := index .Values.runtimeImages $rt -}}
+{{- if and (eq $rt "python") (and (hasKey .Values "service") (hasKey .Values.service "image") .Values.service.image.repository) -}}
+{{- .Values.service.image.repository -}}
+{{- else -}}
+{{- $img.repository -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+nemo-retriever.image.tag
+  Resolves to runtimeImages.<runtime>.tag, with a back-compat fallback to
+  the legacy service.image.tag for python.
+*/}}
+{{- define "nemo-retriever.image.tag" -}}
+{{- $rt := include "nemo-retriever.runtime" . -}}
+{{- $img := index .Values.runtimeImages $rt -}}
+{{- if and (eq $rt "python") (and (hasKey .Values "service") (hasKey .Values.service "image") .Values.service.image.tag) -}}
+{{- .Values.service.image.tag -}}
+{{- else -}}
+{{- $img.tag -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+nemo-retriever.image.pullPolicy
+  Resolves runtimeImages.<runtime>.pullPolicy with the same fallback rule.
+*/}}
+{{- define "nemo-retriever.image.pullPolicy" -}}
+{{- $rt := include "nemo-retriever.runtime" . -}}
+{{- $img := index .Values.runtimeImages $rt -}}
+{{- if and (eq $rt "python") (and (hasKey .Values "service") (hasKey .Values.service "image") .Values.service.image.pullPolicy) -}}
+{{- .Values.service.image.pullPolicy -}}
+{{- else -}}
+{{- $img.pullPolicy -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+nemo-retriever.container.args
+  Returns the container `args` slice for the chosen runtime as a YAML
+  block. Both runtimes accept `--config <path>`. The Rust binary is
+  `retriever-rs` and the Python binary is `retriever`.
+*/}}
+{{- define "nemo-retriever.container.args" -}}
+{{- $rt := include "nemo-retriever.runtime" . -}}
+{{- if eq $rt "rust" }}
+{{- /*
+The Rust image's ENTRYPOINT is the `retriever-rs` binary itself, so its
+container `args` are the binary's argv (no leading program name).
+*/ -}}
+- service
+- start
+- --config
+- /etc/nemo-retriever/retriever-service.yaml
+{{- else }}
+{{- /*
+The Python image's ENTRYPOINT runs a shell, so the program name is
+required as the first arg.
+*/ -}}
+- retriever
+- service
+- start
+- --config
+- /etc/nemo-retriever/retriever-service.yaml
+{{- end }}
+{{- end -}}
