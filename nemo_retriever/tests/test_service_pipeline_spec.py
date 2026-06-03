@@ -151,6 +151,19 @@ def test_client_rejects_server_owned_keys() -> None:
         ing.extract(ExtractParams(page_elements_invoke_url="http://attacker/"))
 
 
+def test_extract_strips_env_auto_resolved_api_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Auto-filled *api_key fields must not trip the server-owned guard."""
+    monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-auto-resolved")
+    ing = ServiceIngestor(base_url="http://example:7670")
+    ing.extract(ExtractParams(dpi=300))
+    payload = ing._pipeline_payload()
+    assert payload is not None
+    assert payload["extract_params"]["dpi"] == 300
+    assert "api_key" not in payload["extract_params"]
+    assert "page_elements_api_key" not in payload["extract_params"]
+    assert "ocr_api_key" not in payload["extract_params"]
+
+
 def test_future_phase_methods_raise_informative_error() -> None:
     """Methods deferred to follow-up phases still produce a clear error.
 

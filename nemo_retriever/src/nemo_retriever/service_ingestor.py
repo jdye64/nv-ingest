@@ -207,6 +207,16 @@ _SERVER_OWNED_KEYS: frozenset[str] = frozenset(
 )
 
 
+def _is_server_owned_credential_key(key: str) -> bool:
+    """API tokens auto-resolved from the environment — strip, never send."""
+    return key == "api_key" or key.endswith("_api_key") or key == "auth_token"
+
+
+_SERVER_OWNED_ENDPOINT_KEYS: frozenset[str] = frozenset(
+    key for key in _SERVER_OWNED_KEYS if not _is_server_owned_credential_key(key)
+)
+
+
 def _filter_policy_allowed(params_dict: dict[str, Any], allowed: frozenset[str]) -> dict[str, Any]:
     """Keep only keys the default service policy allowlist admits per stage."""
     return {key: value for key, value in params_dict.items() if key in allowed}
@@ -229,12 +239,15 @@ def _wire_client_stage_params(
 
 
 def _strip_server_owned(params_dict: dict[str, Any], method: str) -> dict[str, Any]:
-    """Raise if the caller set a server-owned key; otherwise return as-is.
+    """Drop server-owned credentials; reject explicit endpoint / sink overrides.
 
-    We fail fast on the client so users see a useful message instead of
-    a generic 403 from the server.
+    ``ExtractParams`` and friends auto-fill ``*api_key`` fields from
+    ``NVIDIA_API_KEY`` / ``NGC_API_KEY`` via :class:`_ParamsModel`. Those
+    credentials belong on the retriever service pod, not on the wire — strip
+    them silently. Endpoint URLs and storage URIs are still rejected so callers
+    get a clear client-side error instead of a generic HTTP 403.
     """
-    rejected = [k for k in params_dict if k in _SERVER_OWNED_KEYS]
+    rejected = [k for k in params_dict if k in _SERVER_OWNED_ENDPOINT_KEYS]
     if rejected:
         raise ValueError(
             f"ServiceIngestor.{method}(): keys {rejected!r} are server-owned in "
@@ -242,7 +255,7 @@ def _strip_server_owned(params_dict: dict[str, Any], method: str) -> dict[str, A
             "the retriever service via retriever-service.yaml; they cannot be "
             "set per-request."
         )
-    return params_dict
+    return {key: value for key, value in params_dict.items() if key not in _SERVER_OWNED_KEYS}
 
 
 def _require_remote_uri(uri: str, method: str, field: str) -> None:

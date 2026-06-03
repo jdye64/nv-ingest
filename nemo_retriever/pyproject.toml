@@ -224,6 +224,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "nemo_retriever.harness.portal" = ["static/**/*"]
+"nemo_retriever.search" = ["static/**/*"]
 "nemo_retriever.service" = ["retriever-service.yaml"]
 "nemo_retriever.skill_eval" = ["prompts/*.j2", "configs/*.yaml"]
 

@@ -59,6 +59,7 @@ _LAZY_SUBAPPS: list[tuple[str, str, str]] = [
     ("txt", "nemo_retriever.txt.__main__", "app"),
     ("html", "nemo_retriever.html.__main__", "app"),
     ("pipeline", "nemo_retriever.pipeline.__main__", "app"),
+    ("search", "nemo_retriever.search", "app"),
 ]
 
 for _name, _module, _attr in _LAZY_SUBAPPS:
