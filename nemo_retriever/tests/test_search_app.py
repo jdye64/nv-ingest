@@ -45,6 +45,7 @@ def test_build_agent_hit_shapes_export_urls() -> None:
     )
     assert hit.hit_id == "abc123:1"
     assert hit.export.text_url.endswith("format=text")
+    assert hit.export.document_url.endswith("/document?download=1")
     assert hit.content_type == "text"
     assert hit.distance == pytest.approx(0.42)
 
@@ -143,6 +144,49 @@ def test_export_hit_missing(client: TestClient) -> None:
     assert resp.status_code == 404
 
 
+def test_download_hit_document_from_store(client: TestClient) -> None:
+    from nemo_retriever.search.services.documents import DocumentStore
+
+    cache = HitCache()
+    store = DocumentStore()
+    store.register_file("report.pdf", b"%PDF-1.4 sample", display_name="report.pdf")
+    hit = build_agent_hit({"text": "chunk body", "source": "report.pdf"}, search_id="s1", rank=1)
+    cache.store("s1", [hit])
+    app = create_app(SearchConfig())
+    app.state.hit_cache = cache
+    app.state.document_store = store
+    with TestClient(app) as c:
+        resp = c.get("/api/v1/hits/s1:1/document?download=1")
+    assert resp.status_code == 200
+    assert resp.content == b"%PDF-1.4 sample"
+    assert "report.pdf" in resp.headers.get("content-disposition", "")
+
+
+def test_download_hit_document_local_path(client: TestClient, tmp_path) -> None:
+    doc = tmp_path / "local.txt"
+    doc.write_text("local file contents")
+    cache = HitCache()
+    hit = build_agent_hit({"text": "chunk", "source": str(doc)}, search_id="s1", rank=1)
+    cache.store("s1", [hit])
+    app = create_app(SearchConfig())
+    app.state.hit_cache = cache
+    with TestClient(app) as c:
+        resp = c.get("/api/v1/hits/s1:1/document")
+    assert resp.status_code == 200
+    assert resp.text == "local file contents"
+
+
+def test_download_hit_document_not_found(client: TestClient) -> None:
+    cache = HitCache()
+    hit = build_agent_hit({"text": "chunk", "source": "missing.pdf"}, search_id="s1", rank=1)
+    cache.store("s1", [hit])
+    app = create_app(SearchConfig())
+    app.state.hit_cache = cache
+    with TestClient(app) as c:
+        resp = c.get("/api/v1/hits/s1:1/document")
+    assert resp.status_code == 404
+
+
 def test_settings_get_and_update(client: TestClient) -> None:
     resp = client.get("/api/v1/settings")
     assert resp.status_code == 200
@@ -185,9 +229,10 @@ def test_ingest_proxy(client: TestClient, tmp_path) -> None:
     ).IngestResponse(
         job_id="job-1",
         documents_submitted=1,
-        documents_succeeded=1,
+        documents_succeeded=0,
         documents_failed=0,
-        elapsed_s=1.0,
+        elapsed_s=0.5,
+        status="processing",
     )
     with (
         patch(
@@ -204,7 +249,55 @@ def test_ingest_proxy(client: TestClient, tmp_path) -> None:
             files={"files": ("sample.txt", doc.read_bytes(), "text/plain")},
         )
     assert resp.status_code == 200
-    assert resp.json()["documents_succeeded"] == 1
+    body = resp.json()
+    assert body["job_id"] == "job-1"
+    assert body["status"] == "processing"
+
+
+def test_get_ingest_job_status(client: TestClient) -> None:
+    job_status = __import__(
+        "nemo_retriever.search.models.responses", fromlist=["IngestJobStatus"]
+    ).IngestJobStatus(
+        job_id="job-1",
+        status="completed",
+        expected_documents=1,
+        counts={"completed": 1, "failed": 0},
+    )
+    with patch(
+        "nemo_retriever.search.routers.ingest.get_ingest_job_status",
+        new=AsyncMock(return_value=job_status),
+    ):
+        resp = client.get("/api/v1/ingest/jobs/job-1")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "completed"
+
+
+def test_ingest_submit_only(client: TestClient, tmp_path) -> None:
+    doc = tmp_path / "sample.pdf"
+    doc.write_bytes(b"%PDF-1.4\n%%EOF\n")
+    with (
+        patch(
+            "nemo_retriever.search.routers.ingest.ServiceClient.get_service_health",
+            new=AsyncMock(return_value={"status": "ok"}),
+        ),
+        patch(
+            "nemo_retriever.search.services.ingest.RetrieverServiceClient._create_job",
+            new=AsyncMock(return_value="job-99"),
+        ),
+        patch(
+            "nemo_retriever.search.services.ingest.RetrieverServiceClient._upload_one",
+            new=AsyncMock(return_value={"document_id": "doc-1"}),
+        ),
+    ):
+        resp = client.post(
+            "/api/v1/ingest",
+            files={"files": ("sample.pdf", doc.read_bytes(), "application/pdf")},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["job_id"] == "job-99"
+    assert body["status"] == "processing"
+    assert body["documents_submitted"] == 1
 
 
 def test_cli_module_imports() -> None:

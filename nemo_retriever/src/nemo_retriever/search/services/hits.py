@@ -106,6 +106,7 @@ def build_agent_hit(raw_hit: dict[str, Any], *, search_id: str, rank: int) -> Ag
     page_number = normalized.get("page_number")
     hit_id = f"{search_id}:{rank}"
     base = f"/api/v1/hits/{hit_id}/export"
+    doc_base = f"/api/v1/hits/{hit_id}/document"
     return AgentHit(
         rank=rank,
         hit_id=hit_id,
@@ -125,6 +126,7 @@ def build_agent_hit(raw_hit: dict[str, Any], *, search_id: str, rank: int) -> Ag
             text_url=f"{base}?format=text",
             json_url=f"{base}?format=json",
             summary_url=f"{base}?format=summary",
+            document_url=f"{doc_base}?download=1",
         ),
     )
 

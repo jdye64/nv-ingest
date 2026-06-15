@@ -6,7 +6,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 
-from nemo_retriever.search.services.ingest import ingest_uploaded_bytes
+from nemo_retriever.search.models.responses import IngestJobStatus, IngestResponse
+from nemo_retriever.search.services.ingest import get_ingest_job_status, ingest_uploaded_bytes
 from nemo_retriever.search.services.service_client import ServiceUnavailableError, ServiceClient
 
 router = APIRouter(tags=["ingest"])
@@ -17,7 +18,7 @@ async def ingest_documents(
     request: Request,
     files: list[UploadFile] = File(..., description="One or more documents to ingest."),
     label: str | None = Form(default=None),
-) -> dict:
+) -> IngestResponse:
     config = request.app.state.config
 
     try:
@@ -36,9 +37,27 @@ async def ingest_documents(
     if not uploads:
         raise HTTPException(status_code=400, detail="No files were uploaded.")
 
+    document_store = getattr(request.app.state, "document_store", None)
     try:
-        result = await ingest_uploaded_bytes(uploads, config, label=label)
+        # Submit uploads and return immediately; the UI polls job status while
+        # the retriever service processes PDFs (which can take several minutes).
+        result = await ingest_uploaded_bytes(
+            uploads,
+            config,
+            label=label,
+            document_store=document_store,
+            wait=False,
+        )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Ingest failed: {type(exc).__name__}: {exc}") from exc
 
-    return result.model_dump()
+    return result
+
+
+@router.get("/ingest/jobs/{job_id}")
+async def get_ingest_job(request: Request, job_id: str) -> IngestJobStatus:
+    config = request.app.state.config
+    try:
+        return await get_ingest_job_status(config, job_id)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc

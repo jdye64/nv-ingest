@@ -12,11 +12,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from nemo_retriever.search.config import SearchConfig, load_config
+from nemo_retriever.search.services.documents import DocumentStore
 from nemo_retriever.search.services.hits import HitCache
 
 logger = logging.getLogger(__name__)
@@ -30,10 +31,11 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     config: SearchConfig = app.state.config
     cache: HitCache = app.state.hit_cache
+    document_store: DocumentStore = app.state.document_store
     try:
         from nemo_retriever.search.mcp.tools import configure_mcp
 
-        configure_mcp(config, cache)
+        configure_mcp(config, cache, document_store)
     except Exception:
         logger.exception("Failed to configure search MCP tools")
     yield
@@ -42,6 +44,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app(config: SearchConfig | None = None) -> FastAPI:
     cfg = config or load_config()
     hit_cache = HitCache(ttl_s=cfg.hit_cache_ttl_s, max_searches=cfg.hit_cache_max_searches)
+    document_store = DocumentStore(
+        ttl_s=cfg.document_store_ttl_s,
+        max_documents=cfg.document_store_max_documents,
+    )
 
     combined_lifespan = _lifespan
     mcp_asgi_app = None
@@ -66,6 +72,14 @@ def create_app(config: SearchConfig | None = None) -> FastAPI:
     application.state.config = cfg
     application.state.default_config = cfg
     application.state.hit_cache = hit_cache
+    application.state.document_store = document_store
+
+    @application.exception_handler(Exception)
+    async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        if isinstance(exc, HTTPException):
+            raise exc
+        logger.exception("Unhandled error on %s", request.url.path)
+        return JSONResponse(status_code=500, content={"detail": f"{type(exc).__name__}: {exc}"})
 
     from nemo_retriever.search.routers import hits, ingest, search, settings
 

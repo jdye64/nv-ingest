@@ -21,6 +21,8 @@ class SearchConfig:
     port: int = 8200
     hit_cache_ttl_s: int = 3600
     hit_cache_max_searches: int = 100
+    document_store_ttl_s: int = 86400
+    document_store_max_documents: int = 500
     ingest_max_concurrency: int = 8
     default_top_k: int = 10
 

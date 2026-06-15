@@ -26,7 +26,7 @@ function ResultsTable({ results, expandedRow, setExpandedRow }) {
               <th style={{ width: 90 }}>Type</th>
               <th style={{ width: 90, textAlign: 'right' }}>Distance</th>
               <th>Preview</th>
-              <th style={{ width: 180 }}>Export</th>
+              <th style={{ width: 220 }}>Export</th>
             </tr>
           </thead>
           <tbody>
@@ -46,6 +46,12 @@ function ResultsTable({ results, expandedRow, setExpandedRow }) {
                   React.createElement('td', { style: { maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--nv-text-muted)' }, title: hit.text }, hit.text_preview || '—'),
                   React.createElement('td', { onClick: e => e.stopPropagation() },
                     React.createElement('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } },
+                      React.createElement('a', {
+                        className: 'btn btn-secondary btn-sm',
+                        href: hit.export.document_url,
+                        download: true,
+                        title: 'Download original document',
+                      }, 'Doc'),
                       React.createElement('a', { className: 'btn btn-secondary btn-sm', href: hit.export.text_url + '&download=1', download: true }, 'Text'),
                       React.createElement('a', { className: 'btn btn-secondary btn-sm', href: hit.export.json_url + '&download=1', download: true }, 'JSON'),
                       React.createElement('button', {
@@ -77,7 +83,12 @@ function ResultsTable({ results, expandedRow, setExpandedRow }) {
                           maxHeight: 280, overflowY: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
                         },
                       }, hit.text || '—'),
-                      React.createElement('div', { style: { marginTop: 12, display: 'flex', gap: 8 } },
+                      React.createElement('div', { style: { marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' } },
+                        React.createElement('a', {
+                          className: 'btn btn-secondary btn-sm',
+                          href: hit.export.document_url,
+                          download: true,
+                        }, 'Download document'),
                         React.createElement('button', {
                           className: 'btn btn-secondary btn-sm',
                           onClick: async () => { await copyText(hit.text || ''); },

@@ -10,6 +10,7 @@ from typing import Any
 
 from nemo_retriever.search.config import SearchConfig
 from nemo_retriever.search.mcp.registry import search_tool
+from nemo_retriever.search.services.documents import DocumentStore
 from nemo_retriever.search.services.export import export_hit
 from nemo_retriever.search.services.hits import HitCache, build_search_response
 from nemo_retriever.search.services.ingest import ingest_file_paths
@@ -17,12 +18,14 @@ from nemo_retriever.search.services.service_client import ServiceClient, Service
 
 _config: SearchConfig | None = None
 _hit_cache: HitCache | None = None
+_document_store: DocumentStore | None = None
 
 
-def configure_mcp(config: SearchConfig, hit_cache: HitCache) -> None:
-    global _config, _hit_cache
+def configure_mcp(config: SearchConfig, hit_cache: HitCache, document_store: DocumentStore | None = None) -> None:
+    global _config, _hit_cache, _document_store
     _config = config
     _hit_cache = hit_cache
+    _document_store = document_store
 
 
 def _require_config() -> SearchConfig:
@@ -84,7 +87,7 @@ async def ingest_documents(paths: list[str], label: str | None = None) -> dict[s
     missing = [str(p) for p in file_paths if not p.is_file()]
     if missing:
         raise FileNotFoundError(f"Files not found: {', '.join(missing)}")
-    result = await ingest_file_paths(file_paths, cfg, label=label)
+    result = await ingest_file_paths(file_paths, cfg, label=label, document_store=_document_store)
     return result.model_dump()
 
 
