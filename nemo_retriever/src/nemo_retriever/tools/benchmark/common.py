@@ -16,6 +16,7 @@ import ray
 import ray.data as rd
 import typer
 
+from nemo_retriever.common.ray_runtime import configure_local_ray_defaults
 from nemo_retriever.operators.extract.pdf.extract import PDFExtractionActor
 from nemo_retriever.operators.extract.pdf.split import split_pdf_batch
 
@@ -63,6 +64,7 @@ def _dev_nemo_retriever_src_dir() -> Optional[str]:
 def maybe_init_ray(ray_address: Optional[str]) -> None:
     if ray.is_initialized():
         return
+    configure_local_ray_defaults(ray_address)
     extra_src = _dev_nemo_retriever_src_dir()
     runtime_env: dict[str, Any] | None = None
     if extra_src:
