@@ -146,18 +146,58 @@ def collect_environment() -> dict[str, Any]:
     }
 
 
+def active_venv_dir() -> Path | None:
+    """Return the active virtualenv directory, preserving symlinked venv Python paths."""
+    candidates: list[Path] = []
+    if os.environ.get("VIRTUAL_ENV"):
+        candidates.append(Path(os.environ["VIRTUAL_ENV"]))
+    candidates.append(Path(sys.prefix))
+    executable = Path(sys.executable)
+    if executable.parent.name == "bin":
+        candidates.append(executable.parent.parent)
+
+    for candidate in candidates:
+        if (candidate / "pyvenv.cfg").exists():
+            return candidate
+    return None
+
+
 def current_venv_env() -> dict[str, str]:
     """Return env vars that make child processes behave like this venv is active."""
-    executable = Path(sys.executable).resolve()
-    if executable.parent.name != "bin":
+    venv_dir = active_venv_dir()
+    if venv_dir is None:
         return {}
-    venv_dir = executable.parent.parent
-    if not (venv_dir / "pyvenv.cfg").exists():
-        return {}
+    bin_dir = venv_dir / "bin"
     return {
         "VIRTUAL_ENV": str(venv_dir),
-        "PATH": str(executable.parent) + os.pathsep + os.environ.get("PATH", ""),
+        "PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
     }
+
+
+def retriever_cli() -> str:
+    """Resolve the retriever console script from the active Python environment."""
+    suffix = ".exe" if os.name == "nt" else ""
+    venv_dir = active_venv_dir()
+    candidates = []
+    if venv_dir is not None:
+        candidates.append(venv_dir / "bin" / f"retriever{suffix}")
+    candidates.append(Path(sys.executable).parent / f"retriever{suffix}")
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+
+    resolved = shutil.which(f"retriever{suffix}")
+    if resolved:
+        return resolved
+
+    raise FileNotFoundError(
+        "Could not find the retriever console script. Run this benchmark with the repo .venv Python interpreter."
+    )
+
+
+def python_main_command(module: str) -> list[str]:
+    """Build a command that invokes a Typer main() without the root CLI imports."""
+    return [sys.executable, "-c", f"from {module} import main; main()"]
 
 
 def top_level_pdfs(dataset: Path) -> list[Path]:
@@ -329,6 +369,11 @@ def write_summary_markdown(summary: dict[str, Any], path: Path) -> None:
     for check in summary.get("quality_checks", []):
         lines.append(f"- `{check['name']}`: {check['status']} - {check['detail']}")
 
+    if summary.get("validation_errors"):
+        lines.extend(["", "## Validation Errors", ""])
+        for error in summary["validation_errors"]:
+            lines.append(f"- {error}")
+
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -418,6 +463,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "commands": [],
         "stage_results": {},
         "e2e_metrics": {},
+        "validation_errors": [],
         "quality_checks": [
             {
                 "name": "beir_recall",
@@ -429,15 +475,20 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     command_results: list[CommandResult] = []
     child_env = current_venv_env()
+    benchmark_cli = python_main_command("nemo_retriever.tools.benchmark.__main__")
+    harness_cli = python_main_command("nemo_retriever.harness")
+    retriever = retriever_cli()
+    summary["cli_entrypoints"] = {
+        "benchmark": benchmark_cli,
+        "harness": harness_cli,
+        "retriever": retriever,
+    }
 
     if not args.skip_stage:
         for repeat in range(1, args.stage_repeats + 1):
             stage_dir = stage_root / f"repeat_{repeat:02d}"
             command = [
-                sys.executable,
-                "-m",
-                "nemo_retriever",
-                "benchmark",
+                *benchmark_cli,
                 "all",
                 "run",
                 "--pdf-path",
@@ -469,7 +520,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 dry_run=args.dry_run,
             )
             command_results.append(result)
-            summary["stage_results"][f"repeat_{repeat:02d}"] = load_stage_results(stage_dir)
+            stage_results = load_stage_results(stage_dir)
+            summary["stage_results"][f"repeat_{repeat:02d}"] = stage_results
+            if result.success and not args.dry_run and not stage_results:
+                summary["validation_errors"].append(
+                    f"{result.name} exited successfully but produced no stage JSON metrics under {stage_dir}"
+                )
 
     successful_e2e_results: list[tuple[str, dict[str, Any]]] = []
     if not args.skip_e2e:
@@ -481,10 +537,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         for run_name, extra_args in e2e_plan:
             command = [
-                sys.executable,
-                "-m",
-                "nemo_retriever",
-                "harness",
+                *harness_cli,
                 "run",
                 "--config",
                 str(harness_config),
@@ -519,6 +572,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 summary["e2e_metrics"][run_name] = metrics
                 if harness_result.get("success"):
                     successful_e2e_results.append((run_name, harness_result))
+            elif result.success and not args.dry_run:
+                summary["validation_errors"].append(
+                    f"{run_name} exited successfully but produced no harness results.json under {harness_artifacts_dir}"
+                )
 
     if successful_e2e_results and not args.skip_query_smoke:
         run_name, harness_result = successful_e2e_results[0]
@@ -526,9 +583,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         lancedb_uri = cfg.get("lancedb_uri")
         if lancedb_uri:
             command = [
-                sys.executable,
-                "-m",
-                "nemo_retriever",
+                retriever,
                 "query",
                 args.query,
                 "--lancedb-uri",
@@ -581,6 +636,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "ingest_secs": summarize_numeric(ingest_latencies),
         "pages_per_sec_ingest": summarize_numeric(pages_per_sec),
     }
+    failed = [result for result in command_results if not result.success]
+    summary["all_passed"] = not failed and not summary["validation_errors"]
 
     summary_path = run_dir / "summary.json"
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -588,8 +645,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     write_e2e_csv(summary, run_dir / "e2e_metrics.csv")
 
     print(f"\nWrote benchmark summary: {summary_path}")
-    failed = [result for result in command_results if not result.success]
-    return 1 if failed else 0
+    return 1 if failed or summary["validation_errors"] else 0
 
 
 if __name__ == "__main__":
