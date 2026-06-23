@@ -277,7 +277,7 @@ presets:
     page_elements_workers: 3
     ocr_workers: 3
     ocr_batch_size: 16
-    embed_workers: 3
+    embed_workers: 1
     embed_batch_size: 256
     page_elements_cpus_per_actor: 1.0
     ocr_cpus_per_actor: 1.0
