@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 
 LOCAL_RAY_OBJECT_STORE_MEMORY_FRACTION = 0.35
+_LOCAL_OBJECT_STORE_FRACTION_ENV = "NEMO_RETRIEVER_LOCAL_OBJECT_STORE_MEMORY_FRACTION"
 _OBJECT_STORE_FRACTION_ENV = "RAY_DEFAULT_OBJECT_STORE_MEMORY_PROPORTION"
 _MIN_OBJECT_STORE_MEMORY_BYTES = 80 * 1024 * 1024
 _DEV_SHM_SAFETY_FRACTION = 0.70
@@ -24,16 +25,20 @@ def _starts_local_ray(ray_address: str | None, *, starts_local: bool | None = No
     return not address or address == "local"
 
 
-def _object_store_fraction() -> float:
-    raw = os.environ.get(_OBJECT_STORE_FRACTION_ENV)
-    if raw:
-        try:
-            fraction = float(raw)
-        except ValueError:
-            fraction = LOCAL_RAY_OBJECT_STORE_MEMORY_FRACTION
-    else:
-        fraction = LOCAL_RAY_OBJECT_STORE_MEMORY_FRACTION
+def _parse_object_store_fraction(raw: str | None) -> float | None:
+    if not raw:
+        return None
+    try:
+        fraction = float(raw)
+    except ValueError:
+        return None
     return min(max(fraction, 0.01), 0.95)
+
+
+def _object_store_fraction() -> float | None:
+    return _parse_object_store_fraction(
+        os.environ.get(_LOCAL_OBJECT_STORE_FRACTION_ENV) or os.environ.get(_OBJECT_STORE_FRACTION_ENV)
+    )
 
 
 def _system_memory_bytes() -> int | None:
@@ -53,11 +58,11 @@ def _dev_shm_available_bytes() -> int | None:
     return int(stats.f_bavail) * int(stats.f_frsize)
 
 
-def _local_object_store_memory_bytes() -> int | None:
+def _local_object_store_memory_bytes(fraction: float) -> int | None:
     system_memory = _system_memory_bytes()
     if system_memory is None:
         return None
-    target = int(system_memory * _object_store_fraction())
+    target = int(system_memory * fraction)
     if dev_shm_available := _dev_shm_available_bytes():
         target = min(target, int(dev_shm_available * _DEV_SHM_SAFETY_FRACTION))
     if target < _MIN_OBJECT_STORE_MEMORY_BYTES:
@@ -69,7 +74,9 @@ def configure_local_ray_defaults(ray_address: str | None = None, *, starts_local
     """Set conservative Ray defaults before starting a local Ray runtime."""
     if not _starts_local_ray(ray_address, starts_local=starts_local):
         return
-    os.environ.setdefault(_OBJECT_STORE_FRACTION_ENV, str(LOCAL_RAY_OBJECT_STORE_MEMORY_FRACTION))
+    if _OBJECT_STORE_FRACTION_ENV not in os.environ:
+        if local_fraction := os.environ.get(_LOCAL_OBJECT_STORE_FRACTION_ENV):
+            os.environ[_OBJECT_STORE_FRACTION_ENV] = local_fraction
 
 
 def local_ray_init_kwargs(ray_address: str | None = None, *, starts_local: bool | None = None) -> dict[str, int]:
@@ -77,7 +84,10 @@ def local_ray_init_kwargs(ray_address: str | None = None, *, starts_local: bool 
     if not _starts_local_ray(ray_address, starts_local=starts_local):
         return {}
     configure_local_ray_defaults(ray_address, starts_local=True)
-    object_store_memory = _local_object_store_memory_bytes()
+    fraction = _object_store_fraction()
+    if fraction is None:
+        return {}
+    object_store_memory = _local_object_store_memory_bytes(fraction)
     if object_store_memory is None:
         return {}
     return {"object_store_memory": object_store_memory}
