@@ -71,7 +71,7 @@ from nemo_retriever.common.input_files import (
     input_type_for_path,
 )
 from nemo_retriever.common.remote_auth import collect_remote_auth_runtime_env, resolve_remote_api_key
-from nemo_retriever.common.ray_runtime import configure_local_ray_defaults
+from nemo_retriever.common.ray_runtime import local_ray_init_kwargs
 from nemo_retriever.common.ray_resource_hueristics import gather_cluster_resources
 
 
@@ -890,12 +890,13 @@ class GraphIngestor(ingestor):
             ray_env_vars.update(collect_remote_auth_runtime_env())
             os.environ["HF_HUB_OFFLINE"] = ray_env_vars["HF_HUB_OFFLINE"]
             runtime_env = {"env_vars": ray_env_vars}
-            configure_local_ray_defaults(self._ray_address)
+            init_kwargs = local_ray_init_kwargs(self._ray_address)
             ray.init(
                 address=self._ray_address,
                 ignore_reinit_error=True,
                 runtime_env=runtime_env,
                 log_to_driver=self._ray_log_to_driver,
+                **init_kwargs,
             )
         return ray, gather_cluster_resources(ray)
 

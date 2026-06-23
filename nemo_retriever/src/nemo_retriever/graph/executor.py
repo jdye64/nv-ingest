@@ -22,7 +22,7 @@ from nemo_retriever.common.input_files import (
     raise_input_path_not_found,
 )
 from nemo_retriever.common.remote_auth import collect_remote_auth_runtime_env
-from nemo_retriever.common.ray_runtime import configure_local_ray_defaults
+from nemo_retriever.common.ray_runtime import local_ray_init_kwargs
 from nemo_retriever.common import ray_resource_hueristics as _rrh
 from nemo_retriever.common.ray_resource_hueristics import (
     gather_cluster_resources,
@@ -257,11 +257,12 @@ class RayDataExecutor(AbstractExecutor):
             ray_env_vars.update(collect_remote_auth_runtime_env())
             os.environ["HF_HUB_OFFLINE"] = ray_env_vars["HF_HUB_OFFLINE"]
             runtime_env = {"env_vars": ray_env_vars}
-            configure_local_ray_defaults(self._ray_address)
+            init_kwargs = local_ray_init_kwargs(self._ray_address)
             ray.init(
                 address=self._ray_address,
                 ignore_reinit_error=True,
                 runtime_env=runtime_env,
+                **init_kwargs,
             )
 
         ctx = rd.DataContext.get_current()

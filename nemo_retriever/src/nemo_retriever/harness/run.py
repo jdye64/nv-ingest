@@ -830,11 +830,11 @@ try:
     import ray
     from nemo_retriever.models.hf_cache import collect_hf_runtime_env
     from nemo_retriever.common.remote_auth import collect_remote_auth_runtime_env
-    from nemo_retriever.common.ray_runtime import configure_local_ray_defaults
+    from nemo_retriever.common.ray_runtime import local_ray_init_kwargs
 
     effective_ray = ray_address or os.environ.get("RAY_ADDRESS")
     is_local = effective_ray in ("auto", "local", None, "")
-    configure_local_ray_defaults(effective_ray)
+    init_kwargs = local_ray_init_kwargs(effective_ray, starts_local=is_local)
 
     ray.shutdown()
 
@@ -859,6 +859,7 @@ try:
             ray.init(
                 num_gpus=detected_gpus if detected_gpus > 0 else None,
                 runtime_env=runtime_env,
+                **init_kwargs,
             )
         except ValueError as _ve:
             if "existing cluster" in str(_ve):
@@ -873,6 +874,7 @@ try:
                     ray.init(
                         num_gpus=detected_gpus if detected_gpus > 0 else None,
                         runtime_env=runtime_env,
+                        **init_kwargs,
                     )
                 except ValueError:
                     print("[ray] Still cannot start fresh cluster — connecting to existing one instead")
