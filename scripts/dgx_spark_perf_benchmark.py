@@ -280,7 +280,7 @@ presets:
     embed_workers: 1
     embed_batch_size: 128
     embed_enforce_eager: true
-    embed_max_length: 2048
+    embed_max_length: 1024
     page_elements_cpus_per_actor: 1.0
     ocr_cpus_per_actor: 1.0
     embed_cpus_per_actor: 1.0
