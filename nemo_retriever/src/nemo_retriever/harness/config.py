@@ -152,6 +152,7 @@ class HarnessConfig:
     ocr_batch_size: int = 16
     embed_workers: int = 3
     embed_batch_size: int = 32
+    embed_enforce_eager: bool = False
     page_elements_cpus_per_actor: float = 1.0
     ocr_cpus_per_actor: float = 1.0
     embed_cpus_per_actor: float = 1.0
@@ -456,6 +457,7 @@ def _apply_env_overrides(config_dict: dict[str, Any]) -> None:
         "HARNESS_GRAPHIC_ELEMENTS_INVOKE_URL": ("graphic_elements_invoke_url", str),
         "HARNESS_TABLE_STRUCTURE_INVOKE_URL": ("table_structure_invoke_url", str),
         "HARNESS_EMBED_INVOKE_URL": ("embed_invoke_url", str),
+        "HARNESS_EMBED_ENFORCE_EAGER": ("embed_enforce_eager", _parse_bool),
         "HARNESS_CAPTION_INVOKE_URL": ("caption_invoke_url", str),
     }
 

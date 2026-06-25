@@ -263,6 +263,13 @@ LocalIngestEmbedBackendOption = Annotated[
         "--local-ingest-embed-backend", help="Local ingest-time text embedder when --embed-invoke-url is unset."
     ),
 ]
+EmbedEnforceEagerOption = Annotated[
+    bool | None,
+    typer.Option(
+        "--embed-enforce-eager/--no-embed-enforce-eager",
+        help="Disable vLLM CUDA graph capture for local ingest embedding.",
+    ),
+]
 EmbedModalityOption = Annotated[
     str | None,
     typer.Option("--embed-modality", help="Embedding modality for emitted rows: text, image, or text_image."),

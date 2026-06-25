@@ -57,6 +57,7 @@ def build_embed_option_kwargs(
     embed_invoke_url: str | None,
     embed_model_name: str | None,
     local_ingest_embed_backend: str | None = None,
+    embed_enforce_eager: bool | None = None,
     embed_api_key: str | None = None,
     embed_modality: str | None = None,
     text_elements_modality: str | None = None,
@@ -77,6 +78,10 @@ def build_embed_option_kwargs(
         embed_kwargs["embed_model_name"] = embed_model_name
     if local_ingest_embed_backend is not None:
         embed_kwargs["local_ingest_embed_backend"] = local_ingest_embed_backend
+    if embed_enforce_eager is not None:
+        from nemo_retriever.common.params.models import ModelRuntimeParams
+
+        embed_kwargs["runtime"] = ModelRuntimeParams(enforce_eager=bool(embed_enforce_eager))
     if embed_api_key is not None:
         embed_kwargs["api_key"] = embed_api_key
     if embed_modality is not None:

@@ -82,6 +82,7 @@ from nemo_retriever.common.params import (
     DedupParams,
     EmbedParams,
     ExtractParams,
+    ModelRuntimeParams,
     StoreParams,
     TextChunkParams,
     VdbUploadParams,
@@ -139,6 +140,7 @@ _SERVICE_INCOMPATIBLE_FLAGS: tuple[tuple[str, str], ...] = (
     ("--caption-model-name", "caption_model_name"),
     # Local-execution knobs (no in-cluster equivalent)
     ("--local-ingest-embed-backend", "local_ingest_embed_backend"),
+    ("--embed-enforce-eager/--no-embed-enforce-eager", "embed_enforce_eager"),
     ("--caption-device", "caption_device"),
     ("--caption-gpu-memory-utilization", "caption_gpu_memory_utilization"),
     ("--caption-gpus-per-actor", "caption_gpus_per_actor"),
@@ -450,6 +452,7 @@ def _build_embed_params(
     embed_cpus_per_actor: Optional[float],
     embed_gpus_per_actor: Optional[float],
     local_ingest_embed_backend: str = "vllm",
+    embed_enforce_eager: bool = False,
 ) -> EmbedParams:
     """Assemble :class:`EmbedParams` plus its :class:`BatchTuningParams`."""
 
@@ -479,6 +482,7 @@ def _build_embed_params(
                 "structured_elements_modality": structured_elements_modality,
                 "embed_granularity": embed_granularity,
                 "local_ingest_embed_backend": local_ingest_embed_backend,
+                "runtime": ModelRuntimeParams(enforce_eager=embed_enforce_eager),
                 "batch_tuning": embed_batch_tuning,
                 "inference_batch_size": embed_batch_size or None,
             }.items()
@@ -799,6 +803,12 @@ def run(
         "vllm",
         "--local-ingest-embed-backend",
         help="Local ingest-time text embedder when --embed-invoke-url is unset: vllm or hf. VL models always use hf.",
+        rich_help_panel=_PANEL_EMBED,
+    ),
+    embed_enforce_eager: bool = typer.Option(
+        False,
+        "--embed-enforce-eager/--no-embed-enforce-eager",
+        help="Disable vLLM CUDA graph capture for local ingest embedding.",
         rich_help_panel=_PANEL_EMBED,
     ),
     text_elements_modality: Optional[str] = typer.Option(
@@ -1338,6 +1348,7 @@ def run(
                 embed_cpus_per_actor=embed_cpus_per_actor,
                 embed_gpus_per_actor=embed_gpus_per_actor,
                 local_ingest_embed_backend=local_ingest_embed_backend,
+                embed_enforce_eager=embed_enforce_eager,
             )
             service_request = ingest_service.ServiceIngestRequest(
                 documents=file_patterns,
@@ -1460,6 +1471,7 @@ def run(
                         embed_model_name=embed_model_name,
                         embed_api_key=embed_remote_api_key,
                         local_ingest_embed_backend=local_ingest_embed_backend,
+                        embed_enforce_eager=embed_enforce_eager,
                         embed_modality=embed_modality,
                         text_elements_modality=text_elements_modality,
                         structured_elements_modality=structured_elements_modality,

@@ -406,6 +406,8 @@ def _build_command(cfg: HarnessConfig, artifact_dir: Path, run_id: str) -> tuple
             "--embed-gpus-per-actor",
             str(cfg.gpu_embed),
         ]
+        if cfg.embed_enforce_eager:
+            cmd += ["--embed-enforce-eager"]
 
     cmd += [
         "--embed-model-name",

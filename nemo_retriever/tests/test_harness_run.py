@@ -182,6 +182,7 @@ def test_build_command_uses_hidden_detection_file_by_default(tmp_path: Path) -> 
     assert "--page-elements-actors" in cmd
     assert "--ocr-actors" in cmd
     assert "--embed-actors" in cmd
+    assert "--embed-enforce-eager" not in cmd
     assert "--page-elements-gpus-per-actor" in cmd
     assert "--ocr-gpus-per-actor" in cmd
     assert "--embed-gpus-per-actor" in cmd
@@ -195,6 +196,22 @@ def test_build_command_uses_hidden_detection_file_by_default(tmp_path: Path) -> 
     assert detection_file.parent == runtime_dir
     assert detection_file.name == ".detection_summary.json"
     assert effective_query_csv is None
+
+
+def test_build_command_passes_embed_enforce_eager(tmp_path: Path) -> None:
+    dataset_dir = tmp_path / "dataset"
+    dataset_dir.mkdir()
+
+    cfg = HarnessConfig(
+        dataset_dir=str(dataset_dir),
+        dataset_label="tiny",
+        preset="single_gpu",
+        evaluation_mode="none",
+        recall_required=False,
+        embed_enforce_eager=True,
+    )
+    cmd, _runtime_dir, _detection_file, _effective_query_csv = _build_command(cfg, tmp_path, run_id="r1")
+    assert "--embed-enforce-eager" in cmd
 
 
 def test_build_command_supports_inprocess_run_mode(tmp_path: Path) -> None:
