@@ -276,7 +276,7 @@ presets:
     page_elements_batch_size: 4
     page_elements_workers: 3
     ocr_workers: 2
-    ocr_batch_size: 8
+    ocr_batch_size: 16
     embed_workers: 1
     embed_batch_size: 128
     embed_enforce_eager: true
