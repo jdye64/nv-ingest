@@ -257,7 +257,6 @@ active:
   beir_ks: [1, 3, 5, 10]
   artifacts_dir: {harness_artifacts_dir}
   ray_address: null
-  quiet: true
   lancedb_uri: lancedb
   hybrid: false
   embed_model_name: {embed_model_name}
