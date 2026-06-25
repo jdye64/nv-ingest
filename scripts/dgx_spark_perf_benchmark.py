@@ -280,7 +280,7 @@ presets:
     pdf_extract_workers: 8
     pdf_extract_num_cpus: 2.0
     pdf_extract_batch_size: 4
-    pdf_split_batch_size: 2
+    pdf_split_batch_size: 4
     page_elements_batch_size: 4
     page_elements_workers: 3
     ocr_workers: 1
