@@ -288,6 +288,7 @@ presets:
     gpu_embed: 0.25
     embed_modality: text
     embed_model_name: {embed_model_name}
+    local_ingest_embed_backend: hf
 
 datasets:
   bo20_local:
