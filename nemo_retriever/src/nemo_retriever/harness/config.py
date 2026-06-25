@@ -103,6 +103,7 @@ class HarnessConfig:
     artifacts_dir: str | None = None
     ray_address: str | None = None
     ray_log_to_driver: bool = True
+    quiet: bool = False
     lancedb_uri: str = "lancedb"
     lancedb_table_name: str = "nv-ingest"
     hybrid: bool = False
@@ -430,6 +431,7 @@ def _apply_env_overrides(config_dict: dict[str, Any]) -> None:
         "HARNESS_ARTIFACTS_DIR": ("artifacts_dir", str),
         "HARNESS_RAY_ADDRESS": ("ray_address", str),
         "HARNESS_RAY_LOG_TO_DRIVER": ("ray_log_to_driver", _parse_bool),
+        "HARNESS_QUIET": ("quiet", _parse_bool),
         "HARNESS_LANCEDB_URI": ("lancedb_uri", str),
         "HARNESS_LANCEDB_TABLE_NAME": ("lancedb_table_name", str),
         "HARNESS_HYBRID": ("hybrid", _parse_bool),

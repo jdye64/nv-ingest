@@ -294,6 +294,22 @@ def test_build_command_passes_no_ray_log_to_driver(tmp_path: Path) -> None:
     assert "--ray-log-to-driver" not in cmd
 
 
+def test_build_command_passes_quiet(tmp_path: Path) -> None:
+    dataset_dir = tmp_path / "dataset"
+    dataset_dir.mkdir()
+
+    cfg = HarnessConfig(
+        dataset_dir=str(dataset_dir),
+        dataset_label="tiny",
+        preset="single_gpu",
+        evaluation_mode="none",
+        recall_required=False,
+        quiet=True,
+    )
+    cmd, _runtime_dir, _detection_file, _effective_query_csv = _build_command(cfg, tmp_path, run_id="r1")
+    assert "--quiet" in cmd
+
+
 def test_build_command_passes_explicit_ocr_version(tmp_path: Path) -> None:
     dataset_dir = tmp_path / "dataset"
     dataset_dir.mkdir()

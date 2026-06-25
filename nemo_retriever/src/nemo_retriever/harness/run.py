@@ -371,6 +371,8 @@ def _build_command(cfg: HarnessConfig, artifact_dir: Path, run_id: str) -> tuple
         cfg.evaluation_mode,
         "--ray-log-to-driver" if cfg.ray_log_to_driver else "--no-ray-log-to-driver",
     ]
+    if cfg.quiet:
+        cmd += ["--quiet"]
 
     if not cfg.use_heuristics:
         cmd += [
