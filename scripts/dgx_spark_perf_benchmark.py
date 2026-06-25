@@ -274,7 +274,7 @@ presets:
     pdf_extract_batch_size: 4
     pdf_split_batch_size: 1
     page_elements_batch_size: 4
-    page_elements_workers: 2
+    page_elements_workers: 3
     ocr_workers: 1
     ocr_batch_size: 8
     embed_workers: 1
