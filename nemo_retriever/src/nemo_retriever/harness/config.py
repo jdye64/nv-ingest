@@ -154,6 +154,7 @@ class HarnessConfig:
     embed_workers: int = 3
     embed_batch_size: int = 32
     embed_enforce_eager: bool = False
+    embed_max_length: int = 8192
     page_elements_cpus_per_actor: float = 1.0
     ocr_cpus_per_actor: float = 1.0
     embed_cpus_per_actor: float = 1.0
@@ -248,6 +249,8 @@ class HarnessConfig:
             errors.append(f"embed_granularity must be one of {sorted(VALID_EMBED_GRANULARITIES)}")
         if self.local_ingest_embed_backend not in {"vllm", "hf"}:
             errors.append("local_ingest_embed_backend must be one of ['hf', 'vllm']")
+        if int(self.embed_max_length) < 1:
+            errors.append("embed_max_length must be >= 1")
 
         if self.ocr_version is not None and self.ocr_version not in {"v1", "v2"}:
             errors.append("ocr_version must be one of ['v1', 'v2'] when provided")
@@ -462,6 +465,7 @@ def _apply_env_overrides(config_dict: dict[str, Any]) -> None:
         "HARNESS_EMBED_INVOKE_URL": ("embed_invoke_url", str),
         "HARNESS_LOCAL_INGEST_EMBED_BACKEND": ("local_ingest_embed_backend", str),
         "HARNESS_EMBED_ENFORCE_EAGER": ("embed_enforce_eager", _parse_bool),
+        "HARNESS_EMBED_MAX_LENGTH": ("embed_max_length", _parse_number),
         "HARNESS_CAPTION_INVOKE_URL": ("caption_invoke_url", str),
     }
 

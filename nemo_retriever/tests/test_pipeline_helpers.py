@@ -135,6 +135,7 @@ def test_build_embed_params_forwards_remote_and_modality_flags() -> None:
         embed_cpus_per_actor=1.5,
         embed_gpus_per_actor=0.5,
         embed_enforce_eager=True,
+        embed_max_length=2048,
     )
 
     assert isinstance(params, EmbedParams)
@@ -151,6 +152,7 @@ def test_build_embed_params_forwards_remote_and_modality_flags() -> None:
     assert params.batch_tuning.embed_cpus_per_actor == 1.5
     assert params.batch_tuning.gpu_embed == 0.0
     assert params.runtime.enforce_eager is True
+    assert params.runtime.max_length == 2048
 
 
 class TestCollectResults:

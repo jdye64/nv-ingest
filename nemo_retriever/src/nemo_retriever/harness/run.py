@@ -418,6 +418,8 @@ def _build_command(cfg: HarnessConfig, artifact_dir: Path, run_id: str) -> tuple
         cfg.embed_granularity,
         "--local-ingest-embed-backend",
         cfg.local_ingest_embed_backend,
+        "--embed-max-length",
+        str(cfg.embed_max_length),
         "--runtime-metrics-dir",
         str(runtime_dir),
         "--runtime-metrics-prefix",

@@ -270,6 +270,10 @@ EmbedEnforceEagerOption = Annotated[
         help="Disable vLLM CUDA graph capture for local ingest embedding.",
     ),
 ]
+EmbedMaxLengthOption = Annotated[
+    int | None,
+    typer.Option("--embed-max-length", min=1, help="Maximum vLLM model length for local ingest embedding."),
+]
 EmbedModalityOption = Annotated[
     str | None,
     typer.Option("--embed-modality", help="Embedding modality for emitted rows: text, image, or text_image."),

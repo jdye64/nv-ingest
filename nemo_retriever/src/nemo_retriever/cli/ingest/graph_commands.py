@@ -229,6 +229,7 @@ def _graph_ingest_command(
     embed_model_name: opts.EmbedModelNameOption = None,
     local_ingest_embed_backend: opts.LocalIngestEmbedBackendOption = None,
     embed_enforce_eager: opts.EmbedEnforceEagerOption = None,
+    embed_max_length: opts.EmbedMaxLengthOption = None,
     embed_modality: opts.EmbedModalityOption = None,
     embed_granularity: opts.EmbedGranularityOption = None,
     text_elements_modality: opts.TextElementsModalityOption = None,
