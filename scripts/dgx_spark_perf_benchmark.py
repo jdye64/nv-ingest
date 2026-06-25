@@ -23,6 +23,7 @@ import datetime as dt
 import json
 import os
 import platform
+import re
 import shutil
 import statistics
 import subprocess
@@ -39,6 +40,12 @@ DEFAULT_OUTPUT_ROOT = REPO_ROOT / "nemo_retriever" / "artifacts" / "dgx_spark_pe
 DEFAULT_PRESET = "PE_GE_OCR_TE_DENSE"
 DEFAULT_EMBED_MODEL = "nvidia/llama-nemotron-embed-1b-v2"
 DEFAULT_QUERY = "What are the main topics covered in these documents?"
+VDB_DROP_RE = re.compile(
+    r"accepted=(?P<accepted>\d+)\s+"
+    r"dropped_no_embedding=(?P<dropped_no_embedding>\d+)\s+"
+    r"dropped_bad_length=(?P<dropped_bad_length>\d+)\s+"
+    r"dropped_no_text=(?P<dropped_no_text>\d+)"
+)
 
 
 @dataclass
@@ -279,8 +286,8 @@ presets:
     ocr_batch_size: 8
     embed_workers: 1
     embed_batch_size: 128
-    embed_enforce_eager: false
-    embed_max_length: 512
+    embed_enforce_eager: true
+    embed_max_length: 2048
     page_elements_cpus_per_actor: 1.0
     ocr_cpus_per_actor: 1.0
     embed_cpus_per_actor: 1.0
@@ -336,6 +343,54 @@ def summarize_numeric(values: Iterable[float]) -> dict[str, float] | None:
         "p50": p50,
         "p95": p95,
         "max": vals[-1],
+    }
+
+
+def summarize_embedding_log_quality(results: Sequence[CommandResult]) -> dict[str, Any]:
+    totals = {
+        "accepted": 0,
+        "dropped_no_embedding": 0,
+        "dropped_bad_length": 0,
+        "dropped_no_text": 0,
+    }
+    validation_error_count = 0
+    matched_drop_lines = 0
+    scanned_logs: list[str] = []
+
+    for result in results:
+        path = Path(result.log_path)
+        if not path.exists():
+            continue
+        scanned_logs.append(str(path))
+        text = path.read_text(encoding="utf-8", errors="replace")
+        validation_error_count += text.count("VLLMValidationError")
+        for match in VDB_DROP_RE.finditer(text):
+            matched_drop_lines += 1
+            for key in totals:
+                totals[key] += int(match.group(key))
+
+    dropped = totals["dropped_no_embedding"] + totals["dropped_bad_length"]
+    status = "passed"
+    if dropped or validation_error_count:
+        status = "failed"
+    elif not matched_drop_lines:
+        status = "skipped"
+
+    detail = (
+        f"accepted={totals['accepted']} dropped_no_embedding={totals['dropped_no_embedding']} "
+        f"dropped_bad_length={totals['dropped_bad_length']} dropped_no_text={totals['dropped_no_text']} "
+        f"vllm_validation_errors={validation_error_count} scanned_logs={len(scanned_logs)}"
+    )
+    return {
+        "name": "embedding_log_quality",
+        "status": status,
+        "detail": detail,
+        "metrics": {
+            **totals,
+            "vllm_validation_errors": validation_error_count,
+            "matched_drop_lines": matched_drop_lines,
+            "scanned_logs": scanned_logs,
+        },
     }
 
 
@@ -623,6 +678,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         }
         for r in command_results
     ]
+    embedding_quality = summarize_embedding_log_quality(command_results)
+    summary["quality_checks"].append(embedding_quality)
+    if embedding_quality["status"] == "failed":
+        summary["validation_errors"].append(f"embedding_log_quality failed: {embedding_quality['detail']}")
 
     ingest_latencies = [
         float(metrics["ingest_secs"])
