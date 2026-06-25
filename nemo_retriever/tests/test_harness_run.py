@@ -190,6 +190,8 @@ def test_build_command_uses_hidden_detection_file_by_default(tmp_path: Path) -> 
     assert "text" in cmd
     assert "--embed-granularity" in cmd
     assert "element" in cmd
+    assert "--local-ingest-embed-backend" in cmd
+    assert cmd[cmd.index("--local-ingest-embed-backend") + 1] == "vllm"
     assert "--ocr-version" not in cmd
     assert "--extract-page-as-image" in cmd
     assert "--no-extract-page-as-image" not in cmd
@@ -212,6 +214,23 @@ def test_build_command_passes_embed_enforce_eager(tmp_path: Path) -> None:
     )
     cmd, _runtime_dir, _detection_file, _effective_query_csv = _build_command(cfg, tmp_path, run_id="r1")
     assert "--embed-enforce-eager" in cmd
+
+
+def test_build_command_passes_local_ingest_embed_backend(tmp_path: Path) -> None:
+    dataset_dir = tmp_path / "dataset"
+    dataset_dir.mkdir()
+
+    cfg = HarnessConfig(
+        dataset_dir=str(dataset_dir),
+        dataset_label="tiny",
+        preset="single_gpu",
+        evaluation_mode="none",
+        recall_required=False,
+        local_ingest_embed_backend="hf",
+    )
+    cmd, _runtime_dir, _detection_file, _effective_query_csv = _build_command(cfg, tmp_path, run_id="r1")
+    assert "--local-ingest-embed-backend" in cmd
+    assert cmd[cmd.index("--local-ingest-embed-backend") + 1] == "hf"
 
 
 def test_build_command_supports_inprocess_run_mode(tmp_path: Path) -> None:

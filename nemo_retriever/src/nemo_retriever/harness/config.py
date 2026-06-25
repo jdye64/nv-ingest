@@ -142,6 +142,7 @@ class HarnessConfig:
     caption_invoke_url: str | None = None
     api_key: str | None = None
 
+    local_ingest_embed_backend: str = "vllm"
     pdf_extract_workers: int = 8
     pdf_extract_num_cpus: float = 2.0
     pdf_extract_batch_size: int = 4
@@ -245,6 +246,8 @@ class HarnessConfig:
 
         if self.embed_granularity not in VALID_EMBED_GRANULARITIES:
             errors.append(f"embed_granularity must be one of {sorted(VALID_EMBED_GRANULARITIES)}")
+        if self.local_ingest_embed_backend not in {"vllm", "hf"}:
+            errors.append("local_ingest_embed_backend must be one of ['hf', 'vllm']")
 
         if self.ocr_version is not None and self.ocr_version not in {"v1", "v2"}:
             errors.append("ocr_version must be one of ['v1', 'v2'] when provided")
@@ -457,6 +460,7 @@ def _apply_env_overrides(config_dict: dict[str, Any]) -> None:
         "HARNESS_GRAPHIC_ELEMENTS_INVOKE_URL": ("graphic_elements_invoke_url", str),
         "HARNESS_TABLE_STRUCTURE_INVOKE_URL": ("table_structure_invoke_url", str),
         "HARNESS_EMBED_INVOKE_URL": ("embed_invoke_url", str),
+        "HARNESS_LOCAL_INGEST_EMBED_BACKEND": ("local_ingest_embed_backend", str),
         "HARNESS_EMBED_ENFORCE_EAGER": ("embed_enforce_eager", _parse_bool),
         "HARNESS_CAPTION_INVOKE_URL": ("caption_invoke_url", str),
     }
