@@ -278,7 +278,7 @@ presets:
     ocr_workers: 1
     ocr_batch_size: 8
     embed_workers: 1
-    embed_batch_size: 128
+    embed_batch_size: 96
     embed_enforce_eager: true
     embed_max_length: 512
     page_elements_cpus_per_actor: 1.0
