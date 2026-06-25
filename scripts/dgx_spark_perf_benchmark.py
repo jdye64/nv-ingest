@@ -46,6 +46,7 @@ VDB_DROP_RE = re.compile(
     r"dropped_bad_length=(?P<dropped_bad_length>\d+)\s+"
     r"dropped_no_text=(?P<dropped_no_text>\d+)"
 )
+PREPARED_VDB_RE = re.compile(r"Prepared (?P<prepared>\d+) uploadable VDB records")
 
 
 @dataclass
@@ -346,7 +347,20 @@ def summarize_numeric(values: Iterable[float]) -> dict[str, float] | None:
     }
 
 
-def summarize_embedding_log_quality(results: Sequence[CommandResult]) -> dict[str, Any]:
+def _count_lancedb_rows(artifact_dir: Path) -> int | None:
+    try:
+        import lancedb  # type: ignore[import-not-found]
+
+        db = lancedb.connect(str(artifact_dir / "lancedb"))
+        table = db.open_table("nv-ingest")
+        return int(table.count_rows())
+    except Exception:
+        return None
+
+
+def summarize_embedding_log_quality(
+    results: Sequence[CommandResult], e2e_metrics: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
     totals = {
         "accepted": 0,
         "dropped_no_embedding": 0,
@@ -355,6 +369,7 @@ def summarize_embedding_log_quality(results: Sequence[CommandResult]) -> dict[st
     }
     validation_error_count = 0
     matched_drop_lines = 0
+    prepared_records = 0
     scanned_logs: list[str] = []
 
     for result in results:
@@ -364,22 +379,38 @@ def summarize_embedding_log_quality(results: Sequence[CommandResult]) -> dict[st
         scanned_logs.append(str(path))
         text = path.read_text(encoding="utf-8", errors="replace")
         validation_error_count += text.count("VLLMValidationError")
+        prepared_records += sum(int(match.group("prepared")) for match in PREPARED_VDB_RE.finditer(text))
         for match in VDB_DROP_RE.finditer(text):
             matched_drop_lines += 1
             for key in totals:
                 totals[key] += int(match.group(key))
 
+    persisted_records = 0
+    counted_tables = 0
+    for metrics in e2e_metrics.values():
+        artifact_dir = metrics.get("artifact_dir")
+        if not artifact_dir:
+            continue
+        count = _count_lancedb_rows(Path(str(artifact_dir)))
+        if count is None:
+            continue
+        persisted_records += count
+        counted_tables += 1
+
     dropped = totals["dropped_no_embedding"] + totals["dropped_bad_length"]
     status = "passed"
     if dropped or validation_error_count:
         status = "failed"
-    elif not matched_drop_lines:
+    elif prepared_records and counted_tables and persisted_records < prepared_records:
+        status = "failed"
+    elif not matched_drop_lines and not (prepared_records and counted_tables):
         status = "skipped"
 
     detail = (
         f"accepted={totals['accepted']} dropped_no_embedding={totals['dropped_no_embedding']} "
         f"dropped_bad_length={totals['dropped_bad_length']} dropped_no_text={totals['dropped_no_text']} "
-        f"vllm_validation_errors={validation_error_count} scanned_logs={len(scanned_logs)}"
+        f"vllm_validation_errors={validation_error_count} prepared_records={prepared_records} "
+        f"persisted_records={persisted_records} scanned_logs={len(scanned_logs)}"
     )
     return {
         "name": "embedding_log_quality",
@@ -389,6 +420,9 @@ def summarize_embedding_log_quality(results: Sequence[CommandResult]) -> dict[st
             **totals,
             "vllm_validation_errors": validation_error_count,
             "matched_drop_lines": matched_drop_lines,
+            "prepared_records": prepared_records,
+            "persisted_records": persisted_records,
+            "counted_lancedb_tables": counted_tables,
             "scanned_logs": scanned_logs,
         },
     }
@@ -678,7 +712,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         }
         for r in command_results
     ]
-    embedding_quality = summarize_embedding_log_quality(command_results)
+    embedding_quality = summarize_embedding_log_quality(command_results, summary["e2e_metrics"])
     summary["quality_checks"].append(embedding_quality)
     if embedding_quality["status"] == "failed":
         summary["validation_errors"].append(f"embedding_log_quality failed: {embedding_quality['detail']}")
