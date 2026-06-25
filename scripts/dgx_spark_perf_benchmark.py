@@ -252,7 +252,7 @@ def write_harness_config(
 active:
   dataset: bo20_local
   preset: {preset}
-  run_mode: inprocess
+  run_mode: batch
   query_csv: null
   input_type: pdf
   recall_required: false
