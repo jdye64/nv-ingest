@@ -682,6 +682,16 @@ serviceConfig:
       - "/openapi.json"
       - "/redoc"
 
+  # SDK pipeline defaults (inprocess / batch / service). Helm renders these
+  # into pipeline_defaults in the retriever-service ConfigMap.
+  pipelineDefaults:
+    extract:
+      ocrVersion: v2
+    embed: {}
+    asr: {}
+    caption: {}
+    store: {}
+    dedup: {}
 
 # =============================================================================
 # Retriever Results volume

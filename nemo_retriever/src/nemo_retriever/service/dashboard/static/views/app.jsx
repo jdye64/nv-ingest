@@ -15,7 +15,7 @@ function parseHash() {
     const jobId = raw.slice(4);
     if (jobId) return { view: 'job_detail', jobId };
   }
-  if (['overview', 'jobs', 'vdb'].includes(raw)) {
+  if (['overview', 'jobs', 'vdb', 'config'].includes(raw)) {
     return { view: raw, jobId: null };
   }
   return { view: 'overview', jobId: null };
@@ -53,6 +53,8 @@ function App() {
     content = React.createElement(JobDetailView, { jobId: route.jobId, onBack: backToJobs });
   } else if (route.view === 'vdb' && typeof VdbView !== 'undefined') {
     content = React.createElement(VdbView);
+  } else if (route.view === 'config' && typeof ConfigView !== 'undefined') {
+    content = React.createElement(ConfigView);
   } else {
     content = React.createElement('div', { className: 'empty-state' }, 'Loading view…');
   }

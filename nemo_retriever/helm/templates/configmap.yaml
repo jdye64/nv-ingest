@@ -154,6 +154,15 @@ auth:
   header_name: {{ .Values.serviceConfig.auth.headerName | quote }}
   bypass_paths: {{ toJson .Values.serviceConfig.auth.bypassPaths }}
 
+pipeline_defaults:
+  extract:
+    ocr_version: {{ .Values.serviceConfig.pipelineDefaults.extract.ocrVersion | default "v2" | quote }}
+  embed: {{ toJson (.Values.serviceConfig.pipelineDefaults.embed | default dict) }}
+  asr: {{ toJson (.Values.serviceConfig.pipelineDefaults.asr | default dict) }}
+  caption: {{ toJson (.Values.serviceConfig.pipelineDefaults.caption | default dict) }}
+  store: {{ toJson (.Values.serviceConfig.pipelineDefaults.store | default dict) }}
+  dedup: {{ toJson (.Values.serviceConfig.pipelineDefaults.dedup | default dict) }}
+
 {{- if .Values.serviceConfig.vectordb.enabled }}
 vectordb:
   enabled: true

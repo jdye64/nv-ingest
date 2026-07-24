@@ -24,8 +24,10 @@ from pydantic import (
     model_validator,
 )
 
+from nemo_retriever.config.justification import ConfigJustification, justified_field
 from nemo_retriever.common.modality.caption.model_profiles import DEFAULT_LOCAL_CAPTION_MODEL_ID
 from nemo_retriever.common.remote_auth import resolve_remote_api_key
+from nemo_retriever.common.schemas.base import RichModel
 
 IngestorRunMode = Literal["inprocess", "batch", "service"]
 
@@ -174,7 +176,7 @@ def _redact_param_display(
     return f"<{type(value).__module__}.{type(value).__qualname__}>"
 
 
-class _ParamsModel(BaseModel):
+class _ParamsModel(RichModel):
     """Shared base for all remote-transport Pydantic params models.
 
     Two cross-cutting behaviours live here:
@@ -520,7 +522,12 @@ class ExtractParams(_ParamsModel):
     # Run PageElementDetection (layout/yolox). Required by TableStructure and
     # OCR. Safe to disable for text-only ingests.
     use_page_elements: bool = True
-    use_table_structure: bool = False
+    use_table_structure: bool = justified_field(
+        False,
+        description="Enable table structure detection for table/chart extraction.",
+        justification=(ConfigJustification.ACCURACY, ConfigJustification.LATENCY),
+        rationale="Improves table fidelity at the cost of an extra model stage per page.",
+    )
     table_output_format: Optional[Literal["pseudo_markdown", "markdown"]] = None
     dpi: int = 200
     image_format: str = "jpeg"
@@ -528,7 +535,12 @@ class ExtractParams(_ParamsModel):
     render_mode: Literal["full_dpi", "fit_to_model"] = "fit_to_model"
     inference_batch_size: int = 8
     ocr_model_dir: Optional[str] = None
-    ocr_version: Literal["v1", "v2"] = "v2"
+    ocr_version: Literal["v1", "v2"] = justified_field(
+        "v2",
+        description="OCR model generation: v2 improves accuracy over v1.",
+        justification=(ConfigJustification.ACCURACY, ConfigJustification.LATENCY),
+        rationale="v2 improves OCR quality; may increase per-page latency.",
+    )
     ocr_lang: Optional[Literal["multi", "english"]] = None
 
     # Service endpoints
@@ -593,7 +605,12 @@ class EmbedParams(_ParamsModel):
     text_elements_modality: Optional[str] = None  # per-type override for page-text rows
     structured_elements_modality: Optional[str] = None  # per-type override for table/chart/infographic rows
     text_column: str = "text"
-    inference_batch_size: int = 32
+    inference_batch_size: int = justified_field(
+        32,
+        description="Batch size for embedding inference.",
+        justification=(ConfigJustification.THROUGHPUT, ConfigJustification.MEMORY),
+        rationale="Larger batches improve throughput but increase peak GPU memory.",
+    )
     output_column: str = "text_embeddings_1b_v2"
     embedding_dim_column: str = "text_embeddings_1b_v2_dim"
     has_embedding_column: str = "text_embeddings_1b_v2_has_embedding"

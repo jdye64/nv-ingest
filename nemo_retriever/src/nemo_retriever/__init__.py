@@ -23,13 +23,20 @@ from nemo_retriever.graph.retriever import retriever as _retriever_cls
 
 __all__ = [
     "__version__",
+    "ConfigJustification",
+    "RetrieverServiceConfig",
     "create_ingestor",
+    "get_config",
     "get_version",
     "get_version_info",
     "GraphIngestionError",
     "ingestor",
+    "list_configured",
+    "load_config",
+    "print_config",
     "retriever",
     "RetrieverServiceCompatibilityError",
+    "save_config",
 ]
 
 retriever = _retriever_cls()
@@ -60,4 +67,32 @@ def __getattr__(name: str):
         from nemo_retriever.service.client import RetrieverServiceCompatibilityError
 
         return RetrieverServiceCompatibilityError
+    if name == "ConfigJustification":
+        from nemo_retriever.config import ConfigJustification
+
+        return ConfigJustification
+    if name == "RetrieverServiceConfig":
+        from nemo_retriever.config import RetrieverServiceConfig
+
+        return RetrieverServiceConfig
+    if name == "get_config":
+        from nemo_retriever.config import get_config
+
+        return get_config
+    if name == "load_config":
+        from nemo_retriever.config import load_config
+
+        return load_config
+    if name == "print_config":
+        from nemo_retriever.config import print_config
+
+        return print_config
+    if name == "save_config":
+        from nemo_retriever.config import save_config
+
+        return save_config
+    if name == "list_configured":
+        from nemo_retriever.config import list_configured
+
+        return list_configured
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

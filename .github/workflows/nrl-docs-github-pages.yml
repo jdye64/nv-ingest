@@ -51,6 +51,9 @@ jobs:
           pip install -r docs/requirements.txt
           pip install -e ./nemo_retriever
 
+      - name: Generate configuration reference docs
+        run: python docs/scripts/generate_config_docs.py --check
+
       - name: Write scan summary for the workflow run
         run: |
           {

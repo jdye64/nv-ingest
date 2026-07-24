@@ -40,6 +40,21 @@ def _merge_params[T](params: T | None, kwargs: dict[str, Any]) -> T:
     return params
 
 
+def _ensure_config_loaded() -> None:
+    """Load retriever-config.yaml into the process context when present."""
+    from nemo_retriever.config.context import set_config, try_get_config
+    from nemo_retriever.config.loader import discover_config_path, load_config
+    from nemo_retriever.config.models import RetrieverServiceConfig
+
+    if try_get_config() is not None:
+        return
+    path = discover_config_path()
+    if path is not None:
+        load_config(config_path=str(path), print_tree=False)
+    else:
+        set_config(RetrieverServiceConfig())
+
+
 def create_ingestor(
     *,
     run_mode: IngestorRunMode = "inprocess",
@@ -49,6 +64,7 @@ def create_ingestor(
     """
     Graph-only ingestion factory.
     """
+    _ensure_config_loaded()
     merged = _merge_params(params, kwargs)
     if isinstance(merged, IngestorCreateParams):
         parsed = merged

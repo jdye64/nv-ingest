@@ -200,7 +200,7 @@ tr:hover td { background: var(--nv-row-hover); }
   // references every other view component, and `job_detail.jsx` is
   // referenced from `app.jsx` but defines no top-level globals other
   // than its own component name.
-  const views = ['layout', 'overview', 'jobs', 'job_detail', 'vdb', 'app'];
+  const views = ['layout', 'overview', 'jobs', 'job_detail', 'vdb', 'config', 'app'];
   for (const name of views) {
     try {
       const resp = await fetch(`/v1/dashboard/static/views/${name}.jsx`);

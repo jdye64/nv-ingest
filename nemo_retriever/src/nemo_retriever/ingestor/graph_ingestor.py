@@ -63,6 +63,7 @@ from nemo_retriever.common.params import (
     SPLIT_CONFIG_VALID_KEYS,
     resolve_split_params,
 )
+from nemo_retriever.config.pipeline_defaults import get_pipeline_default_extract
 from nemo_retriever.common.input_files import (
     PDF_DOCUMENT_INPUT_TYPES,
     _is_explicit_glob_path,
@@ -555,7 +556,7 @@ class GraphIngestor(ingestor):
                 f"(see docs/extraction/audio-video.md)."
             )
         self._extraction_mode = extraction_mode
-        self._extract_params = _resolve_api_key(_coerce(params, kwargs, default_factory=ExtractParams))
+        self._extract_params = _resolve_api_key(_coerce(params, kwargs, default_factory=get_pipeline_default_extract))
         if text_params is not None:
             self._text_params = text_params
         if html_params is not None:
@@ -583,7 +584,7 @@ class GraphIngestor(ingestor):
     ) -> "GraphIngestor":
         """Configure image extraction (extraction_mode='image')."""
         self._extraction_mode = "image"
-        self._extract_params = _resolve_api_key(_coerce(params, kwargs, default_factory=ExtractParams))
+        self._extract_params = _resolve_api_key(_coerce(params, kwargs, default_factory=get_pipeline_default_extract))
         self._apply_split_config(split_config)
         self._record_stage("extract")
         return self
@@ -656,7 +657,7 @@ class GraphIngestor(ingestor):
         if extract_params is not None:
             self._extract_params = _resolve_api_key(extract_params)
         elif self._extract_params is None:
-            self._extract_params = ExtractParams()
+            self._extract_params = get_pipeline_default_extract()
         self._apply_split_config(split_config)
         self._record_stage("extract")
         return self
@@ -1014,7 +1015,7 @@ class GraphIngestor(ingestor):
         # branches instead of using this MultiType fallback.
         return ResolvedExtractionInputs(
             extraction_mode="auto",
-            extract_params=self._extract_params or ExtractParams(),
+            extract_params=self._extract_params or get_pipeline_default_extract(),
             text_params=self._text_params or TextChunkParams(),
             html_params=self._html_params or HtmlChunkParams(),
             audio_chunk_params=self._audio_chunk_params,

@@ -14,6 +14,13 @@ You can specify these in a .env file in your working directory or directly as sh
 | `NGC_API_KEY`                | —                                                          | The key that NIM microservices in the cluster use to access NGC resources. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`    | `http://otel-collector:4317` <br/>                       | The endpoint for the OpenTelemetry exporter, used for sending telemetry data. |
 
+## YAML configuration
+
+NeMo Retriever also supports a unified YAML configuration file (`retriever-config.yaml` or
+`retriever-service.yaml`) backed by `RetrieverServiceConfig`. See the
+[configuration reference](../reference/configuration.md) for field-level documentation,
+precedence rules, and impact tags.
+
 
 ## Related Topics
 

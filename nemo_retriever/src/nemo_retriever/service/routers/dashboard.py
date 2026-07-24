@@ -499,6 +499,21 @@ async def vdb_tables(request: Request) -> JSONResponse:
         return JSONResponse({"error": str(exc), "tables": []})
 
 
+# ── Configuration viewer ─────────────────────────────────────────────
+
+
+@router.get("/api/config")
+async def system_config(request: Request) -> JSONResponse:
+    """Return redacted system configuration and @configured metadata."""
+    from nemo_retriever.config import list_configured
+    from nemo_retriever.config.loader import _redact_model
+
+    config = request.app.state.config
+    payload = _redact_model(config.model_dump(mode="python"))
+    configured = [entry.model_dump(mode="json") for entry in list_configured()]
+    return JSONResponse({"config": payload, "configured": configured})
+
+
 # ── VDB query proxy ──────────────────────────────────────────────────
 
 

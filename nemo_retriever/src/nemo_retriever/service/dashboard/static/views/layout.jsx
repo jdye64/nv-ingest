@@ -10,12 +10,14 @@ const NAV_ITEMS = [
   { id: 'overview', label: 'Overview', icon: '◉' },
   { id: 'jobs',     label: 'Jobs', icon: '▶' },
   { id: 'vdb',      label: 'VDB Explorer', icon: '⬡' },
+  { id: 'config',   label: 'Config', icon: '⚙' },
 ];
 
 const VIEW_TITLES = {
   overview: 'Cluster Overview',
   jobs: 'Jobs',
   vdb: 'VDB Explorer',
+  config: 'System Configuration',
 };
 
 function Layout({ view, onNavigate, breadcrumb, children }) {
