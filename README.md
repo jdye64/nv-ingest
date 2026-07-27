@@ -36,10 +36,10 @@ For small-scale workloads, such as workloads of fewer than 100 PDFs, you can use
 After [following the quickstart installation steps](nemo_retriever), you can start ingesting content like with the following snippet:
 ```python
 from nemo_retriever import create_ingestor
-from nemo_retriever.io import to_markdown, to_markdown_by_page
+from nemo_retriever.common.io import to_markdown, to_markdown_by_page
 from pathlib import Path
 
-documents = [str(Path("../data/multimodal_test.pdf"))]
+documents = [str(Path("data/multimodal_test.pdf"))]
 ingestor = create_ingestor(run_mode="batch")
 
 # ingestion tasks are chainable and defined lazily
@@ -93,7 +93,7 @@ dict_keys([1, 2, 3])
 To query for relevant snippets of the ingested content, and use them with an LLM to generate answers, use the following code.
 
 ```python
-from nemo_retriever.retriever import Retriever
+from nemo_retriever.graph.retriever import Retriever
 from openai import OpenAI
 import os
 
@@ -141,9 +141,9 @@ Cat is the animal whose activity (jumping onto a laptop) matches the location of
 
 - **[Official Documentation](https://docs.nvidia.com/nemo/retriever/extraction/)** - Complete user guides, API references, and deployment instructions
 - **[Getting Started Guide](https://docs.nvidia.com/nemo/retriever/extraction/overview/)** - Overview and prerequisites for production deployments
-- **[Benchmarking Guide](https://docs.nvidia.com/nemo/retriever/extraction/benchmarking/)** - Performance testing and recall evaluation framework
-- **[MIG Deployment](https://docs.nvidia.com/nemo/retriever/extraction/mig-benchmarking/)** - Multi-Instance GPU configurations for Kubernetes
-- **[API Documentation](https://docs.nvidia.com/nemo/retriever/extraction/api/)** - Python client and API reference
+- **[Benchmarking Guide](nemo_retriever/docs/cli/benchmarking.md)** - Performance testing and recall evaluation framework
+- **[MIG Deployment](nemo_retriever/helm/README.md)** - Multi-Instance GPU configurations for Kubernetes
+- **[API Documentation](docs/docs/extraction/nemo-retriever-api-reference.md)** - Python client and API reference
 
 ## Notices
 
@@ -168,7 +168,7 @@ https://pypi.org/project/pdfservices-sdk/
     [request access](https://huggingface.co/meta-llama/Llama-3.2-1B) and set `HF_ACCESS_TOKEN` to your HuggingFace 
     access token in order to use it.
 
-Before contributing to this project, please review our [Contributor Guide](contributing.md).
+Before contributing to this project, please review our [Contributor Guide](CONTRIBUTING.md).
 
 ## Security Considerations
 

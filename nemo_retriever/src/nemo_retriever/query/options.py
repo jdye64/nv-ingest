@@ -5,7 +5,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Sequence
+from typing import Literal, Sequence
+
+QueryRetrievalMode = Literal["auto", "dense", "hybrid", "sparse"]
 
 
 @dataclass(frozen=True)
@@ -14,15 +16,16 @@ class QueryRetrievalOptions:
     candidate_k: int | None = None
     page_dedup: bool = False
     content_types: str | Sequence[str] | None = None
-    # Fused vector + full-text (BM25) retrieval. Opt-in (default off) preserves the
-    # legacy vector-only path; requires the LanceDB table to carry an FTS index.
-    hybrid: bool = False
+    # ``auto`` lets LanceDB table capability detection choose dense, hybrid, or
+    # sparse retrieval. Explicit modes are expert overrides.
+    retrieval_mode: QueryRetrievalMode = "auto"
 
 
 @dataclass(frozen=True)
 class QueryEmbedOptions:
     embed_invoke_url: str | None = None
     embed_model_name: str | None = None
+    embed_model_provider_prefix: str | None = None
 
 
 @dataclass(frozen=True)
@@ -41,9 +44,45 @@ class QueryStorageOptions:
 
 
 @dataclass(frozen=True)
+class QueryServiceOptions:
+    service_url: str = "http://localhost:7670"
+    service_api_token: str | None = None
+
+
+@dataclass(frozen=True)
+class QueryAgenticOptions:
+    """Options for the agentic (ReAct) retrieval strategy."""
+
+    enabled: bool = False
+    llm_model: str | None = None
+    llm_backend: str | None = None
+    invoke_url: str | None = None
+    local_llm_backend: str = "vllm"
+    local_hf_cache_dir: str | None = None
+    local_gpu_memory_utilization: float = 0.8
+    local_tensor_parallel_size: int = 1
+    local_max_model_len: int | None = None
+    local_max_num_seqs: int | None = None
+    reasoning_effort: str | None = None
+    backend_top_k: int = 20
+    react_max_steps: int = 50
+    text_truncation: int = 0
+    num_concurrent: int = 1
+    temperature: float = 0.0
+
+
+@dataclass(frozen=True)
 class QueryRequest:
     query: str
     retrieval: QueryRetrievalOptions = field(default_factory=QueryRetrievalOptions)
     embed: QueryEmbedOptions = field(default_factory=QueryEmbedOptions)
     rerank: QueryRerankOptions = field(default_factory=QueryRerankOptions)
     storage: QueryStorageOptions = field(default_factory=QueryStorageOptions)
+    agentic: QueryAgenticOptions = field(default_factory=QueryAgenticOptions)
+
+
+@dataclass(frozen=True)
+class ServiceQueryRequest:
+    query: str
+    retrieval: QueryRetrievalOptions = field(default_factory=QueryRetrievalOptions)
+    service: QueryServiceOptions = field(default_factory=QueryServiceOptions)

@@ -6,11 +6,14 @@ ingest and retrieval.
 For product-facing examples, prefer these commands:
 
 - `retriever ingest` - ingest supported documents and media into a Retriever index.
-- `retriever query` - query a local LanceDB table written by ingest.
+- `retriever query` - query a local LanceDB table written by local or batch ingest.
+- `retriever query service` - query a Retriever service deployment.
+- `retriever harness run` - run a named, code-owned benchmark.
+- `retriever service` - operate a Retriever service deployment.
 
-`retriever pipeline run` remains available as a development and compatibility
-command for legacy pipeline workflows, evaluation, intermediate artifacts, and
-pipeline-specific debugging. It is not the preferred public ingest interface.
+Format names and internal stages are not root commands. Use `retriever ingest`
+for PDF, HTML, TXT, image, Office, audio, and video inputs; it owns extraction,
+embedding, and index creation as one workflow.
 
 ## Public ingest shape
 
@@ -45,33 +48,29 @@ configuration, local embed backend selection, or local media controls.
 <!-- --8<-- [start:quickstart] -->
 
 > Use `retriever ingest` and `retriever query` for product-facing workflows.
-> `retriever pipeline run` is development / compatibility only.
+> Use `retriever harness run` only for benchmark execution.
 
 ## Quick start
 
 ### Ingest a PDF locally
 
 ```bash
-retriever ingest ./data/multimodal_test.pdf \
-  --method pdfium \
-  --extract-text --extract-tables --extract-charts \
-  --use-table-structure \
-  --embed-model-name nvidia/llama-nemotron-embed-1b-v2
+retriever ingest ./data/multimodal_test.pdf
 ```
 
 Then query the default LanceDB table:
 
 ```bash
-retriever query "What is in this document?" \
-  --embed-model-name nvidia/llama-nemotron-embed-1b-v2
+retriever query "What is in this document?"
 ```
 
-By default, local ingest writes to `lancedb/nemo-retriever` and `retriever query`
-reads from the same table.
+By default, local ingest auto-detects supported input formats and writes to
+`lancedb/nemo-retriever`; `retriever query` reads from the same table. Use
+explicit high-level options when a task needs behavior beyond the current ingest
+defaults.
 
-The `retriever query` examples below apply to local and batch ingest output
-written to LanceDB. Service ingest sends documents to a remote service; querying
-service-owned storage is handled by that service deployment.
+The plain `retriever query` examples below apply to local and batch ingest output
+written to LanceDB. Use `retriever query service` to query a Retriever service.
 
 ### Ingest a larger corpus with batch mode
 
@@ -94,8 +93,13 @@ retriever ingest service ./data/pdf_corpus \
 ```
 
 Use `--service-api-token` or `NEMO_RETRIEVER_API_TOKEN` when the service requires
-a bearer token. Service ingest does not expose `--lancedb-uri`; the service owns
-its vector database configuration.
+a bearer token. Service ingest does not expose `--lancedb-uri`; the service
+configures its vector database. Query the service with:
+
+```bash
+retriever query service "What is in this corpus?" \
+  --service-url http://localhost:7670
+```
 
 ### Route ingest to hosted or self-hosted NIM endpoints
 
@@ -104,7 +108,7 @@ export NVIDIA_API_KEY=nvapi-...
 
 retriever ingest ./data/multimodal_test.pdf \
   --page-elements-invoke-url https://ai.api.nvidia.com/v1/cv/nvidia/nemotron-page-elements-v3 \
-  --ocr-invoke-url https://ai.api.nvidia.com/v1/cv/nvidia/nemotron-ocr-v1 \
+  --ocr-invoke-url https://ai.api.nvidia.com/v1/cv/nvidia/nemotron-ocr-v2 \
   --table-structure-invoke-url https://ai.api.nvidia.com/v1/cv/nvidia/nemotron-table-structure-v1 \
   --embed-invoke-url https://integrate.api.nvidia.com/v1/embeddings \
   --embed-model-name nvidia/llama-nemotron-embed-1b-v2
@@ -131,9 +135,10 @@ retriever query "What is in this document?" \
 
 ### Query result controls
 
-`retriever query` returns compact JSON hits with `source`, `page_number`, and
-`text`. Use `--candidate-k`, `--page-dedup`, and `--content-types` to shape the
-result set after vector retrieval:
+Both `retriever query` and `retriever query service` return compact JSON hits
+with `source`, `page_number`, and `text`. Use `--candidate-k`, `--page-dedup`,
+and `--content-types` to control how results are selected after vector
+retrieval:
 
 ```bash
 retriever query "annual revenue by region" \
@@ -142,19 +147,97 @@ retriever query "annual revenue by region" \
   --content-types table
 ```
 
-`--top-k` is the final number of hits returned. `--candidate-k` is the wider
-candidate pool retrieved before page deduplication, content-type filtering, and
-final truncation. It must be greater than or equal to `--top-k`, and should
-usually be larger when page deduplication or content-type filtering might
-otherwise remove too many of the top retrieved rows. Page deduplication and
-content-type filtering are applied after vector retrieval, preserving the
-retriever's ranking order and truncating the final output to `--top-k`.
-When querying a table ingested with an explicit embedding model, pass the same
-`--embed-model-name` to `retriever query`.
+`--top-k` is the final number of results to return after filtering and
+deduplication. `--candidate-k` is the number of raw results to retrieve from
+LanceDB or the Retriever service before filtering, page deduplication, and
+final truncation. If omitted, the candidate pool is the same size as
+`--top-k`. Set `--candidate-k` larger than `--top-k` when page deduplication
+or content-type filtering might remove too many of the nearest retrieved rows.
+It must always be greater than or equal to `--top-k`.
+
+Page deduplication and content-type filtering are applied after vector
+retrieval, preserving retriever ranking order and truncating the final output to
+`--top-k`. Local and batch ingest record the canonical embedding model on the
+LanceDB table, and non-service query uses that model automatically. Use
+`--embed-model-name` only as an explicit override or when querying a legacy or
+third-party table without model metadata. Endpoint URLs and provider prefixes
+remain runtime configuration, so continue to pass `--embed-invoke-url` and
+`--embed-model-provider-prefix` when the selected model must be routed remotely.
+For example, a table can store the canonical model
+`nvidia/llama-nemotron-embed-vl-1b-v2` while a LiteLLM-routed request uses
+`nvidia/nvidia/llama-nemotron-embed-vl-1b-v2`. The endpoint and routing prefix
+are intentionally not persisted on the table.
+
 `--content-types` accepts comma-separated content types such as `text`, `table`,
 `chart`, `image`, and `infographic`. `images` is accepted as an alias for
-captioned image rows emitted by ingest. Hits with missing or unknown content
-types are excluded while `--content-types` is active.
+captioned image rows emitted by ingest. This option filters by content-type
+metadata only; it does not filter by source, page, or other metadata
+predicates. Hits with missing or unknown content-type metadata are excluded
+while `--content-types` is active. In service mode, results must include
+content-type metadata to match this filter. Default display values in the JSON
+output are not used for content-type matching.
+
+### Agentic retrieval
+
+`--agentic` swaps the single dense pass for an LLM-driven ReAct loop: the agent
+issues several retrieval sub-queries, fuses the candidates, and selects a final
+ranking. It searches the same LanceDB table built by `retriever ingest`, so it is
+a drop-in alternative to standard retrieval.
+
+By default, agentic retrieval runs the agent LLM in process with local vLLM and
+`nemotron-8b` (`nvidia/Llama-3.1-Nemotron-Nano-8B-v1`). This requires a CUDA GPU
+host and the local extras installed. Provide `--agentic-invoke-url` when you want
+a custom model or a separately hosted OpenAI-compatible endpoint.
+
+```bash
+# default local vLLM agent LLM: nemotron-8b
+retriever query "how does the ingestion pipeline handle tables?" \
+  --agentic
+
+# custom/self-hosted model through an OpenAI-compatible endpoint
+retriever query "summarize the deployment options" \
+  --agentic \
+  --agentic-llm-model custom-remote-model \
+  --agentic-invoke-url http://localhost:9000/v1/chat/completions \
+  --embed-invoke-url http://localhost:8000/v1 \
+  --agentic-react-max-steps 5
+```
+
+Unlike the dense path (which returns text-enriched hits), agentic mode returns
+the agent's ranked document IDs as JSON, each annotated with the source that
+produced it (`final_results`, `rrf`, or `selection_agent`). It reuses the same
+`--top-k`, `--lancedb-uri`, `--table-name`, `--embed-invoke-url`, and
+`--embed-model-name` options as standard retrieval. Agentic retrieval uses the
+selected table's model automatically when `--embed-model-name` is omitted.
+
+**How it works.** Each agentic query runs `Query -> ReActAgentOperator -> (RRF
+fusion) -> SelectionAgentOperator -> ranked results`:
+
+- `ReActAgentOperator` runs the per-query ReAct loop; every `retrieve` tool call
+  delegates to the standard `Retriever`, so the agent searches the same vector
+  DB and embedding config as dense retrieval.
+- `RRFAggregatorOperator` fuses candidates from the loop's multiple searches with
+  reciprocal rank fusion.
+- `SelectionAgentOperator` runs a final LLM selection pass over the fused set and
+  emits the ranked document IDs.
+
+Agentic-only knobs (apply only with `--agentic`):
+
+- `--agentic-llm-model` — local profile alias/model ID when no invoke URL is
+  provided (`nemotron-8b` by default; `super-49b` also supported), or the remote
+  model ID when `--agentic-invoke-url` is provided.
+- `--agentic-invoke-url` — OpenAI-compatible chat-completions endpoint for the
+  agent LLM. Providing it routes agent LLM calls to that remote endpoint.
+- `--agentic-reasoning-effort` (default `high`) — `reasoning_effort` forwarded on
+  OpenAI-compatible agentic LLM calls; ignored by the local adapter.
+- `--agentic-temperature` (default `0.0`) — sampling temperature for agent LLM
+  calls. Local and non-NVIDIA OpenAI-compatible endpoints allow up to `2.0`;
+  NVIDIA-hosted endpoints allow up to `1.0`.
+- `--agentic-backend-top-k` (default `20`) — candidates pulled from the vector DB
+  per retrieval call.
+- `--agentic-react-max-steps` (default `50`) — maximum ReAct loop iterations.
+- `--agentic-text-truncation` (default `0`) — max characters of each candidate
+  shown to the agent; `0` disables truncation.
 
 <!-- --8<-- [end:quickstart] -->
 
@@ -172,11 +255,13 @@ These options apply to `retriever ingest`, `retriever ingest local`, and
 | `--lancedb-uri` | `lancedb` | LanceDB database URI. |
 | `--table-name` | `nemo-retriever` | LanceDB table name. Must match query-time storage flags. |
 | `--overwrite/--append` | overwrite | Overwrite the table by default; use `--append` to add rows. |
+| `--index-mode` | `dense` | Dense vector index by default; `hybrid` also builds BM25/FTS and `sparse` builds an FTS-only table. |
 | `--method` | planner default | PDF extraction method such as `pdfium` or `nemotron_parse`. |
 | `--extract-text`, `--extract-tables`, `--extract-charts` | planner default | Enable or disable extraction families. |
 | `--ocr-version` | planner default | OCR engine version for local extraction. |
 | `--ocr-lang` | planner default | OCR v2 language selector for local extraction. |
 | `--caption` | off | Add a captioning stage. |
+| `--caption-model-name` | `nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16` | Local vLLM caption model. The default has approximately 62 GiB of BF16 weights and requires correspondingly larger GPU capacity; Nano models remain available as explicit overrides. For remote endpoints, pass the endpoint API model ID. |
 | `--dedup` | off | Add image deduplication before captioning and embedding. |
 | `--text-chunk` | off | Enable token chunking during extraction. |
 | `--store-images-uri` | unset | Store extracted images at a local path or fsspec-compatible URI. |
@@ -277,16 +362,3 @@ Ingested 20 file(s) -> 1940 row(s) through retriever service http://localhost:76
 
 Use `--dry-run` on any ingest mode to inspect the resolved request without
 creating an ingestor or contacting the service.
-
-## Development / compatibility command
-
-Use `retriever pipeline run` only when you need pipeline-specific behavior that
-is intentionally not part of the first-class ingest/query workflow, such as:
-
-- `--save-intermediate` Parquet artifacts.
-- runtime metrics and pipeline reports.
-- eval, recall, harness, or BEIR/QA workflows.
-- legacy compatibility while callers migrate to `retriever ingest` and
-  `retriever query`.
-
-Run `retriever pipeline run --help` for the compatibility command flag list.

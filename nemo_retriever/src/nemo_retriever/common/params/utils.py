@@ -27,7 +27,7 @@ def coerce_params[T](params: T | None, model_cls: type[T], kwargs: dict[str, Any
 
 
 def normalize_embed_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
-    """Normalize embedding endpoint aliases in an existing kwargs dict."""
+    """Normalize embedding endpoint aliases without changing model identity."""
     normalized = dict(kwargs)
     embed_invoke_url = (
         str(normalized.get("embed_invoke_url") or "").strip() if "embed_invoke_url" in normalized else None
@@ -58,6 +58,7 @@ def build_embed_option_kwargs(
     embed_model_name: str | None,
     local_ingest_embed_backend: str | None = None,
     embed_api_key: str | None = None,
+    embed_model_provider_prefix: str | None = None,
     embed_modality: str | None = None,
     text_elements_modality: str | None = None,
     structured_elements_modality: str | None = None,
@@ -79,6 +80,8 @@ def build_embed_option_kwargs(
         embed_kwargs["local_ingest_embed_backend"] = local_ingest_embed_backend
     if embed_api_key is not None:
         embed_kwargs["api_key"] = embed_api_key
+    if embed_model_provider_prefix is not None:
+        embed_kwargs["embed_model_provider_prefix"] = embed_model_provider_prefix
     if embed_modality is not None:
         embed_kwargs["embed_modality"] = embed_modality
     if text_elements_modality is not None:

@@ -96,14 +96,14 @@ Skip this step if you are using remote NIM inference only.
 The [test PDF](../data/multimodal_test.pdf) contains text, tables, charts, and images. Additional test data resides [here](../data/).
 
 > **Note:** `retriever ingest` defaults to local, in-process execution. Use `retriever ingest batch ...` for Ray Data scale-out on larger workloads.
-> `retriever pipeline run` keeps its legacy `--run-mode` flag for compatibility and development workflows.
+> File formats and internal extraction stages are not separate root commands; configure supported behavior through `retriever ingest`.
 
 The examples below use default local GPU inference (no `invoke_url` specified) and require the `[local]` extra and the CUDA 13 torch override from the setup steps above. For remote NIM inference without a local GPU, refer to [Run with remote inference](#run-with-remote-inference-no-local-gpu-required).
 
 ### Ingest a test pdf
 ```python
 from nemo_retriever import create_ingestor
-from nemo_retriever.io import to_markdown, to_markdown_by_page
+from nemo_retriever.common.io import to_markdown, to_markdown_by_page
 from pathlib import Path
 
 documents = [str(Path("../data/multimodal_test.pdf"))]
@@ -146,27 +146,26 @@ chunks = ingestor.ingest()  # pandas.DataFrame (batch and inprocess)
 
 ### Ingest a test corpus (CLI)
 
-`graph_pipeline` is the canonical ingestion script used throughout the
-[QA evaluation guide](./src/nemo_retriever/evaluation/README.md#step-1-ingest-and-embed-pdfs-nemo-retriever).
-Point it at a **directory** of PDFs to produce a ready-to-query LanceDB table.
+Point `retriever ingest` at a **directory** of PDFs to produce a ready-to-query
+LanceDB table.
 
 > **Corpus size matters.** LanceDB's default IVF index needs at least 16
 > chunks to train its 16 k-means partitions. Single-PDF ingestion will fail
-> at the indexing step; point `graph_pipeline` at a directory with enough
+> at the indexing step; point `retriever ingest` at a directory with enough
 > documents to clear that threshold. Replace `/your-example-dir` below with
 > the path to your own corpus.
 
 ```bash
-python -m nemo_retriever.examples.graph_pipeline \
-  /your-example-dir \
-  --vdb-kwargs-json '{"uri":"lancedb","table_name":"nemo-retriever"}'
+retriever ingest /your-example-dir \
+  --lancedb-uri lancedb \
+  --table-name nemo-retriever
 ```
 
-Chunks land at `./lancedb/nemo-retriever`, which matches the `vdb_kwargs`
+Chunks land at `./lancedb/nemo-retriever`, which matches the storage settings
 used in [Run a recall query](#run-a-recall-query) below. With the
 `[local]` extra installed (see setup), defaults point at local-GPU extraction
-and embedding. For a realistic retrieval corpus, see
-[QA evaluation -- Step 1](./src/nemo_retriever/evaluation/README.md#step-1-ingest-and-embed-pdfs-nemo-retriever).
+and embedding. Use enough documents in the directory to clear the LanceDB IVF
+training threshold described above.
 
 **No local GPU?** Set [`NVIDIA_API_KEY`](https://nvidia.github.io/NeMo-Retriever/extraction/api-keys/#nvidia-api-key) (refer to [Authentication and API keys](https://nvidia.github.io/NeMo-Retriever/extraction/api-keys/)) and route extraction and embedding
 through [build.nvidia.com](https://build.nvidia.com/) NIMs instead:
@@ -174,11 +173,11 @@ through [build.nvidia.com](https://build.nvidia.com/) NIMs instead:
 ```bash
 export NVIDIA_API_KEY=nvapi-...
 
-python -m nemo_retriever.examples.graph_pipeline \
-  /your-example-dir \
-  --vdb-kwargs-json '{"uri":"lancedb","table_name":"nemo-retriever"}' \
+retriever ingest /your-example-dir \
+  --lancedb-uri lancedb \
+  --table-name nemo-retriever \
   --page-elements-invoke-url https://ai.api.nvidia.com/v1/cv/nvidia/nemotron-page-elements-v3 \
-  --ocr-invoke-url https://ai.api.nvidia.com/v1/cv/nvidia/nemotron-ocr-v1 \
+  --ocr-invoke-url https://ai.api.nvidia.com/v1/cv/nvidia/nemotron-ocr-v2 \
   --table-structure-invoke-url https://ai.api.nvidia.com/v1/cv/nvidia/nemotron-table-structure-v1 \
   --embed-invoke-url https://integrate.api.nvidia.com/v1/embeddings \
   --embed-model-name nvidia/llama-nemotron-embed-1b-v2
@@ -190,8 +189,9 @@ python -m nemo_retriever.examples.graph_pipeline \
 > v2 selector. Remote OCR NIM endpoints decide their own model and language
 > behavior, and the local OCR selectors are not added to remote request payloads.
 
-When you use the remote embedder, pair the `Retriever` with matching
-`embed_kwargs` overrides shown in [Run a recall query](#run-a-recall-query).
+When you use a remote embedder, the endpoint and provider prefix remain runtime
+configuration. The query model is read from LanceDB metadata when available;
+pass an explicit model only for an override or a legacy table without metadata.
 
 ### Inspect extracts
 You can inspect how recall accuracy optimized text chunks for various content types were extracted into text representations:
@@ -225,10 +225,10 @@ Since the ingestion job automatically populated a lancedb table with all these c
 ### Run a recall query
 
 ```python
-from nemo_retriever.retriever import Retriever
+from nemo_retriever.graph.retriever import Retriever
 
 retriever = Retriever(
-  # values used by the graph_pipeline example above
+  # values used by the retriever ingest example above
   vdb_kwargs={"uri": "lancedb", "table_name": "nemo-retriever"},
   top_k=5,
   rerank=False
@@ -309,6 +309,102 @@ Answer:
 Cat is the animal whose activity (jumping onto a laptop) matches the location of the typos, so the cat is responsible for the typos in the documents.
 ```
 
+### Run agentic retrieval
+
+Agentic retrieval runs an LLM-driven ReAct loop over an existing LanceDB index.
+It does not ingest documents. Build the index with one of the ingestion flows
+above, then query the same `lancedb_uri`, `table_name`, and embedding model.
+
+By default, the agent LLM runs in process with local vLLM and `nemotron-8b`
+(`nvidia/Llama-3.1-Nemotron-Nano-8B-v1`). This requires a CUDA GPU host and the
+`[local]` extra. GPU placement follows process-level vLLM behavior, so set
+`CUDA_VISIBLE_DEVICES` before starting the command. Embedding follows the same
+local/remote split as dense retrieval; pass `--embed-invoke-url` to use a remote
+embedding endpoint.
+
+**Local in-process vLLM agent LLM.** Omit `--agentic-invoke-url` to load the
+supported local agent LLM directly in the Python process. `nemotron-8b` is the
+default; `super-49b` is also supported when the process has enough visible GPUs.
+
+```bash
+CUDA_VISIBLE_DEVICES=0 retriever query "Given their activities, which animal is responsible for the typos in my documents?" \
+  --agentic \
+  --lancedb-uri lancedb \
+  --table-name nemo-retriever \
+  --embed-model-name nvidia/llama-nemotron-embed-1b-v2
+```
+
+**OpenAI-compatible agent endpoint.** Pass `--agentic-invoke-url` when you want a
+custom model or a separately hosted chat-completions server, such as vLLM server
+mode or a self-hosted NIM. When an invoke URL is provided, `--agentic-llm-model`
+is required and is sent as the remote model ID.
+
+```bash
+retriever query "What is RAG?" \
+  --agentic \
+  --agentic-llm-model nvidia/llama-3.3-nemotron-super-49b-v1.5 \
+  --agentic-invoke-url http://localhost:9000/v1/chat/completions \
+  --lancedb-uri lancedb \
+  --table-name nemo-retriever \
+  --embed-model-name nvidia/llama-nemotron-embed-1b-v2
+```
+
+Unlike dense retrieval, agentic mode returns ranked document IDs as JSON, not
+text-enriched hits.
+
+For a quick smoke test, reduce agent work:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 retriever query "What is RAG?" \
+  --agentic \
+  --lancedb-uri lancedb \
+  --table-name nemo-retriever \
+  --embed-model-name nvidia/llama-nemotron-embed-1b-v2 \
+  --top-k 1 \
+  --agentic-react-max-steps 1 \
+  --agentic-backend-top-k 1
+```
+
+You can run the same flow from Python. Omit `invoke_url` for the default local
+in-process vLLM backend, or pass `invoke_url` on `QueryAgenticOptions` for a
+separate OpenAI-compatible chat-completions endpoint.
+
+```python
+from nemo_retriever.cli.query_workflow import agentic_query_documents
+from nemo_retriever.query.options import (
+    QueryAgenticOptions,
+    QueryEmbedOptions,
+    QueryRequest,
+    QueryRetrievalOptions,
+    QueryStorageOptions,
+)
+
+# Local in-process vLLM: set CUDA_VISIBLE_DEVICES before starting Python.
+# Remote agent LLM: pass invoke_url="http://localhost:9000/v1/chat/completions".
+results = agentic_query_documents(
+    QueryRequest(
+        query="What is RAG?",
+        retrieval=QueryRetrievalOptions(top_k=10),
+        storage=QueryStorageOptions(
+            lancedb_uri="lancedb",
+            table_name="nemo-retriever",
+        ),
+        embed=QueryEmbedOptions(
+            embed_model_name="nvidia/llama-nemotron-embed-1b-v2",
+        ),
+        agentic=QueryAgenticOptions(
+            enabled=True,
+            llm_model="nemotron-8b",
+            local_llm_backend="vllm",
+            local_gpu_memory_utilization=0.8,
+            local_tensor_parallel_size=1,
+        ),
+    )
+)
+```
+
+For CLI flags and operator details, refer to [Agentic retrieval](docs/cli/README.md#agentic-retrieval) in the CLI reference.
+
 ### Live RAG SDK (retrieve + answer in one call)
 
 The pattern above -- retrieve hits, build a prompt, call an LLM -- is baked into the SDK as `Retriever.answer()` so live applications can skip the boilerplate. The same `Retriever` instance powers three entry points:
@@ -330,7 +426,7 @@ embedding model in `embed_kwargs` must match the one used during ingestion so
 query vectors land in the same embedding space as the stored chunks.
 
 ```python
-from nemo_retriever.retriever import Retriever
+from nemo_retriever.graph.retriever import Retriever
 from nemo_retriever.llm import LiteLLMClient
 
 retriever = Retriever(
@@ -355,8 +451,8 @@ print(len(result.chunks), "chunks from", {m.get("source") for m in result.metada
 print(f"{result.latency_s:.2f}s on {result.model}")
 ```
 
-Local-GPU shortcut: if you ingested with default `graph_pipeline` flags
-(`--embed` omitted, `[local]` extra installed), drop `embed_kwargs` to reuse
+Local-GPU shortcut: if you ingested with default `retriever ingest` flags
+(`[local]` extra installed), drop `embed_kwargs` to reuse
 the bundled `VL_EMBED_MODEL`.
 
 Live RAG with scoring and an LLM judge (requires a ground-truth `reference`):
@@ -435,7 +531,7 @@ ingestor = (
 ### Render results as markdown
 
 If you want a readable markdown view of extracted results, pass a single document's extraction
-records to `nemo_retriever.io.to_markdown`. The helper returns one markdown string (or `None`
+records to `nemo_retriever.common.io.to_markdown`. The helper returns one markdown string (or `None`
 if there is no content), with per-page sections joined under a single document heading.
 
 For multi-document runs, pass one document at a time—for example, `to_markdown(results[0])`.
@@ -522,9 +618,14 @@ ingestor = (
 )
 ```
 
-You can use a different ingestion pipeline based on [Nemotron-Parse](https://huggingface.co/nvidia/NVIDIA-Nemotron-Parse-v1.2) combined with the default embedder:
+You can use a different ingestion pipeline based on [Nemotron Parse](https://build.nvidia.com/nvidia/nemotron-parse) hosted on NVIDIA Build and combined with the default embedder:
+
 ```python
-ingestor = ingestor.files(documents).extract(method="nemotron_parse")
+ingestor = ingestor.files(documents).extract(
+  method="nemotron_parse",
+  nemotron_parse_invoke_url="https://integrate.api.nvidia.com/v1/chat/completions",
+  nemotron_parse_model="nvidia/nemotron-parse",
+)
 ```
 
 ## Run with remote inference, no local GPU required:
@@ -537,7 +638,7 @@ ingestor = (
   .extract(
     # for self hosted NIMs, your URLs will depend on your NIM container DNS settings
     page_elements_invoke_url="https://ai.api.nvidia.com/v1/cv/nvidia/nemotron-page-elements-v3",
-    ocr_invoke_url="https://ai.api.nvidia.com/v1/cv/nvidia/nemotron-ocr-v1",
+    ocr_invoke_url="https://ai.api.nvidia.com/v1/cv/nvidia/nemotron-ocr-v2",
     table_structure_invoke_url="https://ai.api.nvidia.com/v1/cv/nvidia/nemotron-table-structure-v1",
   )
   .embed(
@@ -634,26 +735,11 @@ sudo apt install python3.12-dev
 
 After installing the headers, restart the pipeline.
 
-## ViDoRe Harness Sweep
+## Retriever Harness
 
-The harness includes BEIR-style ViDoRe dataset presets in `nemo_retriever/harness/test_configs.yaml` and a ready-made sweep definition in `nemo_retriever/harness/vidore_sweep.yaml`.
-
-The ViDoRe harness datasets are configured to:
-
-- read PDFs from `/datasets/retrieval-eval/vidore_v3_corpus_pdf/...`
-- ingest with `embed_modality: text_image`
-- embed at `embed_granularity: page`
-- enable `extract_page_as_image: true` and `extract_infographics: true`
-- evaluate with BEIR-style `ndcg` and `recall` metrics
-
-To run the full ViDoRe sweep:
-
-```bash
-cd ~/NeMo-Retriever/nemo_retriever
-retriever-harness sweep --runs-config harness/vidore_sweep.yaml
-```
-
-The same commands also work under the main CLI as `retriever harness ...` if you prefer a single top-level command namespace.
+The developer harness runs code-owned benchmarks through `retriever harness`.
+Use `retriever harness list --runsets` to see available benchmark names and
+runsets, then run one benchmark with `retriever harness run <benchmark>`.
 
 ### Ingest image storage
 
@@ -667,6 +753,4 @@ retriever ingest ./data \
 
 The store stage writes the image payloads produced by ingest. With
 `--embed-granularity page`, stored assets are page images. With
-`--embed-granularity element`, stored assets are element images. Store is not
-currently configured through the harness; use `retriever pipeline run` only when
-you also need pipeline-specific compatibility artifacts.
+`--embed-granularity element`, stored assets are element images.

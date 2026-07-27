@@ -57,14 +57,26 @@ def _is_direct_embedding_column(column_name: object) -> bool:
     return "embedding" in name or name == "vector" or name.endswith("_vector")
 
 
+def _embedding_error(value: Any) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    error = value.get("error")
+    if error is None:
+        return None
+    message = str(error).strip()
+    return message or None
+
+
 def query_vectors_from_embedded_dataframe(df: pd.DataFrame) -> list[list[float]]:
     """Extract one query vector per row from batch-embed output (metadata or payload columns)."""
     vectors: list[list[float]] = []
     for _, row in df.iterrows():
         vec: list[float] | None = None
+        embedding_error: str | None = None
         md = row.get("metadata")
         if isinstance(md, dict):
             vec = _coerce_embedding_vector(md)
+            embedding_error = _embedding_error(md)
         if vec is None:
             for col in df.columns:
                 if col == "metadata":
@@ -72,12 +84,14 @@ def query_vectors_from_embedded_dataframe(df: pd.DataFrame) -> list[list[float]]
                 val = row.get(col)
                 if isinstance(val, dict) or _is_direct_embedding_column(col):
                     vec = _coerce_embedding_vector(val)
+                    embedding_error = embedding_error or _embedding_error(val)
                 if vec is not None:
                     break
         if vec is None:
+            error_suffix = f"; embedding error: {embedding_error}" if embedding_error else ""
             raise ValueError(
                 "Expected query embeddings in each row's metadata['embedding'] or a payload column "
-                f"with key 'embedding'; columns={list(df.columns)}"
+                f"with key 'embedding'; columns={list(df.columns)}{error_suffix}"
             )
         vectors.append(vec)
     return vectors
@@ -116,7 +130,7 @@ class IngestVdbOperator(AbstractOperator):
         return data
 
     def process(self, data: Any, **kwargs: Any) -> Any:
-        # Compatibility shim: graph_pipeline emits flat embedded rows, while
+        # Graph ingest emits flat embedded rows, while
         # nv-ingest-client VDB.run still expects nested Nemo Retriever Library (NRL) records.
         records = to_client_vdb_records(data)
         if self._sidecar_spec is not None and self._sidecar_lookup is not None:
@@ -207,6 +221,10 @@ class RetrieveVdbOperator(AbstractOperator):
         self._retrieval_vdb_kwargs = clean_kwargs
         self._vdb = _construct_vdb(vdb=vdb, vdb_op=vdb_op, vdb_kwargs=clean_kwargs)
         self._explode_for_rerank = bool(explode_for_rerank)
+
+    def get_index_metadata(self, key: str, **kwargs: Any) -> str | None:
+        """Read one index metadata value through the configured VDB."""
+        return self._vdb.get_index_metadata(key, **{**self._vdb_kwargs, **kwargs})
 
     def preprocess(self, data: Any, **kwargs: Any) -> Any:
         if isinstance(data, pd.DataFrame):

@@ -1,19 +1,20 @@
-# SPDX-FileCopyrightText: Copyright (c) 2024-25, NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2024-26, NVIDIA CORPORATION & AFFILIATES.
 # All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
-import json
 import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from nemo_retriever.harness.json_io import write_json
+
 NEMO_RETRIEVER_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_ARTIFACTS_ROOT = NEMO_RETRIEVER_ROOT / "artifacts"
-_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
+_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{7,64}$")
 
 
 def now_timestr() -> str:
@@ -24,7 +25,7 @@ def _normalize_commit(value: str | None) -> str | None:
     text = (value or "").strip()
     if not _COMMIT_RE.match(text):
         return None
-    return text[:7]
+    return text.lower()
 
 
 def _resolve_git_dir(repo_root: Path) -> Path | None:
@@ -97,7 +98,7 @@ def last_commit() -> str:
     repo_root = NEMO_RETRIEVER_ROOT.parent
     try:
         result = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
+            ["git", "rev-parse", "HEAD"],
             cwd=str(repo_root),
             check=False,
             capture_output=True,
@@ -115,6 +116,25 @@ def last_commit() -> str:
     if fallback is not None:
         return fallback
     return "unknown"
+
+
+def working_tree_dirty() -> bool | None:
+    """Return whether the source checkout is modified, or ``None`` outside Git."""
+
+    repo_root = NEMO_RETRIEVER_ROOT.parent
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=normal", "--ignore-submodules"],
+            cwd=str(repo_root),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    return bool(result.stdout.strip())
 
 
 def get_artifacts_root(base_dir: str | None = None) -> Path:
@@ -136,11 +156,6 @@ def create_session_dir(prefix: str, base_dir: str | None = None) -> Path:
     session_dir = root / f"{prefix}_{now_timestr()}"
     session_dir.mkdir(parents=True, exist_ok=True)
     return session_dir
-
-
-def write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=False) + "\n", encoding="utf-8")
 
 
 def write_session_summary(

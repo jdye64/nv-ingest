@@ -1,106 +1,106 @@
-<!-- SPDX-FileCopyrightText: Copyright (c) 2024-25, NVIDIA CORPORATION & AFFILIATES. -->
+<!-- SPDX-FileCopyrightText: Copyright (c) 2024-26, NVIDIA CORPORATION & AFFILIATES. -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Nemo Retriever harness
+# Retriever Harness Maintainer Notes
 
-Operator-oriented notes for `nemo_retriever` benchmark runs. Implementation details live in source; this file is the short map.
+The user and agent contract is documented in [`README.md`](README.md). Keep this
+file limited to implementation boundaries that maintainers need when changing
+the harness.
 
-## Scope
+## Product Boundary
 
-- Standalone benchmark harness behind `retriever harness`.
-- Invokes **`nemo_retriever.examples.graph_pipeline`** (`batch` / `inprocess` via `--run-mode`).
-- LanceDB only; recall gating via `recall_required` in config.
+- `retriever ingest` and `retriever query` are the direct product workflows.
+- `retriever harness` is a developer benchmark/evaluation runner built on the
+  same planning and workflow APIs.
+- `run` executes one registered benchmark using registry paths or explicit
+  overrides.
+- `run-set` executes a code-owned benchmark group using registry paths.
+- `run-files` executes one or more checked-in runfiles and can apply a
+  machine-local dataset path map. It is the portable session engine and owns
+  dry-run behavior for the complete session.
+- `run-helm` is the supported optional provisioning wrapper around one
+  `run-files` session. It does not own benchmark execution semantics.
+- `post-slack` only reads completed artifacts. It does not execute benchmarks
+  or mutate their results.
+- Scheduling, retries, locking, and secret distribution are outside this
+  harness surface. Deployment is limited to the optional `run-helm` wrapper.
+- `service` is a system-under-test mode that uses an endpoint supplied by the
+  caller; Helm is only an optional outer provisioning mechanism.
 
-## Key files
+The harness calls the shared ingest and query workflow modules directly.
 
-| Path | Role |
-|------|------|
-| `nemo_retriever/src/nemo_retriever/harness/run.py` | Run/sweep/nightly, metrics from `*.runtime.summary.json`, `results.json` |
-| `nemo_retriever/src/nemo_retriever/harness/config.py` | YAML + env merge → `HarnessConfig` |
-| `nemo_retriever/src/nemo_retriever/harness/artifacts.py` | Session dirs, `session_summary.json`, `latest_commit` helper |
-| `nemo_retriever/src/nemo_retriever/harness/recall_adapters.py` | Query CSV adapters for recall |
-| `nemo_retriever/harness/test_configs.yaml` | `active`, presets, datasets |
-| `nemo_retriever/harness/nightly_config.yaml` | Sweep / nightly run list |
+## Implementation Map
 
-## Defaults (`test_configs.yaml`)
+- `runfile.py` parses one portable run request; `dataset_paths.py` resolves the
+  machine-local dataset map.
+- `execution.py` preflights and executes one benchmark.
+- `runsets.py` converts runsets or runfiles into prepared runs, then executes
+  both through one session loop.
+- `json_io.py` atomically publishes JSON artifacts; `artifact_writer.py` owns
+  per-run status, events, logs, and artifact cleanup.
+- `slack.py` reads completed artifacts and renders or posts a report. It does
+  not participate in benchmark execution.
+- `helm_runner.py` and `HelmServiceManager` implement `run-helm` by provisioning
+  an immutable service, invoking the shared `run-files` CLI, collecting failure
+  logs, and tearing down. They do not implement benchmark sessions or reporting.
 
-- Default dataset: `jp20` (BEIR evaluation workflow with query CSV).
-- Default run mode: `batch`.
-- `bo20`: ingestion-oriented (`recall_required: false`, no query CSV).
-- Presets: `single_gpu`, `dgx_8gpu`.
-- Datasets with adapters: `earnings` (`page_plus_one`), `financebench` (`financebench_json`, `pdf_only`), `bo10k` (recall off by default until queries are set).
+## Configuration Ownership
 
-## CLI (repo root)
+The Python registry owns benchmark and dataset semantics. Checked-in runfiles
+own concrete modes, metric gates, and narrow overrides. A local
+`dataset_paths.yaml` owns machine-specific document and query locations and
+must remain outside source control.
 
-```bash
-source .retriever/bin/activate   # or retriever_runtime in container
-uv pip install -e ./nemo_retriever   # if needed
-```
+Resolution precedence is:
 
-```bash
-retriever harness run --dataset jp20 --preset single_gpu
-retriever harness run --dataset jp20 --preset single_gpu --tag nightly
+1. Registry defaults.
+2. Runfile overrides.
+3. Machine-local dataset paths.
+4. CLI `--set` overrides.
 
-retriever harness sweep --runs-config nemo_retriever/harness/nightly_config.yaml
-retriever harness nightly --runs-config nemo_retriever/harness/nightly_config.yaml --dry-run
+Large checked-in benchmark runfiles use batch ingest. Do not silently change
+their mode or hardware-sensitive worker tuning without fresh validation.
 
-retriever harness summary nemo_retriever/artifacts/<session_dir>
-retriever harness compare <session_a> <session_b>
-```
+## Artifact Contract
 
-## Artifacts
+Poll `status.json` while a run is active. Read `results.json` after one run is
+terminal and `session_summary.json` after a multi-run session is terminal.
+Those files contain summary metrics and relative pointers to detailed evidence.
 
-Per run directory:
+Detailed run evidence can include:
 
-- **`results.json`** — authoritative record (outcome, `test_config`, `metrics`, `summary_metrics`, `runtime_summary`, paths).
-- **`command.txt`** — replayable command line.
-- **`runtime_metrics/`** — `*.runtime.summary.json` (metrics source for the harness).
-- **`lancedb/`** — vector store (largest on-disk use).
+- `events.jsonl`
+- `runfile.json`
+- `resolved_benchmark.json`
+- `ingest_plan.json`
+- `query_plan.json`
+- `environment.json`
+- `run.log`
+- `beir_metrics.json`
+- `beir_run.trec`
+- `query_results.jsonl`
+- `lancedb/`
+- `service_logs/`
 
-Session:
+New runs do not write `summary_metrics.json`. Compatibility readers may still
+accept that file in older artifact directories. Failure summaries stay concise;
+full tracebacks belong in `run.log`.
 
-- **`session_summary.json`** — one row per run (high level); use each run’s **`results.json`** for detail.
+## Validation
 
-## `results.json` (short contract)
+At minimum, changes should cover:
 
-Prefer **`summary_metrics`** for dashboards (small set: pages, ingest timing, recall headline keys when present). **`metrics`** holds the fuller flat merge. **`test_config`** is the resolved harness configuration for that run (not the same as post-hoc “what the graph resolved” unless documented elsewhere). Shape is defined by `harness/run.py` and consumers should tolerate new optional keys.
+- CLI help and dry-run behavior for `run`, `run-set`, and `run-files`, plus
+  exit-code propagation through `run-helm`.
+- One-run and multi-run terminal artifact shapes.
+- Missing inputs, invalid overrides, and metric-gate failures.
+- Dataset path precedence and secret redaction.
+- Slack preview without a webhook, current-release reference rendering, and
+  transport errors without secret leakage.
+- A real benchmark smoke run when execution behavior changes.
 
-## Operational notes
-
-- `recall_required: true` without recall metrics → harness failure (`missing_recall_metrics`).
-- Relative `query_csv` resolves next to the YAML file, then repo root.
-- Dataset paths under `/datasets/retrieval-eval/...` may resolve to `/raid/$USER/...` when the former is missing.
-- Store is not configured through the harness. Use `retriever ingest --store-images-uri <uri>` for normal local or object-storage image assets; use `retriever pipeline run --store-images-uri <uri>` only for pipeline-specific compatibility workflows.
-
-## Backlog (maintainers / agents)
-
-Ideas not committed to code; pick up or trim as priorities change.
-
-- **Config ergonomics:** preset inheritance or a scaling helper to cut duplicated numeric blocks in YAML.
-- **Ops:** optional artifact retention command (prune old sessions by age or size).
-- **Recall UX:** a single `recall_profile` (or similar) that maps to adapter + match mode to avoid invalid combinations.
-- **Runs:** optional matrix expansion for `nightly_config`-style lists (keep explicit run list as default UX).
-- **Reporting:** export session or `results.json` sets to CSV for spreadsheets.
-- **Strictness:** optional mode that errors on unknown harness YAML keys.
-
-## When changing the harness (checklist)
-
-1. `config.py` + defaults in `test_configs.yaml` (and env keys if any).
-2. `run.py` and artifact payloads (`results.json` / `session_summary.json` shape).
-3. Unit tests under `nemo_retriever/tests/test_harness_*.py` and graph coverage via `test_graph_pipeline_cli.py`.
-4. `nemo_retriever/README.md` harness section if user-facing commands changed.
-5. At least one local run or `--dry-run` on the affected CLI path.
-
-**Done-ish bar:** tests green, schema changes intentional, README examples still true, session output not accidentally duplicated.
-
-## Tests
-
-```bash
-pytest -q nemo_retriever/tests/test_harness_run.py \
-  nemo_retriever/tests/test_harness_config.py \
-  nemo_retriever/tests/test_harness_reporting.py \
-  nemo_retriever/tests/test_harness_nightly.py \
-  nemo_retriever/tests/test_graph_pipeline_cli.py
-```
-
-See `nemo_retriever/README.md` for broader retriever documentation.
+Use `EXPECTED_RESULTS.md` for dataset facts and observed metric ranges. Do not
+turn hardware-sensitive reference numbers into implicit global pass/fail policy.
+A configured release snapshot is presentation input only: show it beside the
+current nightly with hardware context, but do not maintain history or assign a
+verdict in the harness.

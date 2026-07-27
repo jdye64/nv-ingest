@@ -2,7 +2,7 @@
 # All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Record adapters for the graph-pipeline VDB upload/retrieval path."""
+"""Record adapters for graph VDB upload and retrieval."""
 
 from __future__ import annotations
 
@@ -53,6 +53,14 @@ def _first_str(*values: Any) -> str:
     return ""
 
 
+def _text_from_graph_row(row: dict[str, Any], metadata: dict[str, Any]) -> str:
+    """Return the first nonblank text field without rewriting its contents."""
+    for value in (row.get("text"), row.get("content"), metadata.get("content")):
+        if isinstance(value, str) and value.strip():
+            return value
+    return ""
+
+
 def _optional_int(value: Any) -> int | None:
     if value is not None:
         try:
@@ -64,6 +72,11 @@ def _optional_int(value: Any) -> int | None:
 
 def _dict_or_empty(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _is_image_backed_row(row: dict[str, Any]) -> bool:
+    """Return whether a post-embed graph row retains its image or stored URI."""
+    return bool(_first_str(row.get("_image_b64"), row.get("_stored_image_uri"), row.get("stored_image_uri")))
 
 
 def _derive_fidelity(content_type: Any, metadata: dict[str, Any], content_metadata: dict[str, Any]) -> str | None:
@@ -85,12 +98,15 @@ def _derive_fidelity(content_type: Any, metadata: dict[str, Any], content_metada
     return None
 
 
-def _client_record_from_graph_row(row: dict[str, Any]) -> dict[str, Any] | None:
+def _client_record_from_graph_row(row: dict[str, Any], *, require_embedding: bool = True) -> dict[str, Any] | None:
     metadata = _dict_or_empty(row.get("metadata"))
 
     embedding = _embedding_from_graph_row(row, metadata)
-    text = row.get("text") or row.get("content") or metadata.get("content")
-    if embedding is None or not text:
+    text = _text_from_graph_row(row, metadata)
+    if require_embedding and embedding is None:
+        return None
+    image_only = require_embedding and not text and _is_image_backed_row(row)
+    if not text and not image_only:
         return None
 
     content_metadata = _dict_or_empty(metadata.get("content_metadata"))
@@ -100,13 +116,18 @@ def _client_record_from_graph_row(row: dict[str, Any]) -> dict[str, Any] | None:
     if page_number is not None:
         content_metadata.setdefault("page_number", page_number)
 
-    content_type = row.get("_content_type") or row.get("content_type")
-    if content_type:
-        content_metadata.setdefault("type", content_type)
-    fidelity = _derive_fidelity(content_type, metadata, content_metadata)
-    if fidelity:
-        content_metadata.setdefault("fidelity", fidelity)
-    stored_image_uri = row.get("_stored_image_uri") or row.get("stored_image_uri")
+    if image_only:
+        content_type = "image"
+        content_metadata["type"] = content_type
+        content_metadata.pop("fidelity", None)
+    else:
+        content_type = row.get("_content_type") or row.get("content_type")
+        if content_type:
+            content_metadata.setdefault("type", content_type)
+        fidelity = _derive_fidelity(content_type, metadata, content_metadata)
+        if fidelity:
+            content_metadata.setdefault("fidelity", fidelity)
+    stored_image_uri = _first_str(row.get("_stored_image_uri"), row.get("stored_image_uri"))
     if stored_image_uri:
         content_metadata.setdefault("stored_image_uri", stored_image_uri)
     bbox = row.get("_bbox_xyxy_norm") or row.get("bbox_xyxy_norm")
@@ -132,19 +153,22 @@ def _client_record_from_graph_row(row: dict[str, Any]) -> dict[str, Any] | None:
         source_metadata.setdefault("source_name", source_name)
 
     record_metadata = dict(metadata)
-    record_metadata["embedding"] = embedding
-    record_metadata["content"] = str(text)
+    if embedding is not None:
+        record_metadata["embedding"] = embedding
+    record_metadata["content"] = text
     record_metadata["content_metadata"] = content_metadata
     record_metadata["source_metadata"] = source_metadata
 
-    return {"document_type": str(row.get("document_type") or "text"), "metadata": record_metadata}
+    document_type = "image" if image_only else row.get("document_type") or "text"
+    return {"document_type": str(document_type), "metadata": record_metadata}
 
 
 def to_client_vdb_records(rows: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
-    """Convert graph-pipeline rows into the nested record shape expected by client VDBs.
+    """Convert graph-ingest rows into the nested record shape expected by client VDBs.
 
-    When no row survives conversion (empty input or all rows lack text/embedding),
-    returns ``[]`` — a falsy value so ``if not records`` skips :meth:`~nemo_retriever.vdb.adt_vdb.VDB.run`.
+    Dense rows require an embedding and either nonblank text or concrete image backing.
+    When no row survives conversion, returns ``[]`` — a falsy value so
+    ``if not records`` skips :meth:`~nemo_retriever.vdb.adt_vdb.VDB.run`.
     When at least one row converts, returns ``[batch]`` with a single non-empty inner list
     (never ``[[]]``, which would be truthy and could trip backends on an empty insert).
     """
@@ -159,6 +183,24 @@ def to_client_vdb_records(rows: list[dict[str, Any]]) -> list[list[dict[str, Any
         if isinstance(row, dict) and (record := _client_record_from_graph_row(row)) is not None
     ]
     # Preserve legacy contract: no uploadable rows → [], not [[]].
+    return [inner] if inner else []
+
+
+def to_sparse_client_vdb_records(rows: Any) -> list[list[dict[str, Any]]]:
+    """Convert graph-ingest rows into text/provenance records for sparse LanceDB ingest."""
+    if hasattr(rows, "to_pandas"):
+        rows = rows.to_pandas()
+    if hasattr(rows, "to_dict"):
+        rows = rows.to_dict("records")
+    if isinstance(rows, list) and all(isinstance(batch, list) for batch in rows):
+        nested = [[record for record in batch if isinstance(record, dict) and record.get("metadata")] for batch in rows]
+        nested = [batch for batch in nested if batch]
+        return nested
+    inner = [
+        record
+        for row in rows or []
+        if isinstance(row, dict) and (record := _client_record_from_graph_row(row, require_embedding=False)) is not None
+    ]
     return [inner] if inner else []
 
 

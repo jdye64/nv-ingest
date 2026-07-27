@@ -7,6 +7,8 @@ This package wraps **vector database backends** behind a small `VDB` interface (
 
 The only built-in backend key today is **`lancedb`**, resolved by `get_vdb_op_cls()` in `factory.py` to the concrete **`LanceDB`** class in `lancedb.py`.
 
+The root CLI is intentionally LanceDB-first: `retriever ingest ...` writes LanceDB tables, and `retriever query ...` queries LanceDB tables. Other VDB backends should plug in through the SDK/operator layer by implementing `VDB` and registering a backend key in `factory.py`; the root CLI does not expose a backend-agnostic VDB configuration surface.
+
 ---
 
 ## `IngestVdbOperator` (ingestion)
@@ -17,7 +19,7 @@ The only built-in backend key today is **`lancedb`**, resolved by `get_vdb_op_cl
 
 Flow (see `operators.py` and `records.py`):
 
-1. **`to_client_vdb_records(data)`** — converts rows to `list[list[dict]]` (one outer batch). Rows without both **text** and **embedding** are dropped.
+1. **`to_client_vdb_records(data)`** — converts rows to `list[list[dict]]` (one outer batch). Dense rows require an **embedding** plus either nonblank **text** or concrete image backing. Image-backed rows without text are stored as `type=image` and `text=""`; they are searchable through dense retrieval but add no FTS terms. The answer-oriented evidence formatter omits every hit without nonblank text and reports the omission in coverage. Sparse-only ingestion continues to require nonblank text.
 2. Optional **sidecar metadata** — if `vdb_kwargs` contains `meta_dataframe` / `meta_source_field` / `meta_fields`, those keys are stripped for the concrete DB constructor and merged onto records via `sidecar_metadata.py`.
 3. **`self._vdb.run(records)`** — delegates to the concrete backend (e.g. `LanceDB.run`).
 
@@ -37,7 +39,6 @@ Together, repartition + full batch mean **`process()`** receives **every row at 
 ### Wiring ingestion today
 
 - **Root CLI** (`retriever ingest ...`): writes to LanceDB through the shared graph ingest path.
-- **Compatibility CLI** (`retriever pipeline run ...`): builds `VdbUploadParams` and `GraphIngestor.vdb_upload(...)`, which appends `IngestVdbOperator` to the graph after embed/store and before webhook.
 - **Direct API**:
 
 ```python
@@ -54,11 +55,12 @@ op = IngestVdbOperator(
 op(pandas_dataframe_of_embedded_rows)  # or list of row dicts
 ```
 
-CLI-equivalent kwargs are often passed as JSON:
+The root CLI exposes the built-in LanceDB target directly:
 
 ```bash
-retriever pipeline run /data/pdfs --vdb-op lancedb \
-  --vdb-kwargs-json '{"uri":"./kb","table_name":"nemo-retriever"}'
+retriever ingest /data/pdfs \
+  --lancedb-uri ./kb \
+  --table-name nemo-retriever
 ```
 
 ---
@@ -96,6 +98,8 @@ Common constructor arguments include:
 
 Important: retrieval here expects **`vectors`** — a list of query embedding vectors — as the primary input. String queries are embedded elsewhere (e.g. in `Retriever`). Hybrid backends that need raw text receive aligned `query_texts` as execution-only call context.
 
+Before embedding, `Retriever` asks the operator for `get_index_metadata("embedding_model_name")`. The base `VDB` implementation returns `None`; a backend can override the method to expose metadata from its selected table or index. LanceDB exposes both `embedding_model_name` and `retrieval_mode` through this lookup.
+
 ### LanceDB inside `RetrieveVdbOperator`
 
 For `vdb_op="lancedb"`, **`LanceDB.retrieval`**:
@@ -127,6 +131,8 @@ hits_per_query = op.process(
 ## `Retriever` and `RetrieveVdbOperator`
 
 The high-level **`Retriever`** class (`retriever.py`) uses **`RetrieveVdbOperator`** internally. Pass a flat LanceDB **`vdb_kwargs`** dict with `uri`, `table_name`, filters, etc., or the explicit nested shape `{"vdb_op": "lancedb", "vdb_kwargs": {...}}`.
+
+For non-LanceDB backends, implement the `VDB` interface in a backend module, register the backend in `factory.py`, and construct `Retriever` through the SDK with `{"vdb_op": "<backend>", "vdb_kwargs": {...}}` or a concrete `{"vdb": backend_instance}`. The root `retriever query` CLI remains LanceDB-only.
 
 It **lazy-builds** the operator:
 

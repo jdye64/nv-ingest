@@ -21,6 +21,7 @@ from nemo_retriever.ingest.plan import (
     IngestExtractBatchOptions,
     IngestExtractOptions,
     IngestImageStoreOptions,
+    IngestIndexModeValue,
     IngestMediaOptions,
     IngestPlanRequest,
     IngestRunModeValue,
@@ -28,6 +29,7 @@ from nemo_retriever.ingest.plan import (
     IngestSourceOptions,
     IngestStorageOptions,
     resolve_ingest_plan,
+    validate_ingest_index_mode,
 )
 
 
@@ -79,6 +81,14 @@ def _validate_graph_ingest_mode_options(values: Mapping[str, Any], *, run_mode: 
     if batch_only_flags:
         joined_flags = ", ".join(batch_only_flags)
         raise ValueError(f"Batch-only option(s) require `retriever ingest batch`: {joined_flags}")
+
+
+def _resolve_index_mode_option(index_mode: str) -> IngestIndexModeValue:
+    try:
+        return validate_ingest_index_mode(index_mode)
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1) from exc
 
 
 def _matching_option_values(values: Mapping[str, Any], options_type: type[Any]) -> dict[str, Any]:
@@ -192,9 +202,6 @@ def _graph_ingest_command(
     extract_charts: opts.ExtractChartsOption = None,
     extract_infographics: opts.ExtractInfographicsOption = None,
     extract_page_as_image: opts.ExtractPageAsImageOption = None,
-    use_page_elements: opts.UsePageElementsOption = None,
-    use_graphic_elements: opts.UseGraphicElementsOption = None,
-    use_table_structure: opts.UseTableStructureOption = None,
     segment_audio: opts.SegmentAudioOption = None,
     audio_split_type: opts.AudioSplitTypeOption = "size",
     audio_split_interval: opts.AudioSplitIntervalOption = None,
@@ -215,18 +222,18 @@ def _graph_ingest_command(
     dedup_iou_threshold: opts.DedupIouThresholdOption = None,
     store_images_uri: opts.StoreImagesUriOption = None,
     overwrite: opts.OverwriteOption = True,
-    hybrid: opts.HybridOption = False,
+    index_mode: opts.IndexModeOption = "dense",
     ray_address: opts.RayAddressOption = None,
     ray_log_to_driver: opts.RayLogToDriverOption = None,
     page_elements_invoke_url: opts.PageElementsInvokeUrlOption = None,
     ocr_invoke_url: opts.OcrInvokeUrlOption = None,
     ocr_version: opts.OcrVersionOption = None,
     ocr_lang: opts.OcrLangOption = None,
-    graphic_elements_invoke_url: opts.GraphicElementsInvokeUrlOption = None,
     table_structure_invoke_url: opts.TableStructureInvokeUrlOption = None,
     table_output_format: opts.TableOutputFormatOption = None,
     embed_invoke_url: opts.EmbedInvokeUrlOption = None,
     embed_model_name: opts.EmbedModelNameOption = None,
+    embed_model_provider_prefix: opts.EmbedModelProviderPrefixOption = None,
     local_ingest_embed_backend: opts.LocalIngestEmbedBackendOption = None,
     embed_modality: opts.EmbedModalityOption = None,
     embed_granularity: opts.EmbedGranularityOption = None,
@@ -260,4 +267,6 @@ def _graph_ingest_command(
     embed_gpus_per_actor: opts.EmbedGpusPerActorOption = None,
     quiet: opts.QuietOption = True,
 ) -> None:
-    _run_graph_ingest_from_parsed_options(ctx.params, run_mode=_graph_run_mode_for_command(ctx))
+    parsed_options = dict(ctx.params)
+    parsed_options["index_mode"] = _resolve_index_mode_option(index_mode)
+    _run_graph_ingest_from_parsed_options(parsed_options, run_mode=_graph_run_mode_for_command(ctx))

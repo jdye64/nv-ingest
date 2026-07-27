@@ -12,7 +12,8 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
-from nemo_retriever.graph.retriever import Retriever, _shape_query_hits
+from nemo_retriever.graph.retriever import Retriever
+from nemo_retriever.query.shaping import shape_query_hits
 
 
 def _make_hits(n: int, base_score: float = 0.5) -> list[dict[str, Any]]:
@@ -41,22 +42,18 @@ def _make_retriever(**overrides: Any) -> Retriever:
 
 def _install_mock_graph(monkeypatch: pytest.MonkeyPatch, hits: list[list[dict[str, Any]]]) -> MagicMock:
     """Avoid constructing real LanceDB / embed operators."""
-    resolved = MagicMock()
-    # :meth:`Graph.execute` returns one entry per graph leaf; retrieval output is ``list[list[dict]]``.
-    resolved.execute.return_value = [hits]
-
+    # Resolved graph execution returns one entry per graph leaf; retrieval output
+    # is ``list[list[dict]]``.
     graph = MagicMock()
-    graph.resolve_for_local_execution.return_value = resolved
-
-    monkeypatch.setattr(Retriever, "_build_default_graph", lambda self: graph)
+    graph.execute_in_place.return_value = [hits]
 
     # bypass instance cache from other tests
     def fresh_get(self: Retriever, *, embed_extra: Any = None) -> MagicMock:
-        graph.resolve_for_local_execution.return_value = resolved
         return graph
 
     monkeypatch.setattr(Retriever, "_get_graph", fresh_get)
-    return resolved
+    monkeypatch.setattr(Retriever, "_resolve_lancedb_query_mode", lambda self, runtime_vdb_kwargs: None)
+    return graph
 
 
 class TestQueriesGraphExecution:
@@ -68,12 +65,12 @@ class TestQueriesGraphExecution:
 
     def test_queries_thread_top_k_and_vdb_kwargs(self, monkeypatch: pytest.MonkeyPatch) -> None:
         hit = [[{"text": "retrieved", "source": "doc.pdf", "page_number": 1}]]
-        resolved = _install_mock_graph(monkeypatch, hit)
+        graph = _install_mock_graph(monkeypatch, hit)
         retriever = _make_retriever(top_k=11)
         out = retriever.queries(["q"], vdb_kwargs={"where": "x"})
         assert out == hit
-        resolved.execute.assert_called_once()
-        _args, kw = resolved.execute.call_args
+        graph.execute_in_place.assert_called_once()
+        _args, kw = graph.execute_in_place.call_args
         assert kw["top_k"] == 11
         assert kw["query_texts"] == ["q"]
         assert kw["where"] == "x"
@@ -87,6 +84,20 @@ class TestQueriesGraphExecution:
         p = r._merge_embed_params({"model_name": "call"})
         assert p.model_name == "call"
 
+    def test_index_model_keeps_constructor_provider_prefix(self) -> None:
+        retriever = _make_retriever(
+            embed_kwargs={
+                "embed_invoke_url": "https://embed.example.com/v1/embeddings",
+                "embed_model_provider_prefix": "nvidia",
+            }
+        )
+
+        resolved = retriever._resolve_embed_kwargs("nvidia/llama-nemotron-embed-vl-1b-v2", None)
+        params = retriever._merge_embed_params(resolved)
+
+        assert params.model_name == "nvidia/llama-nemotron-embed-vl-1b-v2"
+        assert params.embed_model_provider_prefix == "nvidia"
+
     def test_local_query_embedding_defaults_to_hf(self) -> None:
         p = _make_retriever()._merge_embed_params()
         assert p.local_ingest_embed_backend == "hf"
@@ -97,12 +108,12 @@ class TestQueriesGraphExecution:
         assert p.local_ingest_embed_backend == "vllm"
 
     def test_rerank_inflates_retrieval_top_k(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        resolved = _install_mock_graph(monkeypatch, [[{"text": "x"}]])
+        graph = _install_mock_graph(monkeypatch, [[{"text": "x"}]])
         retriever = _make_retriever(top_k=3, rerank=True, rerank_kwargs={"refine_factor": 4})
         retriever._cached_graph = None
         retriever._cache_key = None
         retriever.queries(["q"])
-        assert resolved.execute.call_args.kwargs["top_k"] == 12
+        assert graph.execute_in_place.call_args.kwargs["top_k"] == 12
 
     def test_rerank_dataframe_output_orders_hits_by_score(self, monkeypatch: pytest.MonkeyPatch) -> None:
         vector_hits = [
@@ -132,9 +143,7 @@ class TestQueriesGraphExecution:
             def resolve_for_local_execution(self) -> FakeResolvedGraph:
                 return FakeResolvedGraph()
 
-        monkeypatch.setattr(Retriever, "_build_default_graph", lambda self, *, embed_extra=None: FakeGraph())
-
-        out = _make_retriever(top_k=1, rerank=True).query("q")
+        out = _make_retriever(top_k=1, rerank=True, graph=FakeGraph()).query("q")
 
         assert out == [{"text": "reranker winner", "source": "rerank.pdf", "page_number": 2, "_rerank_score": 0.9}]
         assert [call["top_k"] for call in execute_kwargs] == [4]
@@ -157,11 +166,62 @@ class TestQueriesGraphExecution:
 
     def test_candidate_k_widens_retrieval_before_final_truncation(self, monkeypatch: pytest.MonkeyPatch) -> None:
         hits = [[{"text": f"hit {i}", "page_number": i} for i in range(5)]]
-        resolved = _install_mock_graph(monkeypatch, hits)
+        graph = _install_mock_graph(monkeypatch, hits)
         out = _make_retriever(top_k=2).queries(["q"], candidate_k=5)
 
         assert [hit["text"] for hit in out[0]] == ["hit 0", "hit 1"]
-        assert resolved.execute.call_args.kwargs["top_k"] == 5
+        assert graph.execute_in_place.call_args.kwargs["top_k"] == 5
+
+    def test_repeated_queries_reuse_cached_graph(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        hits = [[{"text": "retrieved", "source": "doc.pdf", "page_number": 1}]]
+        graph = MagicMock()
+        graph.execute_in_place.return_value = [hits]
+        build = MagicMock(return_value=graph)
+        monkeypatch.setattr(Retriever, "_build_default_graph", build)
+        monkeypatch.setattr(Retriever, "_resolve_lancedb_query_mode", lambda self, runtime_vdb_kwargs: None)
+
+        retriever = _make_retriever()
+        assert retriever.query("first") == hits[0]
+        assert retriever.query("second") == hits[0]
+
+        build.assert_called_once()
+        assert graph.execute_in_place.call_count == 2
+
+    def test_custom_graph_preserves_resolve_per_query_behavior(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        hits = [[{"text": "retrieved", "source": "doc.pdf", "page_number": 1}]]
+
+        class LegacyResolvedGraph:
+            def execute(self, _df: pd.DataFrame, **_kwargs: Any) -> list[Any]:
+                return [hits]
+
+        graph = MagicMock()
+        graph.resolve_for_local_execution.side_effect = (LegacyResolvedGraph(), LegacyResolvedGraph())
+        monkeypatch.setattr(Retriever, "_resolve_lancedb_query_mode", lambda self, runtime_vdb_kwargs: None)
+
+        retriever = _make_retriever(graph=graph)
+        assert retriever.query("first") == hits[0]
+        assert retriever.query("second") == hits[0]
+
+        assert graph.resolve_for_local_execution.call_count == 2
+
+    def test_embed_override_invalidates_graph_cache(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        hits = [[{"text": "retrieved", "source": "doc.pdf", "page_number": 1}]]
+        graph_one = MagicMock()
+        graph_one.execute_in_place.return_value = [hits]
+        graph_two = MagicMock()
+        graph_two.execute_in_place.return_value = [hits]
+        build = MagicMock(side_effect=(graph_one, graph_two))
+        monkeypatch.setattr(Retriever, "_build_default_graph", build)
+        monkeypatch.setattr(Retriever, "_resolve_lancedb_query_mode", lambda self, runtime_vdb_kwargs: None)
+
+        retriever = _make_retriever()
+        retriever.query("first")
+        retriever.query("same configuration")
+        retriever.query("different configuration", embed_kwargs={"model_name": "different"})
+
+        assert graph_one.execute_in_place.call_count == 2
+        graph_two.execute_in_place.assert_called_once()
+        assert build.call_count == 2
 
     def test_candidate_k_must_cover_top_k(self) -> None:
         with pytest.raises(ValueError, match=r"candidate_k \(2\).*top_k \(5\)"):
@@ -189,7 +249,7 @@ class TestQueryHitShaping:
             {"text": "first p2", "pdf_basename": "handbook", "page_number": 2},
         ]
 
-        out = _shape_query_hits(hits, top_k=10, page_dedup=True)
+        out = shape_query_hits(hits, top_k=10, page_dedup=True)
 
         assert [h["text"] for h in out] == ["first p1", "first p2"]
 
@@ -199,7 +259,7 @@ class TestQueryHitShaping:
             {"text": "v2", "pdf_basename": "report.v2", "page_number": 1},
         ]
 
-        out = _shape_query_hits(hits, top_k=10, page_dedup=True)
+        out = shape_query_hits(hits, top_k=10, page_dedup=True)
 
         assert [h["text"] for h in out] == ["v1", "v2"]
 
@@ -209,7 +269,7 @@ class TestQueryHitShaping:
             {"text": "dir b", "source_id": "/dir_b/report.pdf", "page_number": 1},
         ]
 
-        out = _shape_query_hits(hits, top_k=10, page_dedup=True)
+        out = shape_query_hits(hits, top_k=10, page_dedup=True)
 
         assert [h["text"] for h in out] == ["dir a", "dir b"]
 
@@ -220,7 +280,7 @@ class TestQueryHitShaping:
             {"text": "chart row", "metadata": {"type": "chart"}, "page_number": 3},
         ]
 
-        out = _shape_query_hits(hits, top_k=10, content_types="text,table")
+        out = shape_query_hits(hits, top_k=10, content_types="text,table")
 
         assert [h["text"] for h in out] == ["text row", "table row"]
 
@@ -231,7 +291,7 @@ class TestQueryHitShaping:
             {"text": "chart row", "metadata": {"type": "chart"}, "page_number": 3},
         ]
 
-        out = _shape_query_hits(hits, top_k=10, content_types="image")
+        out = shape_query_hits(hits, top_k=10, content_types="image")
 
         assert [h["text"] for h in out] == ["image row"]
 
@@ -241,7 +301,7 @@ class TestQueryHitShaping:
             {"text": "top-level chart", "metadata": "{}", "content_type": "chart", "page_number": 2},
         ]
 
-        out = _shape_query_hits(hits, top_k=10, content_types="table")
+        out = shape_query_hits(hits, top_k=10, content_types="table")
 
         assert [h["text"] for h in out] == ["top-level table"]
 
@@ -251,7 +311,7 @@ class TestQueryHitShaping:
             {"text": "metadata image", "metadata": {"_content_type": "image"}, "page_number": 2},
         ]
 
-        out = _shape_query_hits(hits, top_k=10, content_types="table")
+        out = shape_query_hits(hits, top_k=10, content_types="table")
 
         assert [h["text"] for h in out] == ["metadata table"]
 
@@ -262,7 +322,7 @@ class TestQueryHitShaping:
             {"text": "chart row 2", "metadata": {"type": "chart"}, "page_number": 3},
         ]
 
-        out = _shape_query_hits(hits, top_k=3, content_types="text")
+        out = shape_query_hits(hits, top_k=3, content_types="text")
 
         assert [h["text"] for h in out] == ["text row"]
 
@@ -272,13 +332,13 @@ class TestQueryHitShaping:
             {"text": "text row", "metadata": {"type": "text"}, "page_number": 2},
         ]
 
-        out = _shape_query_hits(hits, top_k=10, content_types="text")
+        out = shape_query_hits(hits, top_k=10, content_types="text")
 
         assert [h["text"] for h in out] == ["text row"]
 
     def test_empty_content_type_allowlist_uses_python_api_name(self) -> None:
         with pytest.raises(ValueError, match="content_types must include"):
-            _shape_query_hits([], top_k=3, content_types=[])
+            shape_query_hits([], top_k=3, content_types=[])
 
 
 class TestRunModeServiceRequiresHttpEmbed:
@@ -354,6 +414,20 @@ class TestRetrieveVdbOperatorPreprocess:
         op = RetrieveVdbOperator(vdb_op="lancedb", vdb_kwargs={"uri": "/tmp", "table_name": "t"})
         vec = op.preprocess(df)
         assert vec == [[0.7, 0.8]]
+
+    def test_dataframe_to_vectors_reports_embedding_error(self) -> None:
+        from nemo_retriever.operators.vdb import RetrieveVdbOperator
+
+        df = pd.DataFrame(
+            {
+                "text": ["a"],
+                "text_embeddings_1b_v2": [{"embedding": [], "error": "429 Client Error: Too Many Requests"}],
+            }
+        )
+        op = RetrieveVdbOperator(vdb_op="lancedb", vdb_kwargs={"uri": "/tmp", "table_name": "t"})
+
+        with pytest.raises(ValueError, match="429 Client Error: Too Many Requests"):
+            op.preprocess(df)
 
 
 class TestRerankLongDataframe:

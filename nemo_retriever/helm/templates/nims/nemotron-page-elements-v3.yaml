@@ -18,6 +18,10 @@ spec:
       size: {{ .Values.nimOperator.page_elements.storage.pvc.size }}
       volumeAccessMode: {{ .Values.nimOperator.page_elements.storage.pvc.volumeAccessMode }}
   resources: {}
+  nodeSelector:
+{{ toYaml .Values.nimOperator.page_elements.nodeSelector | indent 4 }}
+  tolerations:
+{{ toYaml .Values.nimOperator.page_elements.tolerations | indent 4 }}
 ---
 apiVersion: apps.nvidia.com/v1alpha1
 kind: NIMService
@@ -44,5 +48,6 @@ spec:
   expose:
 {{ toYaml .Values.nimOperator.page_elements.expose | indent 4 }}
   env:
+{{ include "nemo-retriever.nimServiceOtelEnv" (dict "context" $ "key" "page_elements" "name" "nemotron-page-elements-v3") | nindent 4 }}
 {{ toYaml .Values.nimOperator.page_elements.env | indent 4 }}
 {{- end }}

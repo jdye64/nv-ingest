@@ -8,14 +8,20 @@ from typing import Annotated
 
 import typer
 
+from nemo_retriever.common.params import CaptionParams
 from nemo_retriever.ingest.plan import (
     AudioSplitTypeValue,
+    IngestIndexModeValue,
     IngestProfileValue,
     LocalIngestEmbedBackendValue,
     OcrLangValue,
     OcrVersionValue,
     TableOutputFormatValue,
 )
+from nemo_retriever.models import VL_EMBED_MODEL
+
+DEFAULT_EMBED_MODEL = VL_EMBED_MODEL
+DEFAULT_CAPTION_MODEL = CaptionParams().model_name
 
 DocumentsArgument = Annotated[
     list[str],
@@ -60,35 +66,12 @@ ExtractChartsOption = Annotated[
 ]
 ExtractInfographicsOption = Annotated[
     bool | None,
-    typer.Option(
-        "--extract-infographics/--no-extract-infographics", help="Enable or disable PDF infographic extraction."
-    ),
+    typer.Option("--extract-infographics", help="Enable PDF infographic extraction."),
 ]
 ExtractPageAsImageOption = Annotated[
     bool | None,
     typer.Option(
         "--extract-page-as-image/--no-extract-page-as-image", help="Enable or disable full-page image extraction."
-    ),
-]
-UsePageElementsOption = Annotated[
-    bool | None,
-    typer.Option(
-        "--use-page-elements/--no-use-page-elements",
-        help="Enable or disable page-element detection for OCR/table/chart extraction.",
-    ),
-]
-UseGraphicElementsOption = Annotated[
-    bool | None,
-    typer.Option(
-        "--use-graphic-elements/--no-use-graphic-elements",
-        help="Enable or disable graphic-element extraction for chart/infographic rows.",
-    ),
-]
-UseTableStructureOption = Annotated[
-    bool | None,
-    typer.Option(
-        "--use-table-structure/--no-use-table-structure",
-        help="Enable or disable table-structure extraction for markdown table text.",
     ),
 ]
 SegmentAudioOption = Annotated[
@@ -162,7 +145,13 @@ ApiKeyOption = Annotated[
 ]
 CaptionModelNameOption = Annotated[
     str | None,
-    typer.Option("--caption-model-name", help="Optional VLM caption model name override."),
+    typer.Option(
+        "--caption-model-name",
+        help=(
+            f"Optional VLM caption model name override. Defaults to {DEFAULT_CAPTION_MODEL} "
+            "when --caption is enabled."
+        ),
+    ),
 ]
 CaptionContextTextMaxCharsOption = Annotated[
     int | None,
@@ -175,13 +164,13 @@ CaptionContextTextMaxCharsOption = Annotated[
 CaptionInfographicsOption = Annotated[
     bool | None,
     typer.Option(
-        "--caption-infographics/--no-caption-infographics",
+        "--caption-infographics",
         help="Caption infographic crops in addition to extracted images.",
     ),
 ]
 DedupOption = Annotated[
     bool,
-    typer.Option("--dedup/--no-dedup", help="Add a deduplication stage before optional captioning and embedding."),
+    typer.Option("--dedup", help="Add a deduplication stage before optional captioning and embedding."),
 ]
 DedupIouThresholdOption = Annotated[
     float | None,
@@ -206,13 +195,13 @@ OverwriteOption = Annotated[
         ),
     ),
 ]
-HybridOption = Annotated[
-    bool,
+IndexModeOption = Annotated[
+    IngestIndexModeValue,
     typer.Option(
-        "--hybrid/--no-hybrid",
+        "--index-mode",
         help=(
-            "Also build a full-text (BM25) index over ingested text so query --hybrid can fuse "
-            "lexical and vector retrieval. Disabled by default."
+            "LanceDB index mode: dense, hybrid, or sparse. Dense is vector-only; hybrid also builds "
+            "BM25/FTS; sparse skips dense embedding and writes an FTS-only table."
         ),
     ),
 ]
@@ -238,10 +227,6 @@ OcrLangOption = Annotated[
     OcrLangValue | None,
     typer.Option("--ocr-lang", help="OCR v2 language selector for local extraction."),
 ]
-GraphicElementsInvokeUrlOption = Annotated[
-    str | None,
-    typer.Option("--graphic-elements-invoke-url", help="Graphic-elements NIM endpoint URL."),
-]
 TableStructureInvokeUrlOption = Annotated[
     str | None,
     typer.Option("--table-structure-invoke-url", help="Table-structure NIM endpoint URL."),
@@ -252,10 +237,32 @@ TableOutputFormatOption = Annotated[
         "--table-output-format", help="Table text format. 'markdown' enables local table-structure extraction."
     ),
 ]
-EmbedInvokeUrlOption = Annotated[str | None, typer.Option("--embed-invoke-url", help="Embedding NIM endpoint URL.")]
+EmbedInvokeUrlOption = Annotated[
+    str | None,
+    typer.Option(
+        "--embed-invoke-url",
+        envvar="EMBED_INVOKE_URL",
+        help=(
+            "Embedding endpoint override. On CPU-only hosts, ingest automatically uses NVIDIA's hosted "
+            "embedding endpoint with NVIDIA_API_KEY or NGC_API_KEY; pass this only for another endpoint."
+        ),
+    ),
+]
 EmbedModelNameOption = Annotated[
     str | None,
-    typer.Option("--embed-model-name", help="Optional embedding model name override."),
+    typer.Option(
+        "--embed-model-name",
+        envvar="EMBED_MODEL_NAME",
+        help=f"Optional embedding model name override. Defaults to {DEFAULT_EMBED_MODEL} when omitted.",
+    ),
+]
+EmbedModelProviderPrefixOption = Annotated[
+    str | None,
+    typer.Option(
+        "--embed-model-provider-prefix",
+        envvar="EMBED_MODEL_PROVIDER_PREFIX",
+        help="Optional LiteLLM provider prefix prepended to the remote embedding model name.",
+    ),
 ]
 LocalIngestEmbedBackendOption = Annotated[
     LocalIngestEmbedBackendValue | None,
