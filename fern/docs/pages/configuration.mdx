@@ -1,0 +1,824 @@
+---
+title: Configuration Reference
+subtitle: Every NeMo Retriever setting in one place, grouped by what it changes. This page is generated from the code — categories, defaults, and env vars stay in sync automatically.
+---
+
+## Overview
+
+NeMo Retriever exposes **241** documented settings across **27** sections. Each setting is tagged with one or more categories describing what it changes:
+
+<CardGroup cols={2}>
+  <Card title="Model Selection" icon="gear">
+    Choose which models and endpoints power each pipeline stage — local Hugging Face weights, remote NIM microservices, or hosted APIs. (43 settings)
+  </Card>
+  <Card title="Performance" icon="gear">
+    Tune single-request latency and per-worker resource use, such as GPU memory utilization and model warmup. (17 settings)
+  </Card>
+  <Card title="Throughput" icon="gear">
+    Scale aggregate work per unit time through batch sizes, worker and queue sizing, and concurrency limits. (11 settings)
+  </Card>
+  <Card title="Accuracy" icon="gear">
+    Control the quality of extracted content and retrieval results — chunking, deduplication, and hybrid search behaviour. (51 settings)
+  </Card>
+  <Card title="General" icon="gear">
+    Operational plumbing that does not directly trade off quality or performance: server topology, logging, and filesystem paths. (99 settings)
+  </Card>
+  <Card title="Security" icon="gear">
+    Enforce trust boundaries: authentication, egress allowlists, and how permissively per-request pipeline overrides are accepted. (20 settings)
+  </Card>
+</CardGroup>
+
+Settings can be provided (in ascending precedence) via defaults, a config file, environment variables, a remote cluster endpoint, or explicit overrides. Environment variable names are shown for every setting.
+
+## Settings by category
+
+### Model Selection
+
+Choose which models and endpoints power each pipeline stage — local Hugging Face weights, remote NIM microservices, or hosted APIs.
+
+<Callout intent="info">Category tag: <code>model_selection</code></Callout>
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `service.nim_endpoints.page_elements_invoke_url` | `NEMO_RETRIEVER_SERVICE__NIM_ENDPOINTS__PAGE_ELEMENTS_INVOKE_URL` | str | None | `null` | Remote NIM used for page-element detection instead of a local GPU model. |
+| `service.nim_endpoints.ocr_invoke_url` | `NEMO_RETRIEVER_SERVICE__NIM_ENDPOINTS__OCR_INVOKE_URL` | str | None | `null` | Remote OCR NIM endpoint. |
+| `service.nim_endpoints.table_structure_invoke_url` | `NEMO_RETRIEVER_SERVICE__NIM_ENDPOINTS__TABLE_STRUCTURE_INVOKE_URL` | str | None | `null` | Remote table-structure NIM endpoint. |
+| `service.nim_endpoints.embed_invoke_url` | `NEMO_RETRIEVER_SERVICE__NIM_ENDPOINTS__EMBED_INVOKE_URL` | str | None | `null` | Remote embedding NIM endpoint. |
+| `service.nim_endpoints.embed_model_name` | `NEMO_RETRIEVER_SERVICE__NIM_ENDPOINTS__EMBED_MODEL_NAME` | str | None | `null` | Embedding model SKU passed to the remote endpoint. Server-owned; changing it changes embedding quality and vector dimensionality. |
+| `service.nim_endpoints.embed_model_provider_prefix` | `NEMO_RETRIEVER_SERVICE__NIM_ENDPOINTS__EMBED_MODEL_PROVIDER_PREFIX` | str | None | `null` | LiteLLM provider prefix for namespaced embed model IDs. |
+| `service.nim_endpoints.rerank_invoke_url` | `NEMO_RETRIEVER_SERVICE__NIM_ENDPOINTS__RERANK_INVOKE_URL` | str | None | `null` | Remote reranker NIM endpoint. |
+| `service.nim_endpoints.audio_grpc_endpoint` | `NEMO_RETRIEVER_SERVICE__NIM_ENDPOINTS__AUDIO_GRPC_ENDPOINT` | str | None | `null` | Remote Parakeet ASR gRPC endpoint. |
+| `service.nim_endpoints.caption_invoke_url` | `NEMO_RETRIEVER_SERVICE__NIM_ENDPOINTS__CAPTION_INVOKE_URL` | str | None | `null` | Remote VLM endpoint fulfilling caption requests. |
+| `service.nim_endpoints.caption_model_name` | `NEMO_RETRIEVER_SERVICE__NIM_ENDPOINTS__CAPTION_MODEL_NAME` | str | None | `null` | Caption VLM SKU passed to the remote endpoint. |
+| `service.local_models.enabled` | `NEMO_RETRIEVER_SERVICE__LOCAL_MODELS__ENABLED` | bool | `False` | Load Nemotron Hugging Face weights inside the worker pod instead of calling remote NIMs. |
+| `service.local_models.extract.enabled` | `NEMO_RETRIEVER_SERVICE__LOCAL_MODELS__EXTRACT__ENABLED` | bool | `True` | Enable in-pod extraction models. |
+| `service.local_models.embed.enabled` | `NEMO_RETRIEVER_SERVICE__LOCAL_MODELS__EMBED__ENABLED` | bool | `True` | Enable in-pod embedding model. |
+| `service.local_models.embed.model_name` | `NEMO_RETRIEVER_SERVICE__LOCAL_MODELS__EMBED__MODEL_NAME` | str | `nvidia/llama-nemotron-embed-vl-1b-v2` | Local embedding model SKU; sets embedding quality/dimensions. |
+| `service.llm.enabled` | `NEMO_RETRIEVER_SERVICE__LLM__ENABLED` | bool | `False` | Enable remote LLM answer generation for /v1/answer. |
+| `service.llm.model` | `NEMO_RETRIEVER_SERVICE__LLM__MODEL` | str | `openai/nvidia/llama-3.3-nemotron-super-49b-v1.5` | LLM model identifier used for RAG answers. |
+| `service.llm.api_base` | `NEMO_RETRIEVER_SERVICE__LLM__API_BASE` | str | None | `null` | Base URL of the LLM endpoint. |
+| `service.llm.extra_params` | `NEMO_RETRIEVER_SERVICE__LLM__EXTRA_PARAMS` | dict[str, Any] | `{}` |  |
+| `service.llm.rag_system_prompt` | `NEMO_RETRIEVER_SERVICE__LLM__RAG_SYSTEM_PROMPT` | str | None | `null` |  |
+| `service.llm.rag_system_prompt_prefix` | `NEMO_RETRIEVER_SERVICE__LLM__RAG_SYSTEM_PROMPT_PREFIX` | str | None | `null` |  |
+| `service.vectordb.embed_model` | `NEMO_RETRIEVER_SERVICE__VECTORDB__EMBED_MODEL` | str | `nvidia/llama-nemotron-embed-vl-1b-v2` | Embedding model the vectordb pod uses for query encoding. |
+| `service.vectordb.embed_model_provider_prefix` | `NEMO_RETRIEVER_SERVICE__VECTORDB__EMBED_MODEL_PROVIDER_PREFIX` | str | None | `null` | Provider prefix for the query embed model. |
+| `ingestion.extract.method` | `NEMO_RETRIEVER_INGESTION__EXTRACT__METHOD` | str | `pdfium` | Extraction backend (pdfium vs nemotron_parse). |
+| `ingestion.embed.model_name` | `NEMO_RETRIEVER_INGESTION__EMBED__MODEL_NAME` | Optional[str] | `null` | Embedding model SKU; sets quality and vector dimensionality. |
+| `ingestion.embed.embedding_endpoint` | `NEMO_RETRIEVER_INGESTION__EMBED__EMBEDDING_ENDPOINT` | Optional[str] | `null` |  |
+| `ingestion.embed.embed_invoke_url` | `NEMO_RETRIEVER_INGESTION__EMBED__EMBED_INVOKE_URL` | Optional[str] | `null` |  |
+| `ingestion.embed.embed_model_name` | `NEMO_RETRIEVER_INGESTION__EMBED__EMBED_MODEL_NAME` | Optional[str] | `null` |  |
+| `ingestion.embed.embed_model_provider_prefix` | `NEMO_RETRIEVER_INGESTION__EMBED__EMBED_MODEL_PROVIDER_PREFIX` | Optional[str] | `null` |  |
+| `ingestion.embed.api_key` | `NEMO_RETRIEVER_INGESTION__EMBED__API_KEY` | Optional[str] | `null` |  |
+| `ingestion.embed.input_type` | `NEMO_RETRIEVER_INGESTION__EMBED__INPUT_TYPE` | str | `passage` |  |
+| `ingestion.embed.text_elements_modality` | `NEMO_RETRIEVER_INGESTION__EMBED__TEXT_ELEMENTS_MODALITY` | Optional[str] | `null` |  |
+| `ingestion.embed.structured_elements_modality` | `NEMO_RETRIEVER_INGESTION__EMBED__STRUCTURED_ELEMENTS_MODALITY` | Optional[str] | `null` |  |
+| `ingestion.embed.text_column` | `NEMO_RETRIEVER_INGESTION__EMBED__TEXT_COLUMN` | str | `text` |  |
+| `ingestion.embed.inference_batch_size` | `NEMO_RETRIEVER_INGESTION__EMBED__INFERENCE_BATCH_SIZE` | int | `32` |  |
+| `ingestion.embed.output_column` | `NEMO_RETRIEVER_INGESTION__EMBED__OUTPUT_COLUMN` | str | `text_embeddings_1b_v2` |  |
+| `ingestion.embed.embedding_dim_column` | `NEMO_RETRIEVER_INGESTION__EMBED__EMBEDDING_DIM_COLUMN` | str | `text_embeddings_1b_v2_dim` |  |
+| `ingestion.embed.has_embedding_column` | `NEMO_RETRIEVER_INGESTION__EMBED__HAS_EMBEDDING_COLUMN` | str | `text_embeddings_1b_v2_has_embedding` |  |
+| `ingestion.embed.embed_output_column` | `NEMO_RETRIEVER_INGESTION__EMBED__EMBED_OUTPUT_COLUMN` | str | `text_embeddings_1b_v2` |  |
+| `ingestion.embed.embed_inference_batch_size` | `NEMO_RETRIEVER_INGESTION__EMBED__EMBED_INFERENCE_BATCH_SIZE` | int | `16` |  |
+| `ingestion.embed.query_max_length` | `NEMO_RETRIEVER_INGESTION__EMBED__QUERY_MAX_LENGTH` | int | `128` |  |
+| `ingestion.embed.dimensions` | `NEMO_RETRIEVER_INGESTION__EMBED__DIMENSIONS` | Optional[int] | `null` |  |
+| `ingestion.embed.request_timeout_s` | `NEMO_RETRIEVER_INGESTION__EMBED__REQUEST_TIMEOUT_S` | float | `600.0` |  |
+| `ingestion.text_chunk.tokenizer_model_id` | `NEMO_RETRIEVER_INGESTION__TEXT_CHUNK__TOKENIZER_MODEL_ID` | Optional[str] | `null` | Tokenizer used to measure chunk boundaries. |
+
+### Performance
+
+Tune single-request latency and per-worker resource use, such as GPU memory utilization and model warmup.
+
+<Callout intent="info">Category tag: <code>performance</code></Callout>
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `service.local_models.device` | `NEMO_RETRIEVER_SERVICE__LOCAL_MODELS__DEVICE` | str | None | `null` | Torch device local models load onto (e.g. cuda:0). |
+| `service.local_models.warmup_on_startup` | `NEMO_RETRIEVER_SERVICE__LOCAL_MODELS__WARMUP_ON_STARTUP` | bool | `False` | Load local models at startup to remove first-request latency, at the cost of higher idle VRAM. _Hint: Enable with low worker counts on dedicated GPU pods._ |
+| `service.local_models.max_tasks_per_child` | `NEMO_RETRIEVER_SERVICE__LOCAL_MODELS__MAX_TASKS_PER_CHILD` | int | None | `null` | Process-pool worker recycling threshold. |
+| `service.local_models.embed.local_ingest_embed_backend` | `NEMO_RETRIEVER_SERVICE__LOCAL_MODELS__EMBED__LOCAL_INGEST_EMBED_BACKEND` | str | `hf` | Local embedding backend (hf vs vllm). _Hint: vllm is faster on supported GPUs._ |
+| `service.local_models.embed.gpu_memory_utilization` | `NEMO_RETRIEVER_SERVICE__LOCAL_MODELS__EMBED__GPU_MEMORY_UTILIZATION` | float | `0.45` | Fraction of GPU memory reserved for the embedder. _Hint: 0.45 default; lower if co-locating extraction models._ |
+| `service.llm.timeout` | `NEMO_RETRIEVER_SERVICE__LLM__TIMEOUT` | float | `180.0` | Per-request LLM timeout in seconds. |
+| `service.resources.max_memory_mb` | `NEMO_RETRIEVER_SERVICE__RESOURCES__MAX_MEMORY_MB` | int | None | `null` | Hard RSS limit for the worker process. |
+| `service.resources.max_cpu_cores` | `NEMO_RETRIEVER_SERVICE__RESOURCES__MAX_CPU_CORES` | int | None | `null` | CPU affinity cap for the worker process. |
+| `service.resources.gpu_devices` | `NEMO_RETRIEVER_SERVICE__RESOURCES__GPU_DEVICES` | list[str] | `[]` | GPU device IDs exposed via CUDA_VISIBLE_DEVICES. |
+| `service.mcp.request_timeout_s` | `NEMO_RETRIEVER_SERVICE__MCP__REQUEST_TIMEOUT_S` | float | `60.0` | Per-tool request timeout. |
+| `service.mcp.ingest_timeout_s` | `NEMO_RETRIEVER_SERVICE__MCP__INGEST_TIMEOUT_S` | float | `1800.0` | Timeout for MCP-initiated ingest jobs. |
+| `service.mcp.poll_interval_s` | `NEMO_RETRIEVER_SERVICE__MCP__POLL_INTERVAL_S` | float | `2.0` | Job status poll interval for MCP tools. |
+| `service.gateway.timeout_s` | `NEMO_RETRIEVER_SERVICE__GATEWAY__TIMEOUT_S` | float | `300.0` | Per-request forwarding timeout. |
+| `service.work_queue.claim_timeout_s` | `NEMO_RETRIEVER_SERVICE__WORK_QUEUE__CLAIM_TIMEOUT_S` | float | `30.0` | Long-poll timeout for claiming work. |
+| `ingestion.embed.local_ingest_embed_backend` | `NEMO_RETRIEVER_INGESTION__EMBED__LOCAL_INGEST_EMBED_BACKEND` | str | `vllm` | Local embedding backend (hf vs vllm). |
+| `ingestion.vector_store.index_type` | `NEMO_RETRIEVER_INGESTION__VECTOR_STORE__INDEX_TYPE` | str | `IVF_HNSW_SQ` | Vector index type; trades recall for query latency. |
+| `ingestion.vector_store.num_partitions` | `NEMO_RETRIEVER_INGESTION__VECTOR_STORE__NUM_PARTITIONS` | int | `16` | IVF partition count; affects recall and query speed. |
+
+### Throughput
+
+Scale aggregate work per unit time through batch sizes, worker and queue sizing, and concurrency limits.
+
+<Callout intent="info">Category tag: <code>throughput</code></Callout>
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `service.local_models.max_process_pool_workers` | `NEMO_RETRIEVER_SERVICE__LOCAL_MODELS__MAX_PROCESS_POOL_WORKERS` | int | `1` | Caps ingest process-pool workers; each loads the full model stack into GPU memory. _Hint: Often 1 for local models; raise only if VRAM allows num_workers x model stack._ |
+| `service.mcp.max_concurrency` | `NEMO_RETRIEVER_SERVICE__MCP__MAX_CONCURRENCY` | int | `8` | Maximum concurrent MCP tool invocations. |
+| `service.gateway.max_connections` | `NEMO_RETRIEVER_SERVICE__GATEWAY__MAX_CONNECTIONS` | int | `100` | httpx connection pool limit per backend. |
+| `service.pipeline.realtime_workers` | `NEMO_RETRIEVER_SERVICE__PIPELINE__REALTIME_WORKERS` | int | `8` | Concurrent workers for low-latency page processing. _Hint: Scale with CPU cores and remote NIM capacity._ |
+| `service.pipeline.realtime_queue_size` | `NEMO_RETRIEVER_SERVICE__PIPELINE__REALTIME_QUEUE_SIZE` | int | `2048` | Max queued items before the realtime pool rejects. |
+| `service.pipeline.batch_workers` | `NEMO_RETRIEVER_SERVICE__PIPELINE__BATCH_WORKERS` | int | `16` | Concurrent workers for bulk document processing. |
+| `service.pipeline.batch_queue_size` | `NEMO_RETRIEVER_SERVICE__PIPELINE__BATCH_QUEUE_SIZE` | int | `4096` | Max queued items before the batch pool rejects. |
+| `service.work_queue.spool_limit_bytes` | `NEMO_RETRIEVER_SERVICE__WORK_QUEUE__SPOOL_LIMIT_BYTES` | int | `21474836480` | Maximum on-disk spool size. |
+| `service.work_queue.max_active_leases_realtime` | `NEMO_RETRIEVER_SERVICE__WORK_QUEUE__MAX_ACTIVE_LEASES_REALTIME` | int | `8` | Concurrent realtime leases a worker may hold. |
+| `service.work_queue.max_active_leases_batch` | `NEMO_RETRIEVER_SERVICE__WORK_QUEUE__MAX_ACTIVE_LEASES_BATCH` | int | `48` | Concurrent batch leases a worker may hold. |
+| `ingestion.embed.nim_http_max_concurrent` | `NEMO_RETRIEVER_INGESTION__EMBED__NIM_HTTP_MAX_CONCURRENT` | int | `32` | Max concurrent HTTP requests to the embed NIM. |
+
+### Accuracy
+
+Control the quality of extracted content and retrieval results — chunking, deduplication, and hybrid search behaviour.
+
+<Callout intent="info">Category tag: <code>accuracy</code></Callout>
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `service.local_models.extract.use_table_structure` | `NEMO_RETRIEVER_SERVICE__LOCAL_MODELS__EXTRACT__USE_TABLE_STRUCTURE` | bool | `True` | Run table-structure recognition for richer table extraction. |
+| `service.local_models.extract.ocr_version` | `NEMO_RETRIEVER_SERVICE__LOCAL_MODELS__EXTRACT__OCR_VERSION` | Literal['v1', 'v2'] | `v2` | OCR model generation; v2 is more accurate. _Hint: Use v2 unless pinned._ |
+| `service.local_models.extract.ocr_lang` | `NEMO_RETRIEVER_SERVICE__LOCAL_MODELS__EXTRACT__OCR_LANG` | Optional[Literal['multi', 'english']] | `null` | OCR language pack (multi vs english). |
+| `service.llm.temperature` | `NEMO_RETRIEVER_SERVICE__LLM__TEMPERATURE` | float | `0.0` | Sampling temperature; 0 is deterministic. _Hint: 0.0 for grounded RAG._ |
+| `service.llm.top_p` | `NEMO_RETRIEVER_SERVICE__LLM__TOP_P` | float | None | `null` | Nucleus sampling probability mass. |
+| `service.llm.max_tokens` | `NEMO_RETRIEVER_SERVICE__LLM__MAX_TOKENS` | int | `512` | Maximum generated answer length. _Hint: 512 default._ |
+| `service.llm.reasoning_enabled` | `NEMO_RETRIEVER_SERVICE__LLM__REASONING_ENABLED` | bool | `True` | Allow reasoning-style generation when the model supports it. |
+| `ingestion.extract.extract_text` | `NEMO_RETRIEVER_INGESTION__EXTRACT__EXTRACT_TEXT` | bool | `True` | Extract text content from documents. |
+| `ingestion.extract.extract_images` | `NEMO_RETRIEVER_INGESTION__EXTRACT__EXTRACT_IMAGES` | bool | `True` |  |
+| `ingestion.extract.extract_tables` | `NEMO_RETRIEVER_INGESTION__EXTRACT__EXTRACT_TABLES` | bool | `True` | Detect and extract tables. |
+| `ingestion.extract.extract_charts` | `NEMO_RETRIEVER_INGESTION__EXTRACT__EXTRACT_CHARTS` | bool | `True` | Detect and extract charts. |
+| `ingestion.extract.extract_infographics` | `NEMO_RETRIEVER_INGESTION__EXTRACT__EXTRACT_INFOGRAPHICS` | bool | `False` | Detect and extract infographics. |
+| `ingestion.extract.extract_page_as_image` | `NEMO_RETRIEVER_INGESTION__EXTRACT__EXTRACT_PAGE_AS_IMAGE` | Optional[bool] | `True` |  |
+| `ingestion.extract.use_page_elements` | `NEMO_RETRIEVER_INGESTION__EXTRACT__USE_PAGE_ELEMENTS` | bool | `True` | Use page-element detection to structure extraction. |
+| `ingestion.extract.use_table_structure` | `NEMO_RETRIEVER_INGESTION__EXTRACT__USE_TABLE_STRUCTURE` | bool | `False` |  |
+| `ingestion.extract.table_output_format` | `NEMO_RETRIEVER_INGESTION__EXTRACT__TABLE_OUTPUT_FORMAT` | Optional[Literal['pseudo_markdown', 'markdown']] | `null` |  |
+| `ingestion.extract.dpi` | `NEMO_RETRIEVER_INGESTION__EXTRACT__DPI` | int | `200` | Rasterization DPI; higher improves OCR at higher cost. _Hint: 300 typical._ |
+| `ingestion.extract.image_format` | `NEMO_RETRIEVER_INGESTION__EXTRACT__IMAGE_FORMAT` | str | `jpeg` |  |
+| `ingestion.extract.jpeg_quality` | `NEMO_RETRIEVER_INGESTION__EXTRACT__JPEG_QUALITY` | int | `100` |  |
+| `ingestion.extract.render_mode` | `NEMO_RETRIEVER_INGESTION__EXTRACT__RENDER_MODE` | Literal['full_dpi', 'fit_to_model'] | `fit_to_model` |  |
+| `ingestion.extract.inference_batch_size` | `NEMO_RETRIEVER_INGESTION__EXTRACT__INFERENCE_BATCH_SIZE` | int | `8` |  |
+| `ingestion.extract.ocr_model_dir` | `NEMO_RETRIEVER_INGESTION__EXTRACT__OCR_MODEL_DIR` | Optional[str] | `null` |  |
+| `ingestion.extract.ocr_version` | `NEMO_RETRIEVER_INGESTION__EXTRACT__OCR_VERSION` | Literal['v1', 'v2'] | `v2` | OCR model generation. |
+| `ingestion.extract.ocr_lang` | `NEMO_RETRIEVER_INGESTION__EXTRACT__OCR_LANG` | Optional[Literal['multi', 'english']] | `null` | OCR language pack. |
+| `ingestion.extract.invoke_url` | `NEMO_RETRIEVER_INGESTION__EXTRACT__INVOKE_URL` | Optional[str] | `null` |  |
+| `ingestion.extract.api_key` | `NEMO_RETRIEVER_INGESTION__EXTRACT__API_KEY` | Optional[str] | `null` |  |
+| `ingestion.extract.request_timeout_s` | `NEMO_RETRIEVER_INGESTION__EXTRACT__REQUEST_TIMEOUT_S` | float | `60.0` |  |
+| `ingestion.extract.page_elements_invoke_url` | `NEMO_RETRIEVER_INGESTION__EXTRACT__PAGE_ELEMENTS_INVOKE_URL` | Optional[str] | `null` |  |
+| `ingestion.extract.page_elements_api_key` | `NEMO_RETRIEVER_INGESTION__EXTRACT__PAGE_ELEMENTS_API_KEY` | Optional[str] | `null` |  |
+| `ingestion.extract.page_elements_request_timeout_s` | `NEMO_RETRIEVER_INGESTION__EXTRACT__PAGE_ELEMENTS_REQUEST_TIMEOUT_S` | Optional[float] | `null` |  |
+| `ingestion.extract.ocr_invoke_url` | `NEMO_RETRIEVER_INGESTION__EXTRACT__OCR_INVOKE_URL` | Optional[str] | `null` |  |
+| `ingestion.extract.ocr_api_key` | `NEMO_RETRIEVER_INGESTION__EXTRACT__OCR_API_KEY` | Optional[str] | `null` |  |
+| `ingestion.extract.ocr_request_timeout_s` | `NEMO_RETRIEVER_INGESTION__EXTRACT__OCR_REQUEST_TIMEOUT_S` | Optional[float] | `null` |  |
+| `ingestion.extract.table_structure_invoke_url` | `NEMO_RETRIEVER_INGESTION__EXTRACT__TABLE_STRUCTURE_INVOKE_URL` | Optional[str] | `null` |  |
+| `ingestion.extract.nemotron_parse_invoke_url` | `NEMO_RETRIEVER_INGESTION__EXTRACT__NEMOTRON_PARSE_INVOKE_URL` | Optional[str] | `null` |  |
+| `ingestion.extract.nemotron_parse_model` | `NEMO_RETRIEVER_INGESTION__EXTRACT__NEMOTRON_PARSE_MODEL` | Optional[str] | `null` |  |
+| `ingestion.extract.output_column` | `NEMO_RETRIEVER_INGESTION__EXTRACT__OUTPUT_COLUMN` | str | `page_elements_v3` |  |
+| `ingestion.extract.num_detections_column` | `NEMO_RETRIEVER_INGESTION__EXTRACT__NUM_DETECTIONS_COLUMN` | str | `page_elements_v3_num_detections` |  |
+| `ingestion.extract.counts_by_label_column` | `NEMO_RETRIEVER_INGESTION__EXTRACT__COUNTS_BY_LABEL_COLUMN` | str | `page_elements_v3_counts_by_label` |  |
+| `ingestion.embed.embed_modality` | `NEMO_RETRIEVER_INGESTION__EMBED__EMBED_MODALITY` | str | `text` | Which content modalities are embedded. |
+| `ingestion.embed.embed_granularity` | `NEMO_RETRIEVER_INGESTION__EMBED__EMBED_GRANULARITY` | Literal['element', 'page'] | `element` | Granularity of embedded units (page vs element). |
+| `ingestion.text_chunk.max_tokens` | `NEMO_RETRIEVER_INGESTION__TEXT_CHUNK__MAX_TOKENS` | int | `1024` | Maximum tokens per chunk; larger chunks preserve context but reduce retrieval granularity. _Hint: 1024 general; 512 for dense fact lookup._ |
+| `ingestion.text_chunk.overlap_tokens` | `NEMO_RETRIEVER_INGESTION__TEXT_CHUNK__OVERLAP_TOKENS` | int | `0` | Token overlap between adjacent chunks to preserve boundaries. |
+| `ingestion.text_chunk.encoding` | `NEMO_RETRIEVER_INGESTION__TEXT_CHUNK__ENCODING` | str | `utf-8` |  |
+| `ingestion.text_chunk.tokenizer_cache_dir` | `NEMO_RETRIEVER_INGESTION__TEXT_CHUNK__TOKENIZER_CACHE_DIR` | Optional[str] | `null` |  |
+| `ingestion.dedup.content_hash` | `NEMO_RETRIEVER_INGESTION__DEDUP__CONTENT_HASH` | bool | `True` | Drop exact-duplicate content by hash. |
+| `ingestion.dedup.bbox_iou` | `NEMO_RETRIEVER_INGESTION__DEDUP__BBOX_IOU` | bool | `True` | Deduplicate overlapping detections by bounding-box IoU. |
+| `ingestion.dedup.iou_threshold` | `NEMO_RETRIEVER_INGESTION__DEDUP__IOU_THRESHOLD` | float | `0.45` | IoU threshold above which detections are considered duplicates. |
+| `ingestion.vector_store.metric` | `NEMO_RETRIEVER_INGESTION__VECTOR_STORE__METRIC` | str | `l2` | Distance metric used for similarity search. |
+| `ingestion.vector_store.hybrid` | `NEMO_RETRIEVER_INGESTION__VECTOR_STORE__HYBRID` | bool | `False` | Enable hybrid dense+sparse retrieval. _Hint: Improves recall on keyword queries._ |
+| `ingestion.vector_store.fts_language` | `NEMO_RETRIEVER_INGESTION__VECTOR_STORE__FTS_LANGUAGE` | str | `English` | Full-text-search language for the sparse index. |
+
+### General
+
+Operational plumbing that does not directly trade off quality or performance: server topology, logging, and filesystem paths.
+
+<Callout intent="info">Category tag: <code>general</code></Callout>
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `service.mode` | `NEMO_RETRIEVER_SERVICE__MODE` | Literal['standalone', 'gateway', 'realtime', 'batch'] | `standalone` |  |
+| `service.server.host` | `NEMO_RETRIEVER_SERVICE__SERVER__HOST` | str | `0.0.0.0` | Network interface the HTTP service binds to. |
+| `service.server.port` | `NEMO_RETRIEVER_SERVICE__SERVER__PORT` | int | `7670` | TCP port the HTTP service listens on. |
+| `service.logging.level` | `NEMO_RETRIEVER_SERVICE__LOGGING__LEVEL` | str | `INFO` | Root log verbosity. _Hint: INFO in production; DEBUG when triaging._ |
+| `service.logging.file` | `NEMO_RETRIEVER_SERVICE__LOGGING__FILE` | str | `retriever-service.log` | Path of the rotating log file. |
+| `service.logging.format` | `NEMO_RETRIEVER_SERVICE__LOGGING__FORMAT` | str | `%(asctime)s | %(levelname)s | %(name)s | %(message)s` | Python logging format string. |
+| `service.local_models.hf_cache_dir` | `NEMO_RETRIEVER_SERVICE__LOCAL_MODELS__HF_CACHE_DIR` | str | None | `null` | Directory for cached Hugging Face weights. |
+| `service.local_models.asr.enabled` | `NEMO_RETRIEVER_SERVICE__LOCAL_MODELS__ASR__ENABLED` | bool | `True` |  |
+| `service.llm.num_retries` | `NEMO_RETRIEVER_SERVICE__LLM__NUM_RETRIES` | int | `3` | Retry attempts for transient LLM errors. |
+| `service.resources.max_upload_bytes` | `NEMO_RETRIEVER_SERVICE__RESOURCES__MAX_UPLOAD_BYTES` | int | `500000000` | Maximum accepted upload size before buffering. |
+| `service.mcp.enabled` | `NEMO_RETRIEVER_SERVICE__MCP__ENABLED` | bool | `True` | Mount the FastMCP agent endpoint. |
+| `service.mcp.path` | `NEMO_RETRIEVER_SERVICE__MCP__PATH` | str | `/mcp` | HTTP mount path for the MCP app. |
+| `service.mcp.base_url` | `NEMO_RETRIEVER_SERVICE__MCP__BASE_URL` | str | None | `null` | Service URL MCP tools call internally. |
+| `service.gateway.realtime_url` | `NEMO_RETRIEVER_SERVICE__GATEWAY__REALTIME_URL` | str | `http://nemo-retriever-realtime:7670` | Backend URL for the realtime worker pool (gateway mode). |
+| `service.gateway.batch_url` | `NEMO_RETRIEVER_SERVICE__GATEWAY__BATCH_URL` | str | `http://nemo-retriever-batch:7670` | Backend URL for the batch worker pool (gateway mode). |
+| `service.work_queue.gateway_url` | `NEMO_RETRIEVER_SERVICE__WORK_QUEUE__GATEWAY_URL` | str | `http://nemo-retriever-gateway:7670` | Gateway URL used by split-mode workers. |
+| `service.work_queue.spool_directory` | `NEMO_RETRIEVER_SERVICE__WORK_QUEUE__SPOOL_DIRECTORY` | str | `/tmp/nemo-retriever-work` | Local spool directory for queued work. |
+| `service.work_queue.lease_ttl_s` | `NEMO_RETRIEVER_SERVICE__WORK_QUEUE__LEASE_TTL_S` | float | `60.0` | Work lease time-to-live before redelivery. |
+| `service.work_queue.heartbeat_interval_s` | `NEMO_RETRIEVER_SERVICE__WORK_QUEUE__HEARTBEAT_INTERVAL_S` | float | `20.0` | Worker heartbeat cadence for held leases. |
+| `service.work_queue.max_delivery_attempts` | `NEMO_RETRIEVER_SERVICE__WORK_QUEUE__MAX_DELIVERY_ATTEMPTS` | int | `3` | Redelivery attempts before a work item is dead-lettered. |
+| `service.vectordb.enabled` | `NEMO_RETRIEVER_SERVICE__VECTORDB__ENABLED` | bool | `False` | Run the dedicated LanceDB vector database pod. |
+| `service.vectordb.lancedb_uri` | `NEMO_RETRIEVER_SERVICE__VECTORDB__LANCEDB_URI` | str | `/data/vectordb` | LanceDB storage URI. |
+| `service.vectordb.table_name` | `NEMO_RETRIEVER_SERVICE__VECTORDB__TABLE_NAME` | str | `nemo_retriever` | LanceDB table receiving embeddings. |
+| `service.vectordb.vectordb_url` | `NEMO_RETRIEVER_SERVICE__VECTORDB__VECTORDB_URL` | str | `http://nemo-retriever-vectordb:7671` | URL workers POST embeddings to. |
+| `ingestion.extract.remote_retry.remote_max_pool_workers` | `NEMO_RETRIEVER_INGESTION__EXTRACT__REMOTE_RETRY__REMOTE_MAX_POOL_WORKERS` | int | `32` |  |
+| `ingestion.extract.remote_retry.remote_max_retries` | `NEMO_RETRIEVER_INGESTION__EXTRACT__REMOTE_RETRY__REMOTE_MAX_RETRIES` | int | `5` |  |
+| `ingestion.extract.remote_retry.remote_max_429_retries` | `NEMO_RETRIEVER_INGESTION__EXTRACT__REMOTE_RETRY__REMOTE_MAX_429_RETRIES` | int | `3` |  |
+| `ingestion.extract.batch_tuning.debug_run_id` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__DEBUG_RUN_ID` | str | `unknown` |  |
+| `ingestion.extract.batch_tuning.pdf_split_batch_size` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__PDF_SPLIT_BATCH_SIZE` | int | `1` |  |
+| `ingestion.extract.batch_tuning.pdf_extract_batch_size` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__PDF_EXTRACT_BATCH_SIZE` | int | `4` |  |
+| `ingestion.extract.batch_tuning.pdf_extract_num_cpus` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__PDF_EXTRACT_NUM_CPUS` | float | `2` |  |
+| `ingestion.extract.batch_tuning.pdf_extract_workers` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__PDF_EXTRACT_WORKERS` | Optional[int] | `null` |  |
+| `ingestion.extract.batch_tuning.page_elements_batch_size` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__PAGE_ELEMENTS_BATCH_SIZE` | int | `24` |  |
+| `ingestion.extract.batch_tuning.detect_batch_size` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__DETECT_BATCH_SIZE` | int | `24` |  |
+| `ingestion.extract.batch_tuning.ocr_inference_batch_size` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__OCR_INFERENCE_BATCH_SIZE` | Optional[int] | `null` |  |
+| `ingestion.extract.batch_tuning.page_elements_workers` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__PAGE_ELEMENTS_WORKERS` | Optional[int] | `null` |  |
+| `ingestion.extract.batch_tuning.ocr_workers` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__OCR_WORKERS` | Optional[int] | `null` |  |
+| `ingestion.extract.batch_tuning.detect_workers` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__DETECT_WORKERS` | Optional[int] | `null` |  |
+| `ingestion.extract.batch_tuning.page_elements_cpus_per_actor` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__PAGE_ELEMENTS_CPUS_PER_ACTOR` | float | `1` |  |
+| `ingestion.extract.batch_tuning.ocr_cpus_per_actor` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__OCR_CPUS_PER_ACTOR` | float | `1` |  |
+| `ingestion.extract.batch_tuning.table_structure_workers` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__TABLE_STRUCTURE_WORKERS` | Optional[int] | `null` |  |
+| `ingestion.extract.batch_tuning.table_structure_batch_size` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__TABLE_STRUCTURE_BATCH_SIZE` | Optional[int] | `null` |  |
+| `ingestion.extract.batch_tuning.table_structure_cpus_per_actor` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__TABLE_STRUCTURE_CPUS_PER_ACTOR` | float | `1` |  |
+| `ingestion.extract.batch_tuning.embed_workers` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__EMBED_WORKERS` | Optional[int] | `null` |  |
+| `ingestion.extract.batch_tuning.embed_batch_size` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__EMBED_BATCH_SIZE` | int | `32` |  |
+| `ingestion.extract.batch_tuning.embed_cpus_per_actor` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__EMBED_CPUS_PER_ACTOR` | float | `1` |  |
+| `ingestion.extract.batch_tuning.gpu_page_elements` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__GPU_PAGE_ELEMENTS` | Optional[float] | `null` |  |
+| `ingestion.extract.batch_tuning.gpu_ocr` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__GPU_OCR` | Optional[float] | `null` |  |
+| `ingestion.extract.batch_tuning.gpu_table_structure` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__GPU_TABLE_STRUCTURE` | Optional[float] | `null` |  |
+| `ingestion.extract.batch_tuning.gpu_embed` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__GPU_EMBED` | Optional[float] | `null` |  |
+| `ingestion.extract.batch_tuning.nemotron_parse_workers` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__NEMOTRON_PARSE_WORKERS` | Optional[int] | `null` |  |
+| `ingestion.extract.batch_tuning.gpu_nemotron_parse` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__GPU_NEMOTRON_PARSE` | Optional[float] | `null` |  |
+| `ingestion.extract.batch_tuning.nemotron_parse_batch_size` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__NEMOTRON_PARSE_BATCH_SIZE` | Optional[int] | `null` |  |
+| `ingestion.extract.batch_tuning.store_workers` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__STORE_WORKERS` | Optional[int] | `null` |  |
+| `ingestion.extract.batch_tuning.inference_batch_size` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__INFERENCE_BATCH_SIZE` | int | `8` |  |
+| `ingestion.embed.runtime.device` | `NEMO_RETRIEVER_INGESTION__EMBED__RUNTIME__DEVICE` | Optional[str] | `null` |  |
+| `ingestion.embed.runtime.hf_cache_dir` | `NEMO_RETRIEVER_INGESTION__EMBED__RUNTIME__HF_CACHE_DIR` | Optional[str] | `null` |  |
+| `ingestion.embed.runtime.normalize` | `NEMO_RETRIEVER_INGESTION__EMBED__RUNTIME__NORMALIZE` | bool | `True` |  |
+| `ingestion.embed.runtime.max_length` | `NEMO_RETRIEVER_INGESTION__EMBED__RUNTIME__MAX_LENGTH` | int | `8192` |  |
+| `ingestion.embed.runtime.model_name` | `NEMO_RETRIEVER_INGESTION__EMBED__RUNTIME__MODEL_NAME` | Optional[str] | `null` |  |
+| `ingestion.embed.runtime.gpu_memory_utilization` | `NEMO_RETRIEVER_INGESTION__EMBED__RUNTIME__GPU_MEMORY_UTILIZATION` | float | `0.45` |  |
+| `ingestion.embed.runtime.enforce_eager` | `NEMO_RETRIEVER_INGESTION__EMBED__RUNTIME__ENFORCE_EAGER` | bool | `False` |  |
+| `ingestion.embed.batch_tuning.debug_run_id` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__DEBUG_RUN_ID` | str | `unknown` |  |
+| `ingestion.embed.batch_tuning.pdf_split_batch_size` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__PDF_SPLIT_BATCH_SIZE` | int | `1` |  |
+| `ingestion.embed.batch_tuning.pdf_extract_batch_size` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__PDF_EXTRACT_BATCH_SIZE` | int | `4` |  |
+| `ingestion.embed.batch_tuning.pdf_extract_num_cpus` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__PDF_EXTRACT_NUM_CPUS` | float | `2` |  |
+| `ingestion.embed.batch_tuning.pdf_extract_workers` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__PDF_EXTRACT_WORKERS` | Optional[int] | `null` |  |
+| `ingestion.embed.batch_tuning.page_elements_batch_size` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__PAGE_ELEMENTS_BATCH_SIZE` | int | `24` |  |
+| `ingestion.embed.batch_tuning.detect_batch_size` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__DETECT_BATCH_SIZE` | int | `24` |  |
+| `ingestion.embed.batch_tuning.ocr_inference_batch_size` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__OCR_INFERENCE_BATCH_SIZE` | Optional[int] | `null` |  |
+| `ingestion.embed.batch_tuning.page_elements_workers` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__PAGE_ELEMENTS_WORKERS` | Optional[int] | `null` |  |
+| `ingestion.embed.batch_tuning.ocr_workers` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__OCR_WORKERS` | Optional[int] | `null` |  |
+| `ingestion.embed.batch_tuning.detect_workers` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__DETECT_WORKERS` | Optional[int] | `null` |  |
+| `ingestion.embed.batch_tuning.page_elements_cpus_per_actor` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__PAGE_ELEMENTS_CPUS_PER_ACTOR` | float | `1` |  |
+| `ingestion.embed.batch_tuning.ocr_cpus_per_actor` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__OCR_CPUS_PER_ACTOR` | float | `1` |  |
+| `ingestion.embed.batch_tuning.table_structure_workers` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__TABLE_STRUCTURE_WORKERS` | Optional[int] | `null` |  |
+| `ingestion.embed.batch_tuning.table_structure_batch_size` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__TABLE_STRUCTURE_BATCH_SIZE` | Optional[int] | `null` |  |
+| `ingestion.embed.batch_tuning.table_structure_cpus_per_actor` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__TABLE_STRUCTURE_CPUS_PER_ACTOR` | float | `1` |  |
+| `ingestion.embed.batch_tuning.embed_workers` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__EMBED_WORKERS` | Optional[int] | `null` |  |
+| `ingestion.embed.batch_tuning.embed_batch_size` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__EMBED_BATCH_SIZE` | int | `32` |  |
+| `ingestion.embed.batch_tuning.embed_cpus_per_actor` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__EMBED_CPUS_PER_ACTOR` | float | `1` |  |
+| `ingestion.embed.batch_tuning.gpu_page_elements` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__GPU_PAGE_ELEMENTS` | Optional[float] | `null` |  |
+| `ingestion.embed.batch_tuning.gpu_ocr` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__GPU_OCR` | Optional[float] | `null` |  |
+| `ingestion.embed.batch_tuning.gpu_table_structure` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__GPU_TABLE_STRUCTURE` | Optional[float] | `null` |  |
+| `ingestion.embed.batch_tuning.gpu_embed` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__GPU_EMBED` | Optional[float] | `null` |  |
+| `ingestion.embed.batch_tuning.nemotron_parse_workers` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__NEMOTRON_PARSE_WORKERS` | Optional[int] | `null` |  |
+| `ingestion.embed.batch_tuning.gpu_nemotron_parse` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__GPU_NEMOTRON_PARSE` | Optional[float] | `null` |  |
+| `ingestion.embed.batch_tuning.nemotron_parse_batch_size` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__NEMOTRON_PARSE_BATCH_SIZE` | Optional[int] | `null` |  |
+| `ingestion.embed.batch_tuning.store_workers` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__STORE_WORKERS` | Optional[int] | `null` |  |
+| `ingestion.embed.batch_tuning.inference_batch_size` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__INFERENCE_BATCH_SIZE` | int | `8` |  |
+| `ingestion.vector_store.lancedb_uri` | `NEMO_RETRIEVER_INGESTION__VECTOR_STORE__LANCEDB_URI` | str | `lancedb` |  |
+| `ingestion.vector_store.table_name` | `NEMO_RETRIEVER_INGESTION__VECTOR_STORE__TABLE_NAME` | str | `nv-ingest` | LanceDB table name. |
+| `ingestion.vector_store.overwrite` | `NEMO_RETRIEVER_INGESTION__VECTOR_STORE__OVERWRITE` | bool | `True` |  |
+| `ingestion.vector_store.create_index` | `NEMO_RETRIEVER_INGESTION__VECTOR_STORE__CREATE_INDEX` | bool | `True` |  |
+| `ingestion.vector_store.num_sub_vectors` | `NEMO_RETRIEVER_INGESTION__VECTOR_STORE__NUM_SUB_VECTORS` | int | `256` |  |
+| `ingestion.vector_store.embedding_column` | `NEMO_RETRIEVER_INGESTION__VECTOR_STORE__EMBEDDING_COLUMN` | str | `text_embeddings_1b_v2` |  |
+| `ingestion.vector_store.embedding_key` | `NEMO_RETRIEVER_INGESTION__VECTOR_STORE__EMBEDDING_KEY` | str | `embedding` |  |
+| `ingestion.vector_store.include_text` | `NEMO_RETRIEVER_INGESTION__VECTOR_STORE__INCLUDE_TEXT` | bool | `True` |  |
+| `ingestion.vector_store.text_column` | `NEMO_RETRIEVER_INGESTION__VECTOR_STORE__TEXT_COLUMN` | str | `text` |  |
+
+### Security
+
+Enforce trust boundaries: authentication, egress allowlists, and how permissively per-request pipeline overrides are accepted.
+
+<Callout intent="info">Category tag: <code>security</code></Callout>
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `service.nim_endpoints.api_key` | `NEMO_RETRIEVER_SERVICE__NIM_ENDPOINTS__API_KEY` | str | None | `null` | Credential presented to remote NIM endpoints. |
+| `service.llm.api_key` | `NEMO_RETRIEVER_SERVICE__LLM__API_KEY` | str | None | `null` | Credential for the LLM endpoint. |
+| `service.auth.api_token` | `NEMO_RETRIEVER_SERVICE__AUTH__API_TOKEN` | str | None | `null` | Bearer token required on protected routes; empty disables auth. |
+| `service.auth.header_name` | `NEMO_RETRIEVER_SERVICE__AUTH__HEADER_NAME` | str | `Authorization` | HTTP header carrying the bearer token. |
+| `service.auth.bypass_paths` | `NEMO_RETRIEVER_SERVICE__AUTH__BYPASS_PATHS` | list[str] | `['/v1/health', '/docs', '/openapi.json', '/redoc']` | Paths served without authentication (health, docs). |
+| `service.mcp.enable_write_tools` | `NEMO_RETRIEVER_SERVICE__MCP__ENABLE_WRITE_TOOLS` | bool | `True` | Expose write-capable MCP tools to agents. |
+| `service.pipeline_overrides.mode` | `NEMO_RETRIEVER_SERVICE__PIPELINE_OVERRIDES__MODE` | Literal['reject', 'allow_list', 'allow_all'] | `allow_list` | How permissively per-request pipeline overrides are accepted (reject/allow_list/allow_all). _Hint: allow_list for multi-tenant; allow_all only on trusted dev clusters._ |
+| `service.pipeline_overrides.extra_extract_keys` | `NEMO_RETRIEVER_SERVICE__PIPELINE_OVERRIDES__EXTRA_EXTRACT_KEYS` | list[str] | `[]` |  |
+| `service.pipeline_overrides.extra_embed_keys` | `NEMO_RETRIEVER_SERVICE__PIPELINE_OVERRIDES__EXTRA_EMBED_KEYS` | list[str] | `[]` |  |
+| `service.pipeline_overrides.extra_dedup_keys` | `NEMO_RETRIEVER_SERVICE__PIPELINE_OVERRIDES__EXTRA_DEDUP_KEYS` | list[str] | `[]` |  |
+| `service.pipeline_overrides.extra_split_keys` | `NEMO_RETRIEVER_SERVICE__PIPELINE_OVERRIDES__EXTRA_SPLIT_KEYS` | list[str] | `[]` |  |
+| `service.pipeline_overrides.extra_store_keys` | `NEMO_RETRIEVER_SERVICE__PIPELINE_OVERRIDES__EXTRA_STORE_KEYS` | list[str] | `[]` |  |
+| `service.pipeline_overrides.extra_storage_options_keys` | `NEMO_RETRIEVER_SERVICE__PIPELINE_OVERRIDES__EXTRA_STORAGE_OPTIONS_KEYS` | list[str] | `[]` |  |
+| `service.pipeline_overrides.extra_webhook_keys` | `NEMO_RETRIEVER_SERVICE__PIPELINE_OVERRIDES__EXTRA_WEBHOOK_KEYS` | list[str] | `[]` |  |
+| `service.pipeline_overrides.extra_vdb_upload_keys` | `NEMO_RETRIEVER_SERVICE__PIPELINE_OVERRIDES__EXTRA_VDB_UPLOAD_KEYS` | list[str] | `[]` |  |
+| `service.pipeline_overrides.extra_vdb_kwargs_keys` | `NEMO_RETRIEVER_SERVICE__PIPELINE_OVERRIDES__EXTRA_VDB_KWARGS_KEYS` | list[str] | `[]` |  |
+| `service.pipeline_overrides.extra_caption_keys` | `NEMO_RETRIEVER_SERVICE__PIPELINE_OVERRIDES__EXTRA_CAPTION_KEYS` | list[str] | `[]` |  |
+| `service.pipeline_overrides.sinks.storage_uri_schemes` | `NEMO_RETRIEVER_SERVICE__PIPELINE_OVERRIDES__SINKS__STORAGE_URI_SCHEMES` | list[str] | `[]` | Allowed URI schemes for image store egress. |
+| `service.pipeline_overrides.sinks.webhook_url_prefixes` | `NEMO_RETRIEVER_SERVICE__PIPELINE_OVERRIDES__SINKS__WEBHOOK_URL_PREFIXES` | list[str] | `[]` | Allowed URL prefixes for webhook egress. |
+| `service.pipeline_overrides.sinks.vdb_uri_schemes` | `NEMO_RETRIEVER_SERVICE__PIPELINE_OVERRIDES__SINKS__VDB_URI_SCHEMES` | list[str] | `[]` | Allowed URI schemes for per-request VDB writes. |
+
+## Full reference by section
+
+The same settings organized by the structure of the configuration object. Nested keys use dotted paths (e.g. `service.server.port`).
+
+### Service
+
+Config path: `service`
+
+Top-level configuration for the retriever service mode.
+
+    Every section has sensible defaults so a zero-config launch works out of
+    the box.  Values can be overridden per-field from CLI flags.
+
+    The ``mode`` field selects the runtime role:
+
+    * **standalone** — single pod runs both realtime and batch pools (default).
+    * **gateway** — thin proxy that routes uploads to backend worker pods.
+    * **realtime** — worker pod that only runs the realtime pool.
+    * **batch** — worker pod that only runs the batch pool.
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `service.mode` | `NEMO_RETRIEVER_SERVICE__MODE` | Literal['standalone', 'gateway', 'realtime', 'batch'] | `standalone` |  |
+
+### Server
+
+Config path: `service.server`
+
+HTTP server bind address.
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `service.server.host` | `NEMO_RETRIEVER_SERVICE__SERVER__HOST` | str | `0.0.0.0` | Network interface the HTTP service binds to. |
+| `service.server.port` | `NEMO_RETRIEVER_SERVICE__SERVER__PORT` | int | `7670` | TCP port the HTTP service listens on. |
+
+### Logging
+
+Config path: `service.logging`
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `service.logging.level` | `NEMO_RETRIEVER_SERVICE__LOGGING__LEVEL` | str | `INFO` | Root log verbosity. _Hint: INFO in production; DEBUG when triaging._ |
+| `service.logging.file` | `NEMO_RETRIEVER_SERVICE__LOGGING__FILE` | str | `retriever-service.log` | Path of the rotating log file. |
+| `service.logging.format` | `NEMO_RETRIEVER_SERVICE__LOGGING__FORMAT` | str | `%(asctime)s | %(levelname)s | %(name)s | %(message)s` | Python logging format string. |
+
+### NIM Endpoints
+
+Config path: `service.nim_endpoints`
+
+Remote NIM microservice endpoints used instead of local GPU models.
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `service.nim_endpoints.page_elements_invoke_url` | `NEMO_RETRIEVER_SERVICE__NIM_ENDPOINTS__PAGE_ELEMENTS_INVOKE_URL` | str | None | `null` | Remote NIM used for page-element detection instead of a local GPU model. |
+| `service.nim_endpoints.ocr_invoke_url` | `NEMO_RETRIEVER_SERVICE__NIM_ENDPOINTS__OCR_INVOKE_URL` | str | None | `null` | Remote OCR NIM endpoint. |
+| `service.nim_endpoints.table_structure_invoke_url` | `NEMO_RETRIEVER_SERVICE__NIM_ENDPOINTS__TABLE_STRUCTURE_INVOKE_URL` | str | None | `null` | Remote table-structure NIM endpoint. |
+| `service.nim_endpoints.embed_invoke_url` | `NEMO_RETRIEVER_SERVICE__NIM_ENDPOINTS__EMBED_INVOKE_URL` | str | None | `null` | Remote embedding NIM endpoint. |
+| `service.nim_endpoints.embed_model_name` | `NEMO_RETRIEVER_SERVICE__NIM_ENDPOINTS__EMBED_MODEL_NAME` | str | None | `null` | Embedding model SKU passed to the remote endpoint. Server-owned; changing it changes embedding quality and vector dimensionality. |
+| `service.nim_endpoints.embed_model_provider_prefix` | `NEMO_RETRIEVER_SERVICE__NIM_ENDPOINTS__EMBED_MODEL_PROVIDER_PREFIX` | str | None | `null` | LiteLLM provider prefix for namespaced embed model IDs. |
+| `service.nim_endpoints.rerank_invoke_url` | `NEMO_RETRIEVER_SERVICE__NIM_ENDPOINTS__RERANK_INVOKE_URL` | str | None | `null` | Remote reranker NIM endpoint. |
+| `service.nim_endpoints.audio_grpc_endpoint` | `NEMO_RETRIEVER_SERVICE__NIM_ENDPOINTS__AUDIO_GRPC_ENDPOINT` | str | None | `null` | Remote Parakeet ASR gRPC endpoint. |
+| `service.nim_endpoints.caption_invoke_url` | `NEMO_RETRIEVER_SERVICE__NIM_ENDPOINTS__CAPTION_INVOKE_URL` | str | None | `null` | Remote VLM endpoint fulfilling caption requests. |
+| `service.nim_endpoints.caption_model_name` | `NEMO_RETRIEVER_SERVICE__NIM_ENDPOINTS__CAPTION_MODEL_NAME` | str | None | `null` | Caption VLM SKU passed to the remote endpoint. |
+| `service.nim_endpoints.api_key` | `NEMO_RETRIEVER_SERVICE__NIM_ENDPOINTS__API_KEY` | str | None | `null` | Credential presented to remote NIM endpoints. |
+
+### Local Models
+
+Config path: `service.local_models`
+
+In-pod Hugging Face model loading for extraction, embedding, and ASR.
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `service.local_models.enabled` | `NEMO_RETRIEVER_SERVICE__LOCAL_MODELS__ENABLED` | bool | `False` | Load Nemotron Hugging Face weights inside the worker pod instead of calling remote NIMs. |
+| `service.local_models.hf_cache_dir` | `NEMO_RETRIEVER_SERVICE__LOCAL_MODELS__HF_CACHE_DIR` | str | None | `null` | Directory for cached Hugging Face weights. |
+| `service.local_models.device` | `NEMO_RETRIEVER_SERVICE__LOCAL_MODELS__DEVICE` | str | None | `null` | Torch device local models load onto (e.g. cuda:0). |
+| `service.local_models.warmup_on_startup` | `NEMO_RETRIEVER_SERVICE__LOCAL_MODELS__WARMUP_ON_STARTUP` | bool | `False` | Load local models at startup to remove first-request latency, at the cost of higher idle VRAM. _Hint: Enable with low worker counts on dedicated GPU pods._ |
+| `service.local_models.max_tasks_per_child` | `NEMO_RETRIEVER_SERVICE__LOCAL_MODELS__MAX_TASKS_PER_CHILD` | int | None | `null` | Process-pool worker recycling threshold. |
+| `service.local_models.max_process_pool_workers` | `NEMO_RETRIEVER_SERVICE__LOCAL_MODELS__MAX_PROCESS_POOL_WORKERS` | int | `1` | Caps ingest process-pool workers; each loads the full model stack into GPU memory. _Hint: Often 1 for local models; raise only if VRAM allows num_workers x model stack._ |
+
+### Local Extract
+
+Config path: `service.local_models.extract`
+
+In-pod Hugging Face settings for PDF/image extraction stages.
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `service.local_models.extract.enabled` | `NEMO_RETRIEVER_SERVICE__LOCAL_MODELS__EXTRACT__ENABLED` | bool | `True` | Enable in-pod extraction models. |
+| `service.local_models.extract.use_table_structure` | `NEMO_RETRIEVER_SERVICE__LOCAL_MODELS__EXTRACT__USE_TABLE_STRUCTURE` | bool | `True` | Run table-structure recognition for richer table extraction. |
+| `service.local_models.extract.ocr_version` | `NEMO_RETRIEVER_SERVICE__LOCAL_MODELS__EXTRACT__OCR_VERSION` | Literal['v1', 'v2'] | `v2` | OCR model generation; v2 is more accurate. _Hint: Use v2 unless pinned._ |
+| `service.local_models.extract.ocr_lang` | `NEMO_RETRIEVER_SERVICE__LOCAL_MODELS__EXTRACT__OCR_LANG` | Optional[Literal['multi', 'english']] | `null` | OCR language pack (multi vs english). |
+
+### Local Embed
+
+Config path: `service.local_models.embed`
+
+In-pod Hugging Face settings for the embedding stage.
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `service.local_models.embed.enabled` | `NEMO_RETRIEVER_SERVICE__LOCAL_MODELS__EMBED__ENABLED` | bool | `True` | Enable in-pod embedding model. |
+| `service.local_models.embed.model_name` | `NEMO_RETRIEVER_SERVICE__LOCAL_MODELS__EMBED__MODEL_NAME` | str | `nvidia/llama-nemotron-embed-vl-1b-v2` | Local embedding model SKU; sets embedding quality/dimensions. |
+| `service.local_models.embed.local_ingest_embed_backend` | `NEMO_RETRIEVER_SERVICE__LOCAL_MODELS__EMBED__LOCAL_INGEST_EMBED_BACKEND` | str | `hf` | Local embedding backend (hf vs vllm). _Hint: vllm is faster on supported GPUs._ |
+| `service.local_models.embed.gpu_memory_utilization` | `NEMO_RETRIEVER_SERVICE__LOCAL_MODELS__EMBED__GPU_MEMORY_UTILIZATION` | float | `0.45` | Fraction of GPU memory reserved for the embedder. _Hint: 0.45 default; lower if co-locating extraction models._ |
+
+### Local Asr
+
+Config path: `service.local_models.asr`
+
+In-pod Hugging Face Parakeet ASR when no Parakeet NIM gRPC endpoint is set.
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `service.local_models.asr.enabled` | `NEMO_RETRIEVER_SERVICE__LOCAL_MODELS__ASR__ENABLED` | bool | `True` |  |
+
+### LLM
+
+Config path: `service.llm`
+
+Remote LLM configuration for service-mode RAG answer generation.
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `service.llm.enabled` | `NEMO_RETRIEVER_SERVICE__LLM__ENABLED` | bool | `False` | Enable remote LLM answer generation for /v1/answer. |
+| `service.llm.model` | `NEMO_RETRIEVER_SERVICE__LLM__MODEL` | str | `openai/nvidia/llama-3.3-nemotron-super-49b-v1.5` | LLM model identifier used for RAG answers. |
+| `service.llm.api_base` | `NEMO_RETRIEVER_SERVICE__LLM__API_BASE` | str | None | `null` | Base URL of the LLM endpoint. |
+| `service.llm.api_key` | `NEMO_RETRIEVER_SERVICE__LLM__API_KEY` | str | None | `null` | Credential for the LLM endpoint. |
+| `service.llm.temperature` | `NEMO_RETRIEVER_SERVICE__LLM__TEMPERATURE` | float | `0.0` | Sampling temperature; 0 is deterministic. _Hint: 0.0 for grounded RAG._ |
+| `service.llm.top_p` | `NEMO_RETRIEVER_SERVICE__LLM__TOP_P` | float | None | `null` | Nucleus sampling probability mass. |
+| `service.llm.max_tokens` | `NEMO_RETRIEVER_SERVICE__LLM__MAX_TOKENS` | int | `512` | Maximum generated answer length. _Hint: 512 default._ |
+| `service.llm.extra_params` | `NEMO_RETRIEVER_SERVICE__LLM__EXTRA_PARAMS` | dict[str, Any] | `{}` |  |
+| `service.llm.num_retries` | `NEMO_RETRIEVER_SERVICE__LLM__NUM_RETRIES` | int | `3` | Retry attempts for transient LLM errors. |
+| `service.llm.timeout` | `NEMO_RETRIEVER_SERVICE__LLM__TIMEOUT` | float | `180.0` | Per-request LLM timeout in seconds. |
+| `service.llm.rag_system_prompt` | `NEMO_RETRIEVER_SERVICE__LLM__RAG_SYSTEM_PROMPT` | str | None | `null` |  |
+| `service.llm.rag_system_prompt_prefix` | `NEMO_RETRIEVER_SERVICE__LLM__RAG_SYSTEM_PROMPT_PREFIX` | str | None | `null` |  |
+| `service.llm.reasoning_enabled` | `NEMO_RETRIEVER_SERVICE__LLM__REASONING_ENABLED` | bool | `True` | Allow reasoning-style generation when the model supports it. |
+
+### Resource Limits
+
+Config path: `service.resources`
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `service.resources.max_memory_mb` | `NEMO_RETRIEVER_SERVICE__RESOURCES__MAX_MEMORY_MB` | int | None | `null` | Hard RSS limit for the worker process. |
+| `service.resources.max_cpu_cores` | `NEMO_RETRIEVER_SERVICE__RESOURCES__MAX_CPU_CORES` | int | None | `null` | CPU affinity cap for the worker process. |
+| `service.resources.gpu_devices` | `NEMO_RETRIEVER_SERVICE__RESOURCES__GPU_DEVICES` | list[str] | `[]` | GPU device IDs exposed via CUDA_VISIBLE_DEVICES. |
+| `service.resources.max_upload_bytes` | `NEMO_RETRIEVER_SERVICE__RESOURCES__MAX_UPLOAD_BYTES` | int | `500000000` | Maximum accepted upload size before buffering. |
+
+### Authentication
+
+Config path: `service.auth`
+
+Optional bearer-token authentication.
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `service.auth.api_token` | `NEMO_RETRIEVER_SERVICE__AUTH__API_TOKEN` | str | None | `null` | Bearer token required on protected routes; empty disables auth. |
+| `service.auth.header_name` | `NEMO_RETRIEVER_SERVICE__AUTH__HEADER_NAME` | str | `Authorization` | HTTP header carrying the bearer token. |
+| `service.auth.bypass_paths` | `NEMO_RETRIEVER_SERVICE__AUTH__BYPASS_PATHS` | list[str] | `['/v1/health', '/docs', '/openapi.json', '/redoc']` | Paths served without authentication (health, docs). |
+
+### MCP
+
+Config path: `service.mcp`
+
+FastMCP transport configuration for service-mode agent integrations.
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `service.mcp.enabled` | `NEMO_RETRIEVER_SERVICE__MCP__ENABLED` | bool | `True` | Mount the FastMCP agent endpoint. |
+| `service.mcp.path` | `NEMO_RETRIEVER_SERVICE__MCP__PATH` | str | `/mcp` | HTTP mount path for the MCP app. |
+| `service.mcp.base_url` | `NEMO_RETRIEVER_SERVICE__MCP__BASE_URL` | str | None | `null` | Service URL MCP tools call internally. |
+| `service.mcp.enable_write_tools` | `NEMO_RETRIEVER_SERVICE__MCP__ENABLE_WRITE_TOOLS` | bool | `True` | Expose write-capable MCP tools to agents. |
+| `service.mcp.max_concurrency` | `NEMO_RETRIEVER_SERVICE__MCP__MAX_CONCURRENCY` | int | `8` | Maximum concurrent MCP tool invocations. |
+| `service.mcp.request_timeout_s` | `NEMO_RETRIEVER_SERVICE__MCP__REQUEST_TIMEOUT_S` | float | `60.0` | Per-tool request timeout. |
+| `service.mcp.ingest_timeout_s` | `NEMO_RETRIEVER_SERVICE__MCP__INGEST_TIMEOUT_S` | float | `1800.0` | Timeout for MCP-initiated ingest jobs. |
+| `service.mcp.poll_interval_s` | `NEMO_RETRIEVER_SERVICE__MCP__POLL_INTERVAL_S` | float | `2.0` | Job status poll interval for MCP tools. |
+
+### Gateway
+
+Config path: `service.gateway`
+
+Backend service URLs used when ``mode`` is ``gateway``.
+
+    Defaults use Kubernetes in-cluster DNS names that match the Helm chart
+    service names generated when ``topology.mode: split``.
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `service.gateway.realtime_url` | `NEMO_RETRIEVER_SERVICE__GATEWAY__REALTIME_URL` | str | `http://nemo-retriever-realtime:7670` | Backend URL for the realtime worker pool (gateway mode). |
+| `service.gateway.batch_url` | `NEMO_RETRIEVER_SERVICE__GATEWAY__BATCH_URL` | str | `http://nemo-retriever-batch:7670` | Backend URL for the batch worker pool (gateway mode). |
+| `service.gateway.timeout_s` | `NEMO_RETRIEVER_SERVICE__GATEWAY__TIMEOUT_S` | float | `300.0` | Per-request forwarding timeout. |
+| `service.gateway.max_connections` | `NEMO_RETRIEVER_SERVICE__GATEWAY__MAX_CONNECTIONS` | int | `100` | httpx connection pool limit per backend. |
+
+### Pipeline Pool
+
+Config path: `service.pipeline`
+
+Worker pool sizing for realtime and batch ingestion pipelines.
+
+    Workers are abstract dispatchers — the actual work function is plugged
+    in at startup.  Defaults are tuned for a CPU-only node that forwards
+    work to remote NIM endpoints over HTTP.
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `service.pipeline.realtime_workers` | `NEMO_RETRIEVER_SERVICE__PIPELINE__REALTIME_WORKERS` | int | `8` | Concurrent workers for low-latency page processing. _Hint: Scale with CPU cores and remote NIM capacity._ |
+| `service.pipeline.realtime_queue_size` | `NEMO_RETRIEVER_SERVICE__PIPELINE__REALTIME_QUEUE_SIZE` | int | `2048` | Max queued items before the realtime pool rejects. |
+| `service.pipeline.batch_workers` | `NEMO_RETRIEVER_SERVICE__PIPELINE__BATCH_WORKERS` | int | `16` | Concurrent workers for bulk document processing. |
+| `service.pipeline.batch_queue_size` | `NEMO_RETRIEVER_SERVICE__PIPELINE__BATCH_QUEUE_SIZE` | int | `4096` | Max queued items before the batch pool rejects. |
+
+### Work Queue
+
+Config path: `service.work_queue`
+
+Gateway-owned split-topology work broker configuration.
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `service.work_queue.gateway_url` | `NEMO_RETRIEVER_SERVICE__WORK_QUEUE__GATEWAY_URL` | str | `http://nemo-retriever-gateway:7670` | Gateway URL used by split-mode workers. |
+| `service.work_queue.spool_directory` | `NEMO_RETRIEVER_SERVICE__WORK_QUEUE__SPOOL_DIRECTORY` | str | `/tmp/nemo-retriever-work` | Local spool directory for queued work. |
+| `service.work_queue.spool_limit_bytes` | `NEMO_RETRIEVER_SERVICE__WORK_QUEUE__SPOOL_LIMIT_BYTES` | int | `21474836480` | Maximum on-disk spool size. |
+| `service.work_queue.claim_timeout_s` | `NEMO_RETRIEVER_SERVICE__WORK_QUEUE__CLAIM_TIMEOUT_S` | float | `30.0` | Long-poll timeout for claiming work. |
+| `service.work_queue.lease_ttl_s` | `NEMO_RETRIEVER_SERVICE__WORK_QUEUE__LEASE_TTL_S` | float | `60.0` | Work lease time-to-live before redelivery. |
+| `service.work_queue.heartbeat_interval_s` | `NEMO_RETRIEVER_SERVICE__WORK_QUEUE__HEARTBEAT_INTERVAL_S` | float | `20.0` | Worker heartbeat cadence for held leases. |
+| `service.work_queue.max_delivery_attempts` | `NEMO_RETRIEVER_SERVICE__WORK_QUEUE__MAX_DELIVERY_ATTEMPTS` | int | `3` | Redelivery attempts before a work item is dead-lettered. |
+| `service.work_queue.max_active_leases_realtime` | `NEMO_RETRIEVER_SERVICE__WORK_QUEUE__MAX_ACTIVE_LEASES_REALTIME` | int | `8` | Concurrent realtime leases a worker may hold. |
+| `service.work_queue.max_active_leases_batch` | `NEMO_RETRIEVER_SERVICE__WORK_QUEUE__MAX_ACTIVE_LEASES_BATCH` | int | `48` | Concurrent batch leases a worker may hold. |
+
+### Vector Database
+
+Config path: `service.vectordb`
+
+Configuration for the dedicated VectorDB pod (LanceDB + query endpoint).
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `service.vectordb.enabled` | `NEMO_RETRIEVER_SERVICE__VECTORDB__ENABLED` | bool | `False` | Run the dedicated LanceDB vector database pod. |
+| `service.vectordb.lancedb_uri` | `NEMO_RETRIEVER_SERVICE__VECTORDB__LANCEDB_URI` | str | `/data/vectordb` | LanceDB storage URI. |
+| `service.vectordb.table_name` | `NEMO_RETRIEVER_SERVICE__VECTORDB__TABLE_NAME` | str | `nemo_retriever` | LanceDB table receiving embeddings. |
+| `service.vectordb.embed_model` | `NEMO_RETRIEVER_SERVICE__VECTORDB__EMBED_MODEL` | str | `nvidia/llama-nemotron-embed-vl-1b-v2` | Embedding model the vectordb pod uses for query encoding. |
+| `service.vectordb.embed_model_provider_prefix` | `NEMO_RETRIEVER_SERVICE__VECTORDB__EMBED_MODEL_PROVIDER_PREFIX` | str | None | `null` | Provider prefix for the query embed model. |
+| `service.vectordb.vectordb_url` | `NEMO_RETRIEVER_SERVICE__VECTORDB__VECTORDB_URL` | str | `http://nemo-retriever-vectordb:7671` | URL workers POST embeddings to. |
+
+### Pipeline Overrides Policy
+
+Config path: `service.pipeline_overrides`
+
+Trust boundary governing client-supplied PipelineSpec overrides.
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `service.pipeline_overrides.mode` | `NEMO_RETRIEVER_SERVICE__PIPELINE_OVERRIDES__MODE` | Literal['reject', 'allow_list', 'allow_all'] | `allow_list` | How permissively per-request pipeline overrides are accepted (reject/allow_list/allow_all). _Hint: allow_list for multi-tenant; allow_all only on trusted dev clusters._ |
+| `service.pipeline_overrides.extra_extract_keys` | `NEMO_RETRIEVER_SERVICE__PIPELINE_OVERRIDES__EXTRA_EXTRACT_KEYS` | list[str] | `[]` |  |
+| `service.pipeline_overrides.extra_embed_keys` | `NEMO_RETRIEVER_SERVICE__PIPELINE_OVERRIDES__EXTRA_EMBED_KEYS` | list[str] | `[]` |  |
+| `service.pipeline_overrides.extra_dedup_keys` | `NEMO_RETRIEVER_SERVICE__PIPELINE_OVERRIDES__EXTRA_DEDUP_KEYS` | list[str] | `[]` |  |
+| `service.pipeline_overrides.extra_split_keys` | `NEMO_RETRIEVER_SERVICE__PIPELINE_OVERRIDES__EXTRA_SPLIT_KEYS` | list[str] | `[]` |  |
+| `service.pipeline_overrides.extra_store_keys` | `NEMO_RETRIEVER_SERVICE__PIPELINE_OVERRIDES__EXTRA_STORE_KEYS` | list[str] | `[]` |  |
+| `service.pipeline_overrides.extra_storage_options_keys` | `NEMO_RETRIEVER_SERVICE__PIPELINE_OVERRIDES__EXTRA_STORAGE_OPTIONS_KEYS` | list[str] | `[]` |  |
+| `service.pipeline_overrides.extra_webhook_keys` | `NEMO_RETRIEVER_SERVICE__PIPELINE_OVERRIDES__EXTRA_WEBHOOK_KEYS` | list[str] | `[]` |  |
+| `service.pipeline_overrides.extra_vdb_upload_keys` | `NEMO_RETRIEVER_SERVICE__PIPELINE_OVERRIDES__EXTRA_VDB_UPLOAD_KEYS` | list[str] | `[]` |  |
+| `service.pipeline_overrides.extra_vdb_kwargs_keys` | `NEMO_RETRIEVER_SERVICE__PIPELINE_OVERRIDES__EXTRA_VDB_KWARGS_KEYS` | list[str] | `[]` |  |
+| `service.pipeline_overrides.extra_caption_keys` | `NEMO_RETRIEVER_SERVICE__PIPELINE_OVERRIDES__EXTRA_CAPTION_KEYS` | list[str] | `[]` |  |
+
+### Sinks Allowlist
+
+Config path: `service.pipeline_overrides.sinks`
+
+Per-sink-type egress allowlists for client-driven pipeline stages.
+
+    Each list gates one of the three sinks (image store, webhook
+    notifier, vector-DB upload). Leaving a list empty disables that
+    sink — clients that ask for it receive HTTP 403 with a message
+    explaining how to enable it.
+
+    Use ``"*"`` as a wildcard entry to bypass enforcement entirely;
+    this is intended for dev clusters only and is highly unsafe in
+    multi-tenant deployments.
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `service.pipeline_overrides.sinks.storage_uri_schemes` | `NEMO_RETRIEVER_SERVICE__PIPELINE_OVERRIDES__SINKS__STORAGE_URI_SCHEMES` | list[str] | `[]` | Allowed URI schemes for image store egress. |
+| `service.pipeline_overrides.sinks.webhook_url_prefixes` | `NEMO_RETRIEVER_SERVICE__PIPELINE_OVERRIDES__SINKS__WEBHOOK_URL_PREFIXES` | list[str] | `[]` | Allowed URL prefixes for webhook egress. |
+| `service.pipeline_overrides.sinks.vdb_uri_schemes` | `NEMO_RETRIEVER_SERVICE__PIPELINE_OVERRIDES__SINKS__VDB_URI_SCHEMES` | list[str] | `[]` | Allowed URI schemes for per-request VDB writes. |
+
+### Extraction Defaults
+
+Config path: `ingestion.extract`
+
+Default document extraction behaviour for ingest pipelines.
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `ingestion.extract.extract_text` | `NEMO_RETRIEVER_INGESTION__EXTRACT__EXTRACT_TEXT` | bool | `True` | Extract text content from documents. |
+| `ingestion.extract.extract_images` | `NEMO_RETRIEVER_INGESTION__EXTRACT__EXTRACT_IMAGES` | bool | `True` |  |
+| `ingestion.extract.extract_tables` | `NEMO_RETRIEVER_INGESTION__EXTRACT__EXTRACT_TABLES` | bool | `True` | Detect and extract tables. |
+| `ingestion.extract.extract_charts` | `NEMO_RETRIEVER_INGESTION__EXTRACT__EXTRACT_CHARTS` | bool | `True` | Detect and extract charts. |
+| `ingestion.extract.extract_infographics` | `NEMO_RETRIEVER_INGESTION__EXTRACT__EXTRACT_INFOGRAPHICS` | bool | `False` | Detect and extract infographics. |
+| `ingestion.extract.extract_page_as_image` | `NEMO_RETRIEVER_INGESTION__EXTRACT__EXTRACT_PAGE_AS_IMAGE` | Optional[bool] | `True` |  |
+| `ingestion.extract.method` | `NEMO_RETRIEVER_INGESTION__EXTRACT__METHOD` | str | `pdfium` | Extraction backend (pdfium vs nemotron_parse). |
+| `ingestion.extract.use_page_elements` | `NEMO_RETRIEVER_INGESTION__EXTRACT__USE_PAGE_ELEMENTS` | bool | `True` | Use page-element detection to structure extraction. |
+| `ingestion.extract.use_table_structure` | `NEMO_RETRIEVER_INGESTION__EXTRACT__USE_TABLE_STRUCTURE` | bool | `False` |  |
+| `ingestion.extract.table_output_format` | `NEMO_RETRIEVER_INGESTION__EXTRACT__TABLE_OUTPUT_FORMAT` | Optional[Literal['pseudo_markdown', 'markdown']] | `null` |  |
+| `ingestion.extract.dpi` | `NEMO_RETRIEVER_INGESTION__EXTRACT__DPI` | int | `200` | Rasterization DPI; higher improves OCR at higher cost. _Hint: 300 typical._ |
+| `ingestion.extract.image_format` | `NEMO_RETRIEVER_INGESTION__EXTRACT__IMAGE_FORMAT` | str | `jpeg` |  |
+| `ingestion.extract.jpeg_quality` | `NEMO_RETRIEVER_INGESTION__EXTRACT__JPEG_QUALITY` | int | `100` |  |
+| `ingestion.extract.render_mode` | `NEMO_RETRIEVER_INGESTION__EXTRACT__RENDER_MODE` | Literal['full_dpi', 'fit_to_model'] | `fit_to_model` |  |
+| `ingestion.extract.inference_batch_size` | `NEMO_RETRIEVER_INGESTION__EXTRACT__INFERENCE_BATCH_SIZE` | int | `8` |  |
+| `ingestion.extract.ocr_model_dir` | `NEMO_RETRIEVER_INGESTION__EXTRACT__OCR_MODEL_DIR` | Optional[str] | `null` |  |
+| `ingestion.extract.ocr_version` | `NEMO_RETRIEVER_INGESTION__EXTRACT__OCR_VERSION` | Literal['v1', 'v2'] | `v2` | OCR model generation. |
+| `ingestion.extract.ocr_lang` | `NEMO_RETRIEVER_INGESTION__EXTRACT__OCR_LANG` | Optional[Literal['multi', 'english']] | `null` | OCR language pack. |
+| `ingestion.extract.invoke_url` | `NEMO_RETRIEVER_INGESTION__EXTRACT__INVOKE_URL` | Optional[str] | `null` |  |
+| `ingestion.extract.api_key` | `NEMO_RETRIEVER_INGESTION__EXTRACT__API_KEY` | Optional[str] | `null` |  |
+| `ingestion.extract.request_timeout_s` | `NEMO_RETRIEVER_INGESTION__EXTRACT__REQUEST_TIMEOUT_S` | float | `60.0` |  |
+| `ingestion.extract.page_elements_invoke_url` | `NEMO_RETRIEVER_INGESTION__EXTRACT__PAGE_ELEMENTS_INVOKE_URL` | Optional[str] | `null` |  |
+| `ingestion.extract.page_elements_api_key` | `NEMO_RETRIEVER_INGESTION__EXTRACT__PAGE_ELEMENTS_API_KEY` | Optional[str] | `null` |  |
+| `ingestion.extract.page_elements_request_timeout_s` | `NEMO_RETRIEVER_INGESTION__EXTRACT__PAGE_ELEMENTS_REQUEST_TIMEOUT_S` | Optional[float] | `null` |  |
+| `ingestion.extract.ocr_invoke_url` | `NEMO_RETRIEVER_INGESTION__EXTRACT__OCR_INVOKE_URL` | Optional[str] | `null` |  |
+| `ingestion.extract.ocr_api_key` | `NEMO_RETRIEVER_INGESTION__EXTRACT__OCR_API_KEY` | Optional[str] | `null` |  |
+| `ingestion.extract.ocr_request_timeout_s` | `NEMO_RETRIEVER_INGESTION__EXTRACT__OCR_REQUEST_TIMEOUT_S` | Optional[float] | `null` |  |
+| `ingestion.extract.table_structure_invoke_url` | `NEMO_RETRIEVER_INGESTION__EXTRACT__TABLE_STRUCTURE_INVOKE_URL` | Optional[str] | `null` |  |
+| `ingestion.extract.nemotron_parse_invoke_url` | `NEMO_RETRIEVER_INGESTION__EXTRACT__NEMOTRON_PARSE_INVOKE_URL` | Optional[str] | `null` |  |
+| `ingestion.extract.nemotron_parse_model` | `NEMO_RETRIEVER_INGESTION__EXTRACT__NEMOTRON_PARSE_MODEL` | Optional[str] | `null` |  |
+| `ingestion.extract.output_column` | `NEMO_RETRIEVER_INGESTION__EXTRACT__OUTPUT_COLUMN` | str | `page_elements_v3` |  |
+| `ingestion.extract.num_detections_column` | `NEMO_RETRIEVER_INGESTION__EXTRACT__NUM_DETECTIONS_COLUMN` | str | `page_elements_v3_num_detections` |  |
+| `ingestion.extract.counts_by_label_column` | `NEMO_RETRIEVER_INGESTION__EXTRACT__COUNTS_BY_LABEL_COLUMN` | str | `page_elements_v3_counts_by_label` |  |
+
+### Remote Retry
+
+Config path: `ingestion.extract.remote_retry`
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `ingestion.extract.remote_retry.remote_max_pool_workers` | `NEMO_RETRIEVER_INGESTION__EXTRACT__REMOTE_RETRY__REMOTE_MAX_POOL_WORKERS` | int | `32` |  |
+| `ingestion.extract.remote_retry.remote_max_retries` | `NEMO_RETRIEVER_INGESTION__EXTRACT__REMOTE_RETRY__REMOTE_MAX_RETRIES` | int | `5` |  |
+| `ingestion.extract.remote_retry.remote_max_429_retries` | `NEMO_RETRIEVER_INGESTION__EXTRACT__REMOTE_RETRY__REMOTE_MAX_429_RETRIES` | int | `3` |  |
+
+### Batch Tuning
+
+Config path: `ingestion.extract.batch_tuning`
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `ingestion.extract.batch_tuning.debug_run_id` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__DEBUG_RUN_ID` | str | `unknown` |  |
+| `ingestion.extract.batch_tuning.pdf_split_batch_size` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__PDF_SPLIT_BATCH_SIZE` | int | `1` |  |
+| `ingestion.extract.batch_tuning.pdf_extract_batch_size` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__PDF_EXTRACT_BATCH_SIZE` | int | `4` |  |
+| `ingestion.extract.batch_tuning.pdf_extract_num_cpus` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__PDF_EXTRACT_NUM_CPUS` | float | `2` |  |
+| `ingestion.extract.batch_tuning.pdf_extract_workers` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__PDF_EXTRACT_WORKERS` | Optional[int] | `null` |  |
+| `ingestion.extract.batch_tuning.page_elements_batch_size` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__PAGE_ELEMENTS_BATCH_SIZE` | int | `24` |  |
+| `ingestion.extract.batch_tuning.detect_batch_size` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__DETECT_BATCH_SIZE` | int | `24` |  |
+| `ingestion.extract.batch_tuning.ocr_inference_batch_size` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__OCR_INFERENCE_BATCH_SIZE` | Optional[int] | `null` |  |
+| `ingestion.extract.batch_tuning.page_elements_workers` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__PAGE_ELEMENTS_WORKERS` | Optional[int] | `null` |  |
+| `ingestion.extract.batch_tuning.ocr_workers` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__OCR_WORKERS` | Optional[int] | `null` |  |
+| `ingestion.extract.batch_tuning.detect_workers` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__DETECT_WORKERS` | Optional[int] | `null` |  |
+| `ingestion.extract.batch_tuning.page_elements_cpus_per_actor` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__PAGE_ELEMENTS_CPUS_PER_ACTOR` | float | `1` |  |
+| `ingestion.extract.batch_tuning.ocr_cpus_per_actor` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__OCR_CPUS_PER_ACTOR` | float | `1` |  |
+| `ingestion.extract.batch_tuning.table_structure_workers` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__TABLE_STRUCTURE_WORKERS` | Optional[int] | `null` |  |
+| `ingestion.extract.batch_tuning.table_structure_batch_size` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__TABLE_STRUCTURE_BATCH_SIZE` | Optional[int] | `null` |  |
+| `ingestion.extract.batch_tuning.table_structure_cpus_per_actor` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__TABLE_STRUCTURE_CPUS_PER_ACTOR` | float | `1` |  |
+| `ingestion.extract.batch_tuning.embed_workers` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__EMBED_WORKERS` | Optional[int] | `null` |  |
+| `ingestion.extract.batch_tuning.embed_batch_size` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__EMBED_BATCH_SIZE` | int | `32` |  |
+| `ingestion.extract.batch_tuning.embed_cpus_per_actor` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__EMBED_CPUS_PER_ACTOR` | float | `1` |  |
+| `ingestion.extract.batch_tuning.gpu_page_elements` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__GPU_PAGE_ELEMENTS` | Optional[float] | `null` |  |
+| `ingestion.extract.batch_tuning.gpu_ocr` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__GPU_OCR` | Optional[float] | `null` |  |
+| `ingestion.extract.batch_tuning.gpu_table_structure` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__GPU_TABLE_STRUCTURE` | Optional[float] | `null` |  |
+| `ingestion.extract.batch_tuning.gpu_embed` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__GPU_EMBED` | Optional[float] | `null` |  |
+| `ingestion.extract.batch_tuning.nemotron_parse_workers` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__NEMOTRON_PARSE_WORKERS` | Optional[int] | `null` |  |
+| `ingestion.extract.batch_tuning.gpu_nemotron_parse` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__GPU_NEMOTRON_PARSE` | Optional[float] | `null` |  |
+| `ingestion.extract.batch_tuning.nemotron_parse_batch_size` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__NEMOTRON_PARSE_BATCH_SIZE` | Optional[int] | `null` |  |
+| `ingestion.extract.batch_tuning.store_workers` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__STORE_WORKERS` | Optional[int] | `null` |  |
+| `ingestion.extract.batch_tuning.inference_batch_size` | `NEMO_RETRIEVER_INGESTION__EXTRACT__BATCH_TUNING__INFERENCE_BATCH_SIZE` | int | `8` |  |
+
+### Embedding Defaults
+
+Config path: `ingestion.embed`
+
+Default embedding behaviour for ingest pipelines.
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `ingestion.embed.model_name` | `NEMO_RETRIEVER_INGESTION__EMBED__MODEL_NAME` | Optional[str] | `null` | Embedding model SKU; sets quality and vector dimensionality. |
+| `ingestion.embed.embedding_endpoint` | `NEMO_RETRIEVER_INGESTION__EMBED__EMBEDDING_ENDPOINT` | Optional[str] | `null` |  |
+| `ingestion.embed.embed_invoke_url` | `NEMO_RETRIEVER_INGESTION__EMBED__EMBED_INVOKE_URL` | Optional[str] | `null` |  |
+| `ingestion.embed.embed_model_name` | `NEMO_RETRIEVER_INGESTION__EMBED__EMBED_MODEL_NAME` | Optional[str] | `null` |  |
+| `ingestion.embed.embed_model_provider_prefix` | `NEMO_RETRIEVER_INGESTION__EMBED__EMBED_MODEL_PROVIDER_PREFIX` | Optional[str] | `null` |  |
+| `ingestion.embed.api_key` | `NEMO_RETRIEVER_INGESTION__EMBED__API_KEY` | Optional[str] | `null` |  |
+| `ingestion.embed.input_type` | `NEMO_RETRIEVER_INGESTION__EMBED__INPUT_TYPE` | str | `passage` |  |
+| `ingestion.embed.embed_modality` | `NEMO_RETRIEVER_INGESTION__EMBED__EMBED_MODALITY` | str | `text` | Which content modalities are embedded. |
+| `ingestion.embed.embed_granularity` | `NEMO_RETRIEVER_INGESTION__EMBED__EMBED_GRANULARITY` | Literal['element', 'page'] | `element` | Granularity of embedded units (page vs element). |
+| `ingestion.embed.text_elements_modality` | `NEMO_RETRIEVER_INGESTION__EMBED__TEXT_ELEMENTS_MODALITY` | Optional[str] | `null` |  |
+| `ingestion.embed.structured_elements_modality` | `NEMO_RETRIEVER_INGESTION__EMBED__STRUCTURED_ELEMENTS_MODALITY` | Optional[str] | `null` |  |
+| `ingestion.embed.text_column` | `NEMO_RETRIEVER_INGESTION__EMBED__TEXT_COLUMN` | str | `text` |  |
+| `ingestion.embed.inference_batch_size` | `NEMO_RETRIEVER_INGESTION__EMBED__INFERENCE_BATCH_SIZE` | int | `32` |  |
+| `ingestion.embed.output_column` | `NEMO_RETRIEVER_INGESTION__EMBED__OUTPUT_COLUMN` | str | `text_embeddings_1b_v2` |  |
+| `ingestion.embed.embedding_dim_column` | `NEMO_RETRIEVER_INGESTION__EMBED__EMBEDDING_DIM_COLUMN` | str | `text_embeddings_1b_v2_dim` |  |
+| `ingestion.embed.has_embedding_column` | `NEMO_RETRIEVER_INGESTION__EMBED__HAS_EMBEDDING_COLUMN` | str | `text_embeddings_1b_v2_has_embedding` |  |
+| `ingestion.embed.embed_output_column` | `NEMO_RETRIEVER_INGESTION__EMBED__EMBED_OUTPUT_COLUMN` | str | `text_embeddings_1b_v2` |  |
+| `ingestion.embed.embed_inference_batch_size` | `NEMO_RETRIEVER_INGESTION__EMBED__EMBED_INFERENCE_BATCH_SIZE` | int | `16` |  |
+| `ingestion.embed.local_ingest_embed_backend` | `NEMO_RETRIEVER_INGESTION__EMBED__LOCAL_INGEST_EMBED_BACKEND` | str | `vllm` | Local embedding backend (hf vs vllm). |
+| `ingestion.embed.query_max_length` | `NEMO_RETRIEVER_INGESTION__EMBED__QUERY_MAX_LENGTH` | int | `128` |  |
+| `ingestion.embed.dimensions` | `NEMO_RETRIEVER_INGESTION__EMBED__DIMENSIONS` | Optional[int] | `null` |  |
+| `ingestion.embed.nim_http_max_concurrent` | `NEMO_RETRIEVER_INGESTION__EMBED__NIM_HTTP_MAX_CONCURRENT` | int | `32` | Max concurrent HTTP requests to the embed NIM. |
+| `ingestion.embed.request_timeout_s` | `NEMO_RETRIEVER_INGESTION__EMBED__REQUEST_TIMEOUT_S` | float | `600.0` |  |
+
+### Model Runtime
+
+Config path: `ingestion.embed.runtime`
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `ingestion.embed.runtime.device` | `NEMO_RETRIEVER_INGESTION__EMBED__RUNTIME__DEVICE` | Optional[str] | `null` |  |
+| `ingestion.embed.runtime.hf_cache_dir` | `NEMO_RETRIEVER_INGESTION__EMBED__RUNTIME__HF_CACHE_DIR` | Optional[str] | `null` |  |
+| `ingestion.embed.runtime.normalize` | `NEMO_RETRIEVER_INGESTION__EMBED__RUNTIME__NORMALIZE` | bool | `True` |  |
+| `ingestion.embed.runtime.max_length` | `NEMO_RETRIEVER_INGESTION__EMBED__RUNTIME__MAX_LENGTH` | int | `8192` |  |
+| `ingestion.embed.runtime.model_name` | `NEMO_RETRIEVER_INGESTION__EMBED__RUNTIME__MODEL_NAME` | Optional[str] | `null` |  |
+| `ingestion.embed.runtime.gpu_memory_utilization` | `NEMO_RETRIEVER_INGESTION__EMBED__RUNTIME__GPU_MEMORY_UTILIZATION` | float | `0.45` |  |
+| `ingestion.embed.runtime.enforce_eager` | `NEMO_RETRIEVER_INGESTION__EMBED__RUNTIME__ENFORCE_EAGER` | bool | `False` |  |
+
+### Batch Tuning
+
+Config path: `ingestion.embed.batch_tuning`
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `ingestion.embed.batch_tuning.debug_run_id` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__DEBUG_RUN_ID` | str | `unknown` |  |
+| `ingestion.embed.batch_tuning.pdf_split_batch_size` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__PDF_SPLIT_BATCH_SIZE` | int | `1` |  |
+| `ingestion.embed.batch_tuning.pdf_extract_batch_size` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__PDF_EXTRACT_BATCH_SIZE` | int | `4` |  |
+| `ingestion.embed.batch_tuning.pdf_extract_num_cpus` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__PDF_EXTRACT_NUM_CPUS` | float | `2` |  |
+| `ingestion.embed.batch_tuning.pdf_extract_workers` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__PDF_EXTRACT_WORKERS` | Optional[int] | `null` |  |
+| `ingestion.embed.batch_tuning.page_elements_batch_size` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__PAGE_ELEMENTS_BATCH_SIZE` | int | `24` |  |
+| `ingestion.embed.batch_tuning.detect_batch_size` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__DETECT_BATCH_SIZE` | int | `24` |  |
+| `ingestion.embed.batch_tuning.ocr_inference_batch_size` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__OCR_INFERENCE_BATCH_SIZE` | Optional[int] | `null` |  |
+| `ingestion.embed.batch_tuning.page_elements_workers` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__PAGE_ELEMENTS_WORKERS` | Optional[int] | `null` |  |
+| `ingestion.embed.batch_tuning.ocr_workers` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__OCR_WORKERS` | Optional[int] | `null` |  |
+| `ingestion.embed.batch_tuning.detect_workers` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__DETECT_WORKERS` | Optional[int] | `null` |  |
+| `ingestion.embed.batch_tuning.page_elements_cpus_per_actor` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__PAGE_ELEMENTS_CPUS_PER_ACTOR` | float | `1` |  |
+| `ingestion.embed.batch_tuning.ocr_cpus_per_actor` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__OCR_CPUS_PER_ACTOR` | float | `1` |  |
+| `ingestion.embed.batch_tuning.table_structure_workers` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__TABLE_STRUCTURE_WORKERS` | Optional[int] | `null` |  |
+| `ingestion.embed.batch_tuning.table_structure_batch_size` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__TABLE_STRUCTURE_BATCH_SIZE` | Optional[int] | `null` |  |
+| `ingestion.embed.batch_tuning.table_structure_cpus_per_actor` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__TABLE_STRUCTURE_CPUS_PER_ACTOR` | float | `1` |  |
+| `ingestion.embed.batch_tuning.embed_workers` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__EMBED_WORKERS` | Optional[int] | `null` |  |
+| `ingestion.embed.batch_tuning.embed_batch_size` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__EMBED_BATCH_SIZE` | int | `32` |  |
+| `ingestion.embed.batch_tuning.embed_cpus_per_actor` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__EMBED_CPUS_PER_ACTOR` | float | `1` |  |
+| `ingestion.embed.batch_tuning.gpu_page_elements` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__GPU_PAGE_ELEMENTS` | Optional[float] | `null` |  |
+| `ingestion.embed.batch_tuning.gpu_ocr` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__GPU_OCR` | Optional[float] | `null` |  |
+| `ingestion.embed.batch_tuning.gpu_table_structure` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__GPU_TABLE_STRUCTURE` | Optional[float] | `null` |  |
+| `ingestion.embed.batch_tuning.gpu_embed` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__GPU_EMBED` | Optional[float] | `null` |  |
+| `ingestion.embed.batch_tuning.nemotron_parse_workers` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__NEMOTRON_PARSE_WORKERS` | Optional[int] | `null` |  |
+| `ingestion.embed.batch_tuning.gpu_nemotron_parse` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__GPU_NEMOTRON_PARSE` | Optional[float] | `null` |  |
+| `ingestion.embed.batch_tuning.nemotron_parse_batch_size` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__NEMOTRON_PARSE_BATCH_SIZE` | Optional[int] | `null` |  |
+| `ingestion.embed.batch_tuning.store_workers` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__STORE_WORKERS` | Optional[int] | `null` |  |
+| `ingestion.embed.batch_tuning.inference_batch_size` | `NEMO_RETRIEVER_INGESTION__EMBED__BATCH_TUNING__INFERENCE_BATCH_SIZE` | int | `8` |  |
+
+### Text Chunking Defaults
+
+Config path: `ingestion.text_chunk`
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `ingestion.text_chunk.max_tokens` | `NEMO_RETRIEVER_INGESTION__TEXT_CHUNK__MAX_TOKENS` | int | `1024` | Maximum tokens per chunk; larger chunks preserve context but reduce retrieval granularity. _Hint: 1024 general; 512 for dense fact lookup._ |
+| `ingestion.text_chunk.overlap_tokens` | `NEMO_RETRIEVER_INGESTION__TEXT_CHUNK__OVERLAP_TOKENS` | int | `0` | Token overlap between adjacent chunks to preserve boundaries. |
+| `ingestion.text_chunk.tokenizer_model_id` | `NEMO_RETRIEVER_INGESTION__TEXT_CHUNK__TOKENIZER_MODEL_ID` | Optional[str] | `null` | Tokenizer used to measure chunk boundaries. |
+| `ingestion.text_chunk.encoding` | `NEMO_RETRIEVER_INGESTION__TEXT_CHUNK__ENCODING` | str | `utf-8` |  |
+| `ingestion.text_chunk.tokenizer_cache_dir` | `NEMO_RETRIEVER_INGESTION__TEXT_CHUNK__TOKENIZER_CACHE_DIR` | Optional[str] | `null` |  |
+
+### Deduplication Defaults
+
+Config path: `ingestion.dedup`
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `ingestion.dedup.content_hash` | `NEMO_RETRIEVER_INGESTION__DEDUP__CONTENT_HASH` | bool | `True` | Drop exact-duplicate content by hash. |
+| `ingestion.dedup.bbox_iou` | `NEMO_RETRIEVER_INGESTION__DEDUP__BBOX_IOU` | bool | `True` | Deduplicate overlapping detections by bounding-box IoU. |
+| `ingestion.dedup.iou_threshold` | `NEMO_RETRIEVER_INGESTION__DEDUP__IOU_THRESHOLD` | float | `0.45` | IoU threshold above which detections are considered duplicates. |
+
+### Vector Store Defaults
+
+Config path: `ingestion.vector_store`
+
+| Setting | Env var | Type | Default | Impact |
+| --- | --- | --- | --- | --- |
+| `ingestion.vector_store.lancedb_uri` | `NEMO_RETRIEVER_INGESTION__VECTOR_STORE__LANCEDB_URI` | str | `lancedb` |  |
+| `ingestion.vector_store.table_name` | `NEMO_RETRIEVER_INGESTION__VECTOR_STORE__TABLE_NAME` | str | `nv-ingest` | LanceDB table name. |
+| `ingestion.vector_store.overwrite` | `NEMO_RETRIEVER_INGESTION__VECTOR_STORE__OVERWRITE` | bool | `True` |  |
+| `ingestion.vector_store.create_index` | `NEMO_RETRIEVER_INGESTION__VECTOR_STORE__CREATE_INDEX` | bool | `True` |  |
+| `ingestion.vector_store.index_type` | `NEMO_RETRIEVER_INGESTION__VECTOR_STORE__INDEX_TYPE` | str | `IVF_HNSW_SQ` | Vector index type; trades recall for query latency. |
+| `ingestion.vector_store.metric` | `NEMO_RETRIEVER_INGESTION__VECTOR_STORE__METRIC` | str | `l2` | Distance metric used for similarity search. |
+| `ingestion.vector_store.num_partitions` | `NEMO_RETRIEVER_INGESTION__VECTOR_STORE__NUM_PARTITIONS` | int | `16` | IVF partition count; affects recall and query speed. |
+| `ingestion.vector_store.num_sub_vectors` | `NEMO_RETRIEVER_INGESTION__VECTOR_STORE__NUM_SUB_VECTORS` | int | `256` |  |
+| `ingestion.vector_store.embedding_column` | `NEMO_RETRIEVER_INGESTION__VECTOR_STORE__EMBEDDING_COLUMN` | str | `text_embeddings_1b_v2` |  |
+| `ingestion.vector_store.embedding_key` | `NEMO_RETRIEVER_INGESTION__VECTOR_STORE__EMBEDDING_KEY` | str | `embedding` |  |
+| `ingestion.vector_store.include_text` | `NEMO_RETRIEVER_INGESTION__VECTOR_STORE__INCLUDE_TEXT` | bool | `True` |  |
+| `ingestion.vector_store.text_column` | `NEMO_RETRIEVER_INGESTION__VECTOR_STORE__TEXT_COLUMN` | str | `text` |  |
+| `ingestion.vector_store.hybrid` | `NEMO_RETRIEVER_INGESTION__VECTOR_STORE__HYBRID` | bool | `False` | Enable hybrid dense+sparse retrieval. _Hint: Improves recall on keyword queries._ |
+| `ingestion.vector_store.fts_language` | `NEMO_RETRIEVER_INGESTION__VECTOR_STORE__FTS_LANGUAGE` | str | `English` | Full-text-search language for the sparse index. |
