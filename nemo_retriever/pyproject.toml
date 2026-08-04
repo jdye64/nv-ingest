@@ -65,6 +65,8 @@ dependencies = [
   "urllib3==2.7.0",
   # Utilities
   "pydantic>=2.8.0",
+  # Central configuration system: layered settings (env/file/remote) loading
+  "pydantic-settings>=2.4.0",
   "rich>=13.7.0",
   "universal-pathlib>=0.2.0",
   "numpy>=1.26.0",
