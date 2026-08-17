@@ -124,6 +124,8 @@ Optional advanced features (audio and video transcription, Nemotron Parse, Omni 
 
 The production Helm chart reconciles NIM microservices through `nimOperator.<key>.enabled`. Four core NIMs are **enabled by default** and auto-wired into the retriever service; optional NIMs reconcile only when you opt in. For chart keys, image overrides, and enablement, refer to the [NeMo Retriever Helm chart README](https://github.com/NVIDIA/NeMo-Retriever/blob/main/nemo_retriever/helm/README.md#nim-operator-sub-stack) and [Recommended minimal install](https://github.com/NVIDIA/NeMo-Retriever/blob/main/nemo_retriever/helm/README.md#recommended-minimal-install-2608).
 
+The chart service image defaults to `nvcr.io/nvstaging/nim/nrl-service:26.08-RC1` for this release candidate. Override `service.image.repository` and `service.image.tag` only when you pin a different build.
+
 | Helm flag | NIM | Default image (`repository:tag`) | Role | Enabled by default |
 |-----------|-----|----------------------------------|------|--------------------|
 | `page_elements` | [nemotron-page-elements-v3](https://build.nvidia.com/nvidia/nemotron-page-elements-v3) | `nvcr.io/nim/nvidia/nemotron-object-detection:2.0.1` | Page layout and element detection | Yes |
