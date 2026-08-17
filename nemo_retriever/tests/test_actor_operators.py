@@ -545,7 +545,7 @@ class TestNemotronParseActor:
         ("endpoint", "model", "expected_model", "expected_profile"),
         [
             ("https://integrate.api.nvidia.com/v1/chat/completions", None, "nvidia/nemotron-parse", "hosted_tool_call"),
-            ("http://parse:8000/v1/chat/completions", None, "nvidia/nemotron-parse-v1.2", "v1_2_tagged"),
+            ("http://parse:8000/v1/chat/completions", None, "nvidia/nemotron-parse-v2.0", "v1_2_tagged"),
             (
                 "http://parse:8000/v1/chat/completions",
                 "nvidia/nemotron-parse",
@@ -568,6 +568,12 @@ class TestNemotronParseActor:
                 "http://parse:8000/v1/chat/completions",
                 "nvidia/nemotron-parse-v1.2",
                 "nvidia/nemotron-parse-v1.2",
+                "v1_2_tagged",
+            ),
+            (
+                "http://parse:8000/v1/chat/completions",
+                "nvidia/nemotron-parse-v2.0",
+                "nvidia/nemotron-parse-v2.0",
                 "v1_2_tagged",
             ),
             (
