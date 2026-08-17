@@ -954,8 +954,12 @@ configured key. `nrl-internal-vdb-auth` must contain a distinct, high-entropy
 credential. Internal authentication is opt-in for local compatibility; enable
 it for production deployments. When enabled, a missing Secret or key prevents
 the pods from starting instead of falling back to unauthenticated VectorDB
-access. Inline `serviceConfig.auth.apiToken` is rejected unless
-`allowInsecureInlineApiToken=true`, and must never be used for production.
+access. In `topology.mode=split`, `serviceConfig.auth.scopeTokenSecret.name`
+also requires `serviceConfig.vectordb.internalAuth.enabled=true`: pull workers
+never mount the public scope-token Secret, so they need the dedicated internal
+credential to claim `/v1/internal/work/claim`. Inline `serviceConfig.auth.apiToken`
+is rejected unless `allowInsecureInlineApiToken=true`, and must never be used
+for production.
 
 ### Disable one NIM and supply an external URL for it
 

@@ -707,6 +707,8 @@ serviceConfig:
     # Optional dedicated gateway/worker-to-VectorDB authentication. When
     # enabled, all Retriever and VectorDB pods read the same existing Secret
     # key and VectorDB rejects missing or invalid internal credentials.
+    # Required in topology.mode=split when auth.scopeTokenSecret.name is set,
+    # because pull workers authenticate claims with this credential only.
     internalAuth:
       enabled: false
       existingSecret:
@@ -716,6 +718,8 @@ serviceConfig:
   # Public bearer-token authentication. Production deployments should mount
   # a Secret-backed scope-token JSON file. It is disabled by default so a
   # standalone deployment accepts gateway requests without a bearer token.
+  # In split mode the scope-token Secret mounts on the gateway only; pair it
+  # with vectordb.internalAuth so workers can claim internal work.
   # Inline apiToken is retained only as an explicitly enabled insecure
   # development fallback.
   auth:
