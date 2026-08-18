@@ -1,0 +1,224 @@
+# NeMo Retriever Library (NRL) — publish MkDocs site to docs.nvidia.com (S3 + Akamai).
+#
+# Replaces the manual brightspot S3 upload and Akamai ECCU flush for NRL guide content.
+# MkDocs-only (no Sphinx / mike deploy). GitHub Pages remains nrl-docs-github-pages.yml.
+#
+# Required GitHub configuration (NVIDIA/NeMo-Retriever org/repo):
+#   Environment: docs-nvidia-prod (recommended approval gate before first live publish)
+#   Secrets: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_ASSUME_ROLE_ARN,
+#            S3_BUCKET_NAME, AKAMAI_HOST, AKAMAI_CLIENT_TOKEN, AKAMAI_CLIENT_SECRET,
+#            AKAMAI_ACCESS_TOKEN
+#   Variables (optional): DOCS_AWS_REGION, NRL_DOCS_PUBLISH_VERSION, DOCS_RELEASE_EMAILS
+#
+# S3 layout written under developer/docs/nemo/retriever/:
+#   index.html, versions.json, latest/, <version>/ (e.g. 26.5.0/)
+#
+# Manual publish only (workflow_dispatch). Do not re-enable push/tag auto-publish
+# while docs.nvidia.com 26.5.0 / latest are frozen to the 26.05 release docs.
+#
+# Operator steps when ready to publish:
+#   1. Merge doc changes to the 26.05 branch (content source for the build).
+#   2. Keep docs/publish/versions.json on main accurate (version picker + latest alias).
+#   3. Actions → "NRL documentation — docs.nvidia.com publish" → Run workflow:
+#        dry-run: false
+#        docs-version-override: 26.5.0 (or leave empty to use NRL_DOCS_PUBLISH_VERSION / default)
+#        publish-as-latest: true only when intentionally refreshing latest/
+# Backports: publish-as-latest: false; do not move the "latest" alias in versions.json.
+name: NRL documentation — docs.nvidia.com publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Skip S3 sync and Akamai flush (download/build only)
+        required: true
+        type: boolean
+        default: true
+      docs-version-override:
+        description: Version folder to publish (e.g. 26.5.0). Empty uses NRL_DOCS_PUBLISH_VERSION, or 26.5.0.
+        required: false
+        type: string
+        default: ""
+      publish-as-latest:
+        description: Also sync the same build to latest/ (set false for backports)
+        required: false
+        type: boolean
+        default: true
+      notify-emails:
+        description: Extra Akamai notification emails (comma-separated)
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nrl-docs-nvidia-publish
+  cancel-in-progress: false
+
+env:
+  # Immutable pin for publish-docs (release v0.80.2). Do not use the mutable v0.80.2 tag.
+  FW_CI_TEMPLATES_REF: 563a769458cf1428194be49cb4de575b72d739e8
+  DOCS_SITE_URL_BASE: https://docs.nvidia.com/nemo/retriever
+  S3_TARGET_PATH: developer/docs/nemo/retriever
+  ARTIFACT_NAME: nrl-docs-nvidia-site
+
+jobs:
+  resolve:
+    name: Resolve publish version and flags
+    runs-on: ubuntu-latest
+    outputs:
+      docs_version: ${{ steps.publish.outputs.docs_version }}
+      dry_run: ${{ steps.publish.outputs.dry_run }}
+      publish_latest: ${{ steps.publish.outputs.publish_latest }}
+      emails_csv: ${{ steps.publish.outputs.emails_csv }}
+      site_url: ${{ steps.publish.outputs.site_url }}
+    steps:
+      - name: Resolve publish inputs
+        id: publish
+        env:
+          DISPATCH_DRY_RUN: ${{ inputs.dry-run }}
+          VERSION_INPUT: ${{ inputs.docs-version-override }}
+          PUBLISH_LATEST_INPUT: ${{ inputs.publish-as-latest }}
+          NOTIFY_INPUT: ${{ inputs.notify-emails }}
+          NRL_DOCS_PUBLISH_VERSION_VAR: ${{ vars.NRL_DOCS_PUBLISH_VERSION }}
+          DOCS_RELEASE_EMAILS_VAR: ${{ vars.DOCS_RELEASE_EMAILS }}
+        run: |
+          echo "dry_run=${DISPATCH_DRY_RUN}" >> "$GITHUB_OUTPUT"
+          echo "publish_latest=${PUBLISH_LATEST_INPUT}" >> "$GITHUB_OUTPUT"
+
+          VERSION="${VERSION_INPUT}"
+          if [[ -z "${VERSION}" ]]; then
+            VERSION="${NRL_DOCS_PUBLISH_VERSION_VAR}"
+          fi
+          if [[ -z "${VERSION}" ]]; then
+            VERSION="26.5.0"
+          fi
+          echo "docs_version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "site_url=${{ env.DOCS_SITE_URL_BASE }}/${VERSION}/" >> "$GITHUB_OUTPUT"
+
+          EMAILS="${DOCS_RELEASE_EMAILS_VAR}"
+          if [[ -n "${NOTIFY_INPUT}" ]]; then
+            if [[ -n "${EMAILS}" ]]; then
+              EMAILS="${EMAILS},${NOTIFY_INPUT}"
+            else
+              EMAILS="${NOTIFY_INPUT}"
+            fi
+          fi
+          if [[ -z "${EMAILS}" ]]; then
+            EMAILS="kheiss@nvidia.com"
+          fi
+          echo "emails_csv=${EMAILS}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build NRL docs for docs.nvidia.com
+    needs: resolve
+    runs-on: ubuntu-latest
+    steps:
+      # Publish the doc pages from the 26.05 release branch, not main. main keeps
+      # moving toward the next release, so its docs must not be published under the
+      # 26.5.0 label. mkdocs.yml, requirements.txt, and docs/docs/** come from 26.05.
+      - name: Checkout 26.05 docs content
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: "26.05"
+
+      # versions.json (the version picker + "latest" alias) is canonical on main and
+      # does not exist on 26.05, so fetch just that file from main into a side path.
+      - name: Checkout version-picker metadata from main
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: main
+          path: .docs-main-meta
+          sparse-checkout: docs/publish/versions.json
+          sparse-checkout-cone-mode: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: docs/requirements.txt
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r docs/requirements.txt
+          pip install -e ./nemo_retriever
+
+      - name: Build MkDocs (production site_url)
+        working-directory: docs
+        env:
+          SITE_URL: ${{ needs.resolve.outputs.site_url }}
+          DISABLE_MKDOCS_2_WARNING: "true"
+        run: mkdocs build -f mkdocs.yml --strict
+
+      # MkDocs does not emit versions.json. publish-docs uploads the artifact copy to S3
+      # (it does not merge with the live S3 file). versions.json is canonical on main.
+      - name: Stage version picker metadata for publish-docs
+        run: |
+          cp .docs-main-meta/docs/publish/versions.json docs/site/versions.json
+
+      - name: Upload docs.nvidia.com site artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: docs/site
+          if-no-files-found: error
+
+  publish:
+    name: Publish to S3 and flush Akamai
+    needs: [resolve, build]
+    if: github.repository == 'NVIDIA/NeMo-Retriever'
+    runs-on: ubuntu-latest
+    environment: docs-nvidia-prod
+    steps:
+      - name: Checkout FW-CI-templates (publish-docs action)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: NVIDIA-NeMo/FW-CI-templates
+          ref: ${{ env.FW_CI_TEMPLATES_REF }}
+          path: FW-CI-templates
+          sparse-checkout: .github/actions/publish-docs
+
+      - name: Publish versioned and latest docs (S3 + Akamai)
+        uses: ./FW-CI-templates/.github/actions/publish-docs
+        with:
+          dry-run: ${{ needs.resolve.outputs.dry_run }}
+          artifacts-name: ${{ env.ARTIFACT_NAME }}
+          artifacts-path: docs/site
+          project-type: single-docset
+          run-on-version-tag-only: "false"
+          docs-version-override: ${{ needs.resolve.outputs.docs_version }}
+          overwrite-latest-on-tag: ${{ needs.resolve.outputs.publish_latest }}
+          update-version-picker: "true"
+          request-name: nemo-retriever-docs-${{ github.run_id }}
+          emails-csv: ${{ needs.resolve.outputs.emails_csv }}
+          aws-region: ${{ vars.DOCS_AWS_REGION }}
+          aws-role-to-assume: ${{ secrets.AWS_ASSUME_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          akamai-host: ${{ secrets.AKAMAI_HOST }}
+          akamai-client-token: ${{ secrets.AKAMAI_CLIENT_TOKEN }}
+          akamai-client-secret: ${{ secrets.AKAMAI_CLIENT_SECRET }}
+          akamai-access-token: ${{ secrets.AKAMAI_ACCESS_TOKEN }}
+          s3-target-root: ${{ secrets.S3_BUCKET_NAME }}
+          s3-target-path: ${{ env.S3_TARGET_PATH }}
+
+      # publish-docs leaves AWS credentials on the runner; only fetch the redirect file here.
+      - name: Checkout repository (root redirect)
+        if: needs.resolve.outputs.dry_run == 'false'
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          path: nemo-retriever-src
+          sparse-checkout: docs/publish/index.html
+
+      - name: Upload retriever root index.html
+        if: needs.resolve.outputs.dry_run == 'false'
+        env:
+          S3_TARGET_ROOT: ${{ secrets.S3_BUCKET_NAME }}
+        run: |
+          S3_ROOT="${S3_TARGET_ROOT%/}"
+          DEST="${S3_ROOT}/${{ env.S3_TARGET_PATH }}/index.html"
+          aws s3 cp --quiet nemo-retriever-src/docs/publish/index.html "${DEST}"

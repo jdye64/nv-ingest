@@ -4,16 +4,23 @@
 #
 # Usage:
 #   1. Copy this file and customize as needed
-#   2. Mount it into your Docker container
-#   3. Set INGEST_CONFIG_PATH environment variable in docker compose to point to this file
+#   2. Mount it into your retriever service container
+#   3. Set INGEST_CONFIG_PATH in the service environment to point to this file
 #
-# Example docker-compose.yaml:
-#   nv-ingest-ms-runtime:
-#     volumes:
-#       - ./config/custom_summarization_pipeline.yaml:/config/custom_pipeline.yaml:ro
-#     environment:
-#       - INGEST_CONFIG_PATH=/config/custom_pipeline.yaml
-#       - NGC_API_KEY=your-nvidia-api-key
+# Example Helm values fragment:
+#   service:
+#     extraVolumes:
+#       - name: custom-pipeline
+#         configMap:
+#           name: custom-pipeline
+#     extraVolumeMounts:
+#       - name: custom-pipeline
+#         mountPath: /config/custom_pipeline.yaml
+#         subPath: custom_pipeline.yaml
+#         readOnly: true
+#     env:
+#       - name: INGEST_CONFIG_PATH
+#         value: /config/custom_pipeline.yaml
 
 name: "Custom Summarization Pipeline"
 description: "Pipeline with dedicated udf_parallel_helper stage for LLM summarization"
@@ -240,33 +247,6 @@ stages:
         memory_per_replica_mb: 10000
         limit: 6
 
-  - name: "chart_extractor"
-    type: "stage"
-    phase: 1  # EXTRACTION
-    actor: "nv_ingest.framework.orchestration.ray.stages.extractors.chart_extractor:ChartExtractorStage"
-    config:
-      endpoint_config:
-        yolox_endpoints: [
-          $YOLOX_GRAPHIC_ELEMENTS_GRPC_ENDPOINT|"graphic-elements:8001",
-          $YOLOX_GRAPHIC_ELEMENTS_HTTP_ENDPOINT|""
-        ]
-        yolox_infer_protocol: $YOLOX_GRAPHIC_ELEMENTS_INFER_PROTOCOL|grpc
-        ocr_endpoints: [
-          $OCR_GRPC_ENDPOINT|"ocr:8001",
-          $OCR_HTTP_ENDPOINT|""
-        ]
-        ocr_infer_protocol: $OCR_INFER_PROTOCOL|grpc
-        auth_token: $NGC_API_KEY|$NVIDIA_API_KEY
-    replicas:
-      min_replicas: 0
-      max_replicas:
-        strategy: "memory_thresholding"
-        memory_per_replica_mb: 10000
-      static_replicas:
-        strategy: "memory_static_global_percent"
-        memory_per_replica_mb: 10000
-        limit: 6
-
   # Post-processing / Mutators
   - name: "image_filter"
     type: "stage"
@@ -311,22 +291,28 @@ stages:
         value: 1
 
   # Transforms and Synthesis
+  #
+  # Horizontal scale-out mirrors ``config/default_pipeline.yaml`` —
+  # see the comment block above ``image_caption`` there for the
+  # full rationale on why a single-replica caption stage HOL-blocks
+  # unrelated no-caption clients behind the busy client's queued
+  # images.
   - name: "image_caption"
     type: "stage"
     phase: 4  # TRANSFORM
     actor: "nv_ingest.framework.orchestration.ray.stages.transforms.image_caption:ImageCaptionTransformStage"
     config:
       api_key: $NGC_API_KEY|$NVIDIA_API_KEY
-      model_name: $VLM_CAPTION_MODEL_NAME|"nvidia/llama-3.1-nemotron-nano-vl-8b-v1"
+      model_name: $VLM_CAPTION_MODEL_NAME|"nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
       prompt: "Caption the content of this image:"
     replicas:
       min_replicas: 0
       max_replicas:
         strategy: "static"
-        value: 1
+        value: 8
       static_replicas:
         strategy: "static"
-        value: 1
+        value: 4
 
   - name: "text_embedder"
     type: "stage"
@@ -473,9 +459,6 @@ edges:
     to: "table_extractor"
     queue_size: 32
   - from: "table_extractor"
-    to: "chart_extractor"
-    queue_size: 32
-  - from: "chart_extractor"
     to: "image_filter"
     queue_size: 32
 
@@ -519,7 +502,6 @@ edges:
 
 # Pipeline Runtime Configuration
 pipeline:
-  disable_dynamic_scaling: $INGEST_DISABLE_DYNAMIC_SCALING|false
   dynamic_memory_threshold: $INGEST_DYNAMIC_MEMORY_THRESHOLD|0.75
   static_memory_threshold: $INGEST_STATIC_MEMORY_THRESHOLD|0.75
   pid_controller:

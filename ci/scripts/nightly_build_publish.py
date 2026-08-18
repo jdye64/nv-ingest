@@ -6,7 +6,10 @@ Behavior:
 - Clones a HF git repo with Git LFS smudge disabled (so large weights are not downloaded).
 - Patches a PEP 440 dev version into pyproject.toml or setup.cfg (default suffix: UTC
   YYYYMMDD; override with NIGHTLY_DATE_SUFFIX or NIGHTLY_DATE_YYYYMMDD, e.g. from CI).
-- Builds sdist + wheel via `python -m build`.
+- Builds sdist + wheel via `python -m build` (``--skip-sdist`` builds the wheel only,
+  so a platform/Python matrix can emit the identical sdist exactly once).
+- Optional ``--set-requires-python`` relaxes ``[project].requires-python`` so wheels
+  built on a Python matrix stay pip-installable on every targeted interpreter.
 - Optional ``--auditwheel-repair`` rewrites ``linux_*`` wheels to ``manylinux_*`` for PyPI.
 - Optionally uploads to (Test)PyPI via twine.
 
@@ -23,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import tomllib
+import zipfile
 from pathlib import Path
 
 
@@ -93,6 +97,21 @@ def _venv_python(venv_dir: Path) -> Path:
     return venv_dir / "bin" / "python"
 
 
+def _venv_is_usable(venv_dir: Path) -> bool:
+    py = _venv_python(venv_dir)
+    if not py.is_file() and not py.is_symlink():
+        return False
+    try:
+        subprocess.run(
+            [str(py), "-c", "pass"],
+            check=True,
+            capture_output=True,
+        )
+        return True
+    except (OSError, subprocess.CalledProcessError):
+        return False
+
+
 def _ensure_venv(venv_dir: Path, *, system_site_packages: bool) -> Path:
     """
     Ensure a local venv exists and return its python path.
@@ -102,12 +121,14 @@ def _ensure_venv(venv_dir: Path, *, system_site_packages: bool) -> Path:
     """
     marker = venv_dir / ".orch-system-site-packages"
     py = _venv_python(venv_dir)
-    if py.exists():
+    if _venv_is_usable(venv_dir):
         # If caller changes system_site_packages setting, recreate the venv to ensure
         # the correct site-packages visibility.
         has_marker = marker.exists()
         if has_marker == system_site_packages:
             return py
+        shutil.rmtree(venv_dir)
+    elif venv_dir.exists():
         shutil.rmtree(venv_dir)
 
     venv_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -135,10 +156,35 @@ def _pep440_nightly(base_version: str, suffix: str) -> str:
     return f"{base}.dev{suffix}"
 
 
+def _pep440_stable_release(version: str) -> str:
+    version = version.strip()
+    if not re.fullmatch(r"\d+(?:\.\d+)*(?:\.post\d+)?", version):
+        raise ValueError(
+            "--release-version must be a stable public version like '2.0.0' "
+            "or '2.0.0.post1' (no dev, pre-release, local, or whitespace suffixes)"
+        )
+    return version
+
+
+def _target_version(
+    old_version: str,
+    *,
+    nightly_base_version: str | None = None,
+    release_version: str | None = None,
+) -> str:
+    if release_version is not None:
+        return _pep440_stable_release(release_version)
+    return _pep440_nightly(
+        nightly_base_version or old_version,
+        _nightly_suffix(),
+    )
+
+
 def _patch_pyproject_version(
     repo_dir: Path,
     *,
     nightly_base_version: str | None = None,
+    release_version: str | None = None,
 ) -> bool:
     pyproject = repo_dir / "pyproject.toml"
     if not pyproject.exists():
@@ -151,9 +197,10 @@ def _patch_pyproject_version(
         return False
 
     old_version = m.group(1)
-    new_version = _pep440_nightly(
-        nightly_base_version or old_version,
-        _nightly_suffix(),
+    new_version = _target_version(
+        old_version,
+        nightly_base_version=nightly_base_version,
+        release_version=release_version,
     )
     if new_version == old_version:
         return False
@@ -358,6 +405,19 @@ def _project_table_bounds(text: str) -> tuple[int, int] | None:
     return m.end(), len(text)
 
 
+def _project_core_bounds(text: str) -> tuple[int, int] | None:
+    """Bounds of inline ``[project]`` keys only (excludes ``[project.*]`` subtables)."""
+    m = re.search(r"(?m)^\[project\]\s*(?:#.*)?$", text)
+    if not m:
+        return None
+
+    for next_table in re.finditer(r"(?m)^\[([^\]]+)\]\s*(?:#.*)?$", text[m.end() :]):
+        table_name = next_table.group(1).strip()
+        if table_name != "project":
+            return m.end(), m.end() + next_table.start()
+    return m.end(), len(text)
+
+
 def _set_requirement_specifier(requirement: str, specifier: str) -> str:
     marker = ""
     base = requirement
@@ -433,10 +493,194 @@ def _patch_pyproject_runtime_dependency_pins(project_dir: Path, pins: dict[str, 
     return True
 
 
+_DEFAULT_LICENSE_TEXT = "Apache-2.0"
+_DEFAULT_LICENSE_CLASSIFIER = "License :: OSI Approved :: Apache Software License"
+_PROPRIETARY_LICENSE_CLASSIFIER = "License :: Other/Proprietary License"
+_ORCHESTRATOR_APACHE_LICENSE = Path(__file__).resolve().parents[2] / "nemo_retriever" / "LICENSE"
+
+
+def _pyproject_license_line(license_text: str) -> str:
+    if license_text == "Apache-2.0":
+        return 'license = "Apache-2.0"\n'
+    return f'license = {{text = "{license_text}"}}\n'
+
+
+def _patch_pyproject_license(
+    project_dir: Path,
+    *,
+    license_text: str,
+    license_classifier: str | None,
+) -> bool:
+    """
+    Ensure PyPI-visible license metadata is present in ``[project]``.
+
+    Published Nemotron Python packages ship source code governed by Apache-2.0.
+    Upstream HF repos may omit license metadata or declare the NVIDIA Open Model
+    License for the overall model card even though the wheel/sdist is source code.
+    """
+    pyproject = project_dir / "pyproject.toml"
+    if not pyproject.exists():
+        return False
+
+    text = _read_text(pyproject)
+    core_bounds = _project_core_bounds(text)
+    if core_bounds is None:
+        return False
+
+    core_start, core_end = core_bounds
+    project_text = text[core_start:core_end]
+    changed = False
+
+    if not re.search(r"(?m)^\s*license\s*=", project_text):
+        line = _pyproject_license_line(license_text)
+        version_m = re.search(r"(?m)^(\s*version\s*=\s*[^\n]+\n)", project_text)
+        if version_m:
+            insert_at = version_m.end()
+            project_text = project_text[:insert_at] + line + project_text[insert_at:]
+        else:
+            project_text = "\n" + line + project_text
+        changed = True
+        print(f"Added pyproject.toml license: {license_text!r}")
+    else:
+        license_m = re.search(r"(?m)^(\s*license\s*=\s*)(.+)$", project_text)
+        if license_m:
+            desired = _pyproject_license_line(license_text).strip()
+            if license_m.group(0).strip() != desired:
+                project_text = project_text[: license_m.start()] + desired + "\n" + project_text[license_m.end() :]
+                changed = True
+                print(f"Patched pyproject.toml license -> {license_text!r}")
+
+    if license_classifier and f'"{license_classifier}"' not in project_text:
+        classifiers_m = re.search(r"(?ms)^(\s*classifiers\s*=\s*\[)(.*?)(^\s*\])", project_text)
+        if classifiers_m:
+            patched_body = classifiers_m.group(2) + f'    "{license_classifier}",\n'
+            project_text = project_text[: classifiers_m.start(2)] + patched_body + project_text[classifiers_m.end(2) :]
+            changed = True
+            print(f"Added pyproject.toml classifier: {license_classifier!r}")
+        else:
+            project_text += "\nclassifiers = [\n" f'    "{license_classifier}",\n' "]\n"
+            changed = True
+            print(f"Added pyproject.toml classifiers with: {license_classifier!r}")
+
+    if license_classifier == _DEFAULT_LICENSE_CLASSIFIER and f'"{_PROPRIETARY_LICENSE_CLASSIFIER}"' in project_text:
+        project_text = project_text.replace(f'    "{_PROPRIETARY_LICENSE_CLASSIFIER}",\n', "")
+        project_text = project_text.replace(f'"{_PROPRIETARY_LICENSE_CLASSIFIER}",\n', "")
+        changed = True
+        print(f"Removed pyproject.toml classifier: {_PROPRIETARY_LICENSE_CLASSIFIER!r}")
+
+    if not changed:
+        return False
+
+    _write_text(pyproject, text[:core_start] + project_text + text[core_end:])
+    return True
+
+
+def _patch_setup_cfg_license(
+    project_dir: Path,
+    *,
+    license_text: str,
+    license_classifier: str | None,
+) -> bool:
+    setup_cfg = project_dir / "setup.cfg"
+    if not setup_cfg.exists():
+        return False
+
+    text = _read_text(setup_cfg)
+    changed = False
+
+    if not re.search(r"(?ms)^\[metadata\]\s.*?^\s*license\s*=", text):
+        metadata_m = re.search(r"(?ms)^(\[metadata\]\s*(?:#.*)?\n)", text)
+        if not metadata_m:
+            return False
+        insert_at = metadata_m.end()
+        text = text[:insert_at] + f"license = {license_text}\n" + text[insert_at:]
+        changed = True
+        print(f"Added setup.cfg license: {license_text!r}")
+
+    if license_classifier and license_classifier not in text:
+        classifiers_m = re.search(r"(?ms)^(\s*classifiers\s*=\s*\n)(.*?)(^\S|\Z)", text)
+        if classifiers_m:
+            text = text[: classifiers_m.end(2)] + f"    {license_classifier}\n" + text[classifiers_m.end(2) :]
+        else:
+            metadata_m = re.search(r"(?ms)^(\[metadata\]\s*(?:#.*)?\n)", text)
+            if not metadata_m:
+                return changed
+            insert_at = metadata_m.end()
+            block = f"classifiers =\n    {license_classifier}\n"
+            text = text[:insert_at] + block + text[insert_at:]
+        changed = True
+        print(f"Added setup.cfg classifier: {license_classifier!r}")
+
+    if not changed:
+        return False
+
+    _write_text(setup_cfg, text)
+    return True
+
+
+def _ensure_license_file(project_dir: Path, *, search_roots: list[Path]) -> bool:
+    """Bundle the Apache-2.0 LICENSE that governs published Python package source."""
+    _ = search_roots  # kept for call-site compatibility; source is orchestrator-local.
+    source = _ORCHESTRATOR_APACHE_LICENSE
+    if not source.is_file():
+        print(f"No Apache-2.0 license source found at {source}; continuing without bundled LICENSE.")
+        return False
+
+    dest = project_dir / "LICENSE"
+    apache_text = _read_text(source)
+    if dest.is_file() and _read_text(dest) == apache_text:
+        return False
+
+    _write_text(dest, apache_text)
+    print(f"Wrote Apache-2.0 license file into project dir: {source} -> {dest}")
+    return True
+
+
+def _patch_pyproject_requires_python(repo_dir: Path, requires_python: str) -> bool:
+    """
+    Set or relax the ``[project].requires-python`` constraint before building.
+
+    Upstream packages (e.g. Nemotron OCR) may pin ``requires-python`` to a single
+    interpreter (``>=3.12,<3.13``), which makes pip refuse the wheel on other
+    interpreters even though the compiled extension is ABI-tagged per interpreter.
+    Widening the metadata to the full supported range lets a matrix build publish
+    installable wheels for every targeted Python version.
+    """
+    pyproject = repo_dir / "pyproject.toml"
+    if not pyproject.exists():
+        return False
+
+    text = _read_text(pyproject)
+    bounds = _project_table_bounds(text)
+    if bounds is None:
+        return False
+
+    project_start, project_end = bounds
+    project_text = text[project_start:project_end]
+    m = re.search(r"""(?m)^(\s*requires-python\s*=\s*["'])([^"']*)(['"])\s*$""", project_text)
+    if m:
+        old_value = m.group(2)
+        if old_value == requires_python:
+            return False
+        patched_project_text = project_text[: m.start(2)] + requires_python + project_text[m.end(2) :]
+        patched_text = text[:project_start] + patched_project_text + text[project_end:]
+        _write_text(pyproject, patched_text)
+        print(f"Patched pyproject.toml requires-python: {old_value} -> {requires_python}")
+        return True
+
+    # No requires-python field yet: insert one at the top of the [project] table body.
+    insertion = f'\nrequires-python = "{requires_python}"'
+    patched_text = text[:project_start] + insertion + text[project_start:]
+    _write_text(pyproject, patched_text)
+    print(f"Added pyproject.toml requires-python: {requires_python}")
+    return True
+
+
 def _patch_setup_cfg_version(
     repo_dir: Path,
     *,
     nightly_base_version: str | None = None,
+    release_version: str | None = None,
 ) -> bool:
     setup_cfg = repo_dir / "setup.cfg"
     if not setup_cfg.exists():
@@ -449,9 +693,10 @@ def _patch_setup_cfg_version(
         return False
 
     old_version = m.group(1).strip().strip('"').strip("'")
-    new_version = _pep440_nightly(
-        nightly_base_version or old_version,
-        _nightly_suffix(),
+    new_version = _target_version(
+        old_version,
+        nightly_base_version=nightly_base_version,
+        release_version=release_version,
     )
     if new_version == old_version:
         return False
@@ -578,6 +823,7 @@ def _build(
     venv_system_site_packages: bool,
     venv_pip_install: list[str],
     pin_runtime_dependencies: list[str],
+    build_sdist: bool = True,
 ) -> None:
     venv_dir = Path(os.environ.get("ORCH_VENV_DIR", ".venv-build"))
     py = _ensure_venv(venv_dir, system_site_packages=venv_system_site_packages)
@@ -607,7 +853,9 @@ def _build(
         }
         _patch_pyproject_runtime_dependency_pins(project_dir, pins)
 
-    cmd = [str(py), "-m", "build", "--sdist", "--wheel"]
+    cmd = [str(py), "-m", "build", "--wheel"]
+    if build_sdist:
+        cmd.insert(3, "--sdist")
     if no_isolation:
         cmd.append("--no-isolation")
     _run(cmd, cwd=project_dir, env=env)
@@ -622,7 +870,7 @@ def _build(
 
 def _auditwheel_repair_dist_dir(dist_dir: Path, *, exclude_libs: list[str] | None = None) -> None:
     """
-    Rewrite linux_* wheels to manylinux_* so TestPyPI/PyPI accept the upload.
+    Rewrite linux_* wheels to manylinux_* so PyPI accepts the upload.
     Requires ``patchelf`` on PATH (e.g. apt install patchelf).
 
     *exclude_libs* is a list of shared library basenames (e.g. ``libtorch_cpu.so``)
@@ -670,6 +918,31 @@ def _auditwheel_repair_dist_dir(dist_dir: Path, *, exclude_libs: list[str] | Non
         print(f"auditwheel: {dest.name}")
 
     shutil.rmtree(repair_out)
+
+
+def _validate_required_wheel_members(dist_dir: Path, required_members: list[str]) -> None:
+    """Require exact archive members in every wheel before publication."""
+    if not required_members:
+        return
+
+    wheels = sorted(dist_dir.glob("*.whl"))
+    if not wheels:
+        raise RuntimeError(f"No wheels found in {dist_dir} to validate required members")
+
+    invalid_members = [member for member in required_members if not member or member.startswith("/")]
+    if invalid_members:
+        raise ValueError(f"Required wheel members must be non-empty relative paths: {invalid_members!r}")
+
+    failures: list[str] = []
+    for wheel in wheels:
+        with zipfile.ZipFile(wheel) as zf:
+            wheel_members = set(zf.namelist())
+        missing = [member for member in required_members if member not in wheel_members]
+        if missing:
+            failures.append(f"{wheel.name}: missing {', '.join(missing)}")
+
+    if failures:
+        raise RuntimeError("Required wheel member validation failed:\n" + "\n".join(failures))
 
 
 def _twine_upload(
@@ -724,17 +997,38 @@ def main() -> int:
         "(e.g. build 1.0.2.devYYYYMMDD from a source tree still declaring 1.0.0).",
     )
     ap.add_argument(
+        "--release-version",
+        default=None,
+        help="Patch the source project to this exact stable public version before building "
+        "(e.g. '2.0.0'). Mutually exclusive with --nightly-base-version.",
+    )
+    ap.add_argument(
         "--project-name",
         default=None,
         help="Patch the source Python project/distribution name before building "
-        "(e.g. publish a source tree declaring 'nemotron-ocr' as 'nemotron-ocr-v2').",
+        "(e.g. publish a source tree under an alternate distribution name).",
+    )
+    ap.add_argument(
+        "--set-requires-python",
+        default=None,
+        help="Set or relax the [project].requires-python constraint before building "
+        "(e.g. '>=3.11,<3.14') so wheels built on a Python matrix stay pip-installable.",
+    )
+    ap.add_argument(
+        "--license-text",
+        default=_DEFAULT_LICENSE_TEXT,
+        help="Ensure [project].license metadata is set to this text when missing (PyPI display).",
+    )
+    ap.add_argument(
+        "--license-classifier",
+        default=_DEFAULT_LICENSE_CLASSIFIER,
+        help="Ensure this Trove classifier is present when missing.",
     )
     ap.add_argument(
         "--rename-python-package",
         action="append",
         default=[],
-        help="Rename a Python import package before building, as OLD=NEW "
-        "(e.g. nemotron_ocr=nemotron_ocr_v2; repeatable).",
+        help="Rename a Python import package before building, as OLD=NEW " "(repeatable).",
     )
     ap.add_argument(
         "--build-env",
@@ -746,6 +1040,12 @@ def main() -> int:
         "--build-no-isolation",
         action="store_true",
         help="Pass --no-isolation to `python -m build` (useful to reuse preinstalled deps in CI images)",
+    )
+    ap.add_argument(
+        "--skip-sdist",
+        action="store_true",
+        help="Only build the wheel, not the sdist. Use on all but one leg of a platform/Python "
+        "matrix so the identical sdist is produced (and uploaded) exactly once.",
     )
     ap.add_argument(
         "--venv-dir",
@@ -771,8 +1071,8 @@ def main() -> int:
         "before building (repeatable; useful for ABI-coupled deps like torch)",
     )
     ap.add_argument("--upload", action="store_true", help="Upload built dists via twine")
-    ap.add_argument("--repository-url", default="https://test.pypi.org/legacy/", help="Twine repository URL")
-    ap.add_argument("--token-env", default="TEST_PYPI_API_TOKEN", help="Env var containing API token")
+    ap.add_argument("--repository-url", default="https://upload.pypi.org/legacy/", help="Twine repository URL")
+    ap.add_argument("--token-env", default="PYPI_API_TOKEN", help="Env var containing API token")
     ap.add_argument("--skip-existing", action="store_true", help="Pass --skip-existing to twine")
     ap.add_argument(
         "--twine-verbose",
@@ -788,7 +1088,7 @@ def main() -> int:
     ap.add_argument(
         "--auditwheel-repair",
         action="store_true",
-        help="Run auditwheel repair on built wheels (manylinux tag; needed for PyPI/TestPyPI)",
+        help="Run auditwheel repair on built wheels (manylinux tag; needed for PyPI)",
     )
     ap.add_argument(
         "--auditwheel-exclude",
@@ -797,7 +1097,15 @@ def main() -> int:
         help="Shared library to exclude from auditwheel bundling (repeatable). "
         "Use for runtime deps like libtorch_cpu.so that should not be vendored.",
     )
+    ap.add_argument(
+        "--require-wheel-member",
+        action="append",
+        default=[],
+        help="Exact archive member required in every built wheel before upload (repeatable).",
+    )
     args = ap.parse_args()
+    if args.release_version is not None and args.nightly_base_version:
+        ap.error("--release-version cannot be used with --nightly-base-version")
 
     root = Path.cwd()
     work_root = root / args.work_dir
@@ -812,7 +1120,8 @@ def main() -> int:
     print(f"=== Cloning {args.repo_url} -> {repo_dir} ===")
     _clone_repo(args.repo_url, repo_dir)
 
-    print("=== Attempting nightly version patch ===")
+    version_mode = "release" if args.release_version is not None else "nightly"
+    print(f"=== Attempting {version_mode} version patch ===")
     if not args.project_subdir:
         detected = _auto_project_subdir(repo_dir, args.repo_id)
         if detected:
@@ -822,12 +1131,35 @@ def main() -> int:
     patched = _patch_pyproject_version(
         project_dir,
         nightly_base_version=args.nightly_base_version,
+        release_version=args.release_version,
     ) or _patch_setup_cfg_version(
         project_dir,
         nightly_base_version=args.nightly_base_version,
+        release_version=args.release_version,
     )
     if not patched:
         print("No static version field found to patch (continuing).")
+
+    if args.set_requires_python:
+        if not _patch_pyproject_requires_python(project_dir, args.set_requires_python):
+            print(f"requires-python already set to {args.set_requires_python!r} or no [project] table found.")
+
+    if args.license_text:
+        print("=== Ensuring PyPI license metadata ===")
+        if not _patch_pyproject_license(
+            project_dir,
+            license_text=args.license_text,
+            license_classifier=args.license_classifier or None,
+        ):
+            _patch_setup_cfg_license(
+                project_dir,
+                license_text=args.license_text,
+                license_classifier=args.license_classifier or None,
+            )
+        _ensure_license_file(
+            project_dir,
+            search_roots=[project_dir, project_dir.parent, repo_dir],
+        )
 
     if args.project_name:
         patched_name = _patch_pyproject_project_name(
@@ -859,12 +1191,15 @@ def main() -> int:
         venv_system_site_packages=args.venv_system_site_packages,
         venv_pip_install=args.venv_pip_install,
         pin_runtime_dependencies=args.pin_runtime_dependency,
+        build_sdist=not args.skip_sdist,
     )
     print(f"Artifacts in: {out_dir}")
 
     if args.auditwheel_repair:
         print("=== auditwheel repair ===")
         _auditwheel_repair_dist_dir(out_dir, exclude_libs=args.auditwheel_exclude)
+
+    _validate_required_wheel_members(out_dir, args.require_wheel_member)
 
     if args.upload:
         token = os.environ.get(args.token_env)

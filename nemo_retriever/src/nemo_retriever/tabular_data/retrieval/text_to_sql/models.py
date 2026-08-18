@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES.
+# All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import List, Annotated, Literal
 
@@ -45,31 +49,63 @@ NonEmptyItemScoreList = Annotated[
 ]
 
 
+class TableRelevanceModel(BaseModel):
+    """LLM output for table relevance filtering."""
+
+    reasoning: str = Field(
+        default="",
+        description="Brief reasoning (1-2 sentences max) on which tables are relevant.",
+    )
+    tables_to_remove: list[str] = Field(
+        default_factory=list,
+        description="Names of tables that can be safely removed. Leave empty if unsure.",
+    )
+
+
+class CustomAnalysisRelevanceModel(BaseModel):
+    """LLM output for custom analysis relevance filtering."""
+
+    reasoning: str = Field(
+        default="",
+        description="Brief reasoning (1-2 sentences max) on which custom analyses are relevant.",
+    )
+    analyses_to_remove: list[str] = Field(
+        default_factory=list,
+        description="Names of custom analyses that can be safely removed. Leave empty if unsure.",
+    )
+
+
 class SQLGenerationModel(StrictModel):
     """Model for SQL generation without formatting requirements.
 
     This model is used by SQL generation agents to return structured SQL data.
     Formatting is handled separately by SQLResponseFormattingAgent.
+
+    Field order matters: the LLM fills fields sequentially, so ``thought``
+    comes first to drain reasoning before it writes the clean output fields.
     """
 
-    sql_code: NonEmptyStr = Field(
+    thought: str = Field(
         ...,
         description=(
-            "The SQL code that answers the user's question based on chosen snippet/s and appropriate joins. "
-            "This field is REQUIRED and must not be empty. Always construct SQL even if file contents are "
-            "present (use file contents as constants/filters within the SQL)."
+            "Internal reasoning (1-2 sentences): briefly explain your approach "
+            "and key decisions. This is NOT shown to the user."
         ),
     )
-    tables_ids: list[str] = Field(
-        default_factory=list,
-        description="A valid python list with ids of all tables selected in the SQL query.",
+    sql_code: NonEmptyStr = Field(
+        ...,
+        description=("The complete, executable SQL query. No comments, no delimiters, no explanation."),
     )
-
     response: NonEmptyStr = Field(
         ...,
         description=(
-            "A short explanation of the answer and SQL parts: what the query does, which tables/columns "
-            "are used, and how the SQL components work together to answer the question."
+            "User-facing summary in plain English (2-4 sentences): describe what "
+            "is being calculated, which tables and columns are used, any filters "
+            "or time windows applied, and the grouping/ordering. Refer to tables "
+            "and columns by their human-readable names. "
+            "Do NOT include SQL and code fences "
+            "identifiers like 'schema.table', reasoning, self-corrections, "
+            "formatting notes, or internal thoughts."
         ),
     )
 

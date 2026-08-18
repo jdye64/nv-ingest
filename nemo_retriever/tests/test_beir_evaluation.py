@@ -1,14 +1,20 @@
+import sys
 from pathlib import Path
 
-from nemo_retriever.recall.beir import (
+import pytest
+
+from nemo_retriever.tools.recall.beir import (
     BeirConfig,
     BeirDataset,
+    BO767_ANNOTATIONS_PATH,
+    DEFAULT_BEIR_KS,
     build_beir_run_from_hits,
     build_qrels_by_query_id,
     build_queries_by_id,
     compute_beir_metrics,
     evaluate_lancedb_beir,
     load_beir_dataset,
+    resolve_beir_dataset_options,
 )
 
 
@@ -22,6 +28,61 @@ def test_build_queries_by_id_filters_language() -> None:
 
     assert query_ids == ["1"]
     assert queries == ["what is a qubit?"]
+
+
+def test_build_queries_by_id_filters_language_aliases() -> None:
+    rows = [
+        {"query_id": 1, "query": "bonjour", "language": "Français"},
+        {"query_id": 2, "query": "salut", "language": "french"},
+        {"query_id": 3, "query": "hello", "language": "en"},
+    ]
+
+    query_ids, queries = build_queries_by_id(rows, query_language="fr")
+
+    assert query_ids == ["1", "2"]
+    assert queries == ["bonjour", "salut"]
+
+
+def test_build_queries_by_id_filters_non_english_language_aliases() -> None:
+    rows = [
+        {"query_id": 1, "query": "guten tag", "language": "german"},
+        {"query_id": 2, "query": "hallo", "language": "Deutsch"},
+        {"query_id": 3, "query": "hola", "language": "español"},
+        {"query_id": 4, "query": "こんにちは", "language": "japanese"},
+    ]
+
+    query_ids, queries = build_queries_by_id(rows, query_language="de")
+
+    assert query_ids == ["1", "2"]
+    assert queries == ["guten tag", "hallo"]
+
+
+def test_build_queries_by_id_warns_when_all_queries_filtered(caplog) -> None:
+    rows = [
+        {"query_id": 1, "query": "", "language": "en"},
+        {"query_id": 2, "query": "bonjour", "language": "fr"},
+    ]
+
+    with caplog.at_level("WARNING", logger="nemo_retriever.tools.recall.beir"):
+        query_ids, queries = build_queries_by_id(rows, query_language="en")
+
+    assert query_ids == []
+    assert queries == []
+    assert "No BEIR queries loaded from rows" in caplog.text
+    assert "total=2" in caplog.text
+    assert "skipped_empty=1" in caplog.text
+    assert "skipped_language=1" in caplog.text
+
+
+def test_build_queries_by_id_warning_logs_normalized_query_language(caplog) -> None:
+    rows = [{"query_id": 1, "query": "hello", "language": "english"}]
+
+    with caplog.at_level("WARNING", logger="nemo_retriever.tools.recall.beir"):
+        query_ids, queries = build_queries_by_id(rows, query_language="Français")
+
+    assert query_ids == []
+    assert queries == []
+    assert "query_language='fr'" in caplog.text
 
 
 def test_build_qrels_by_query_id_formats_nested_dict() -> None:
@@ -49,6 +110,48 @@ def test_build_beir_run_from_hits_uses_pdf_basename_and_dedupes() -> None:
 
     assert list(run["q1"].keys()) == ["doc_a", "doc_b"]
     assert run["q1"]["doc_a"] > run["q1"]["doc_b"]
+
+
+def test_resolve_beir_dataset_options_supports_known_dataset_name() -> None:
+    options = resolve_beir_dataset_options(dataset_name="bo767")
+
+    assert options.loader == "bo767_csv"
+    assert options.dataset_name == str(BO767_ANNOTATIONS_PATH)
+    assert options.doc_id_field == "pdf_page"
+    assert options.ks == DEFAULT_BEIR_KS
+
+
+def test_resolve_beir_dataset_options_supports_vidore_dataset_name() -> None:
+    options = resolve_beir_dataset_options(dataset_name="vidore_v3_computer_science")
+
+    assert options.loader == "vidore_hf"
+    assert options.dataset_name == "vidore_v3_computer_science"
+    assert options.doc_id_field == "pdf_basename"
+
+
+def test_resolve_beir_dataset_options_preserves_explicit_overrides(tmp_path: Path) -> None:
+    annotations = tmp_path / "custom.csv"
+
+    options = resolve_beir_dataset_options(
+        dataset_name=str(annotations),
+        loader="bo767_csv",
+        doc_id_field="pdf_page_modality",
+        ks=[5],
+    )
+
+    assert options.loader == "bo767_csv"
+    assert options.dataset_name == str(annotations)
+    assert options.doc_id_field == "pdf_page_modality"
+    assert options.ks == (5,)
+
+
+def test_resolve_beir_dataset_options_does_not_guess_unknown_dataset() -> None:
+    options = resolve_beir_dataset_options(dataset_name="custom_dataset")
+
+    assert options.loader is None
+    assert options.dataset_name == "custom_dataset"
+    assert options.doc_id_field == "pdf_basename"
+    assert options.ks == DEFAULT_BEIR_KS
 
 
 def test_load_beir_dataset_supports_bo767_csv_pdf_page_modality(tmp_path: Path) -> None:
@@ -142,6 +245,29 @@ def test_load_beir_dataset_supports_earnings_csv_pdf_page(tmp_path: Path) -> Non
         "0": {"1001_1": 1},
         "1": {"1002_5": 1},
         "2": {"1003_3": 1},
+    }
+
+
+def test_load_beir_dataset_supports_jp20_csv_pdf_page(tmp_path: Path) -> None:
+    annotations = tmp_path / "jp20_query_gt.csv"
+    annotations.write_text(
+        "\n".join(
+            [
+                "query,pdf,page,pdf_page",
+                "What is doc a?,1001,0,1001_1",
+                "What is doc b?,1002.pdf,4,1002_5",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    dataset = load_beir_dataset("jp20_csv", dataset_name=str(annotations), doc_id_field="pdf_page")
+
+    assert dataset.query_ids == ["0", "1"]
+    assert dataset.queries == ["What is doc a?", "What is doc b?"]
+    assert dataset.qrels == {
+        "0": {"1001_1": 1},
+        "1": {"1002_5": 1},
     }
 
 
@@ -241,6 +367,79 @@ def test_compute_beir_metrics_returns_expected_cutoffs() -> None:
     assert metrics["ndcg@1"] == 0.5
 
 
+def test_load_beir_dataset_tries_vidore_config_name_before_data_dir(monkeypatch) -> None:
+    calls = []
+
+    def _fake_load_dataset(repo, *args, **kwargs):
+        calls.append((repo, args, kwargs))
+        if args == ("queries",):
+            return [{"query_id": "q1", "query": "What is shown?", "language": "en"}]
+        if args == ("qrels",):
+            return [{"query_id": "q1", "corpus_id": "doc_a", "score": 1}]
+        if args == ("corpus",):
+            return [{"corpus_id": "doc_a", "doc_id": "doc_a"}]
+        raise AssertionError("data_dir fallback should not be used")
+
+    monkeypatch.setitem(sys.modules, "datasets", type("Datasets", (), {"load_dataset": _fake_load_dataset}))
+
+    dataset = load_beir_dataset("vidore_hf", dataset_name="vidore_v3_computer_science")
+
+    assert dataset.query_ids == ["q1"]
+    assert dataset.qrels == {"q1": {"doc_a": 1}}
+    assert calls[0] == ("vidore/vidore_v3_computer_science", ("queries",), {"split": "test"})
+    assert calls[1] == ("vidore/vidore_v3_computer_science", ("qrels",), {"split": "test"})
+    assert calls[2] == ("vidore/vidore_v3_computer_science", ("corpus",), {"split": "test"})
+
+
+def test_load_beir_dataset_falls_back_to_vidore_data_dir(monkeypatch) -> None:
+    calls = []
+
+    def _fake_load_dataset(repo, *args, **kwargs):
+        calls.append((repo, args, kwargs))
+        if args:
+            raise RuntimeError("config-name unavailable")
+        if kwargs.get("data_dir") == "queries":
+            return [{"query_id": "q1", "query": "What is shown?", "language": "en"}]
+        if kwargs.get("data_dir") == "qrels":
+            return [{"query_id": "q1", "corpus_id": "doc_a", "score": 1}]
+        if kwargs.get("data_dir") == "corpus":
+            return [{"corpus_id": "doc_a", "doc_id": "doc_a"}]
+        raise AssertionError("unexpected load_dataset call")
+
+    monkeypatch.setitem(sys.modules, "datasets", type("Datasets", (), {"load_dataset": _fake_load_dataset}))
+
+    dataset = load_beir_dataset("vidore_hf", dataset_name="vidore_v3_computer_science")
+
+    assert dataset.query_ids == ["q1"]
+    assert dataset.qrels == {"q1": {"doc_a": 1}}
+    assert calls == [
+        ("vidore/vidore_v3_computer_science", ("queries",), {"split": "test"}),
+        ("vidore/vidore_v3_computer_science", (), {"data_dir": "queries", "split": "test"}),
+        ("vidore/vidore_v3_computer_science", ("qrels",), {"split": "test"}),
+        ("vidore/vidore_v3_computer_science", (), {"data_dir": "qrels", "split": "test"}),
+        ("vidore/vidore_v3_computer_science", ("corpus",), {"split": "test"}),
+        ("vidore/vidore_v3_computer_science", (), {"data_dir": "corpus", "split": "test"}),
+    ]
+
+
+def test_load_beir_dataset_error_includes_query_language_and_raw_row_count(monkeypatch) -> None:
+    def _fake_load_dataset(_repo, *args, **_kwargs):
+        if args == ("queries",):
+            return [{"query_id": "q1", "query": "bonjour", "language": "fr"}]
+        if args == ("qrels",):
+            return [{"query_id": "q1", "corpus_id": "doc_a", "score": 1}]
+        raise AssertionError("unexpected load_dataset call")
+
+    monkeypatch.setitem(sys.modules, "datasets", type("Datasets", (), {"load_dataset": _fake_load_dataset}))
+
+    with pytest.raises(ValueError) as exc_info:
+        load_beir_dataset("vidore_hf", dataset_name="vidore_v3_computer_science", query_language="en")
+
+    message = str(exc_info.value)
+    assert "query_language='en'" in message
+    assert "Loaded 1 raw rows from HuggingFace" in message
+
+
 def test_evaluate_lancedb_beir_uses_loader_and_retriever(monkeypatch) -> None:
     dataset = BeirDataset(
         dataset_name="vidore_v3_computer_science",
@@ -250,7 +449,7 @@ def test_evaluate_lancedb_beir_uses_loader_and_retriever(monkeypatch) -> None:
     )
 
     monkeypatch.setattr(
-        "nemo_retriever.recall.beir.load_beir_dataset",
+        "nemo_retriever.tools.recall.beir.load_beir_dataset",
         lambda *args, **kwargs: dataset,
     )
 
@@ -259,29 +458,36 @@ def test_evaluate_lancedb_beir_uses_loader_and_retriever(monkeypatch) -> None:
     class _FakeRetriever:
         def __init__(self, **kwargs):
             expected_kwargs = {
-                "vdb": "lancedb",
                 "vdb_kwargs": {
-                    "uri": "/tmp/lancedb",
-                    "table_name": "nv-ingest",
-                    "hybrid": False,
-                    "nprobes": 0,
-                    "refine_factor": 10,
+                    "vdb_op": "lancedb",
+                    "vdb_kwargs": {
+                        "uri": "/tmp/lancedb",
+                        "table_name": "nv-ingest",
+                        "hybrid": False,
+                        "nprobes": 0,
+                        "refine_factor": 10,
+                    },
                 },
-                "embedder": "embedder",
-                "embedding_endpoint": "http://embed.example/v1",
-                "embedding_api_key": "secret",
-                "embedding_use_grpc": False,
+                "embed_kwargs": {
+                    "model_name": "embedder",
+                    "embed_model_name": "embedder",
+                    "local_ingest_embed_backend": "hf",
+                    "inference_batch_size": 32,
+                    "embed_inference_batch_size": 32,
+                    "query_max_length": 128,
+                    "embedding_endpoint": "http://embed.example/v1",
+                    "embed_invoke_url": "http://embed.example/v1",
+                    "api_key": "secret",
+                },
                 "top_k": 10,
-                "local_hf_device": None,
-                "local_hf_cache_dir": None,
-                "local_hf_batch_size": 32,
-                "local_query_embed_backend": "hf",
-                "reranker": False,
-                "reranker_model_name": "nvidia/llama-nemotron-rerank-1b-v2",
-                "reranker_endpoint": None,
-                "reranker_api_key": "",
-                "reranker_batch_size": 32,
-                "local_reranker_backend": "vllm",
+                "rerank": False,
+                "rerank_kwargs": {
+                    "model_name": "nvidia/llama-nemotron-rerank-1b-v2",
+                    "rerank_invoke_url": None,
+                    "api_key": "",
+                    "batch_size": 32,
+                    "local_reranker_backend": "vllm",
+                },
             }
             missing_keys = set(expected_kwargs) - set(kwargs)
             assert not missing_keys
@@ -293,7 +499,7 @@ def test_evaluate_lancedb_beir_uses_loader_and_retriever(monkeypatch) -> None:
             assert queries == ["what is a qubit?"]
             return [[{"pdf_basename": "doc_a", "source_id": "/tmp/doc_a.pdf"}]]
 
-    monkeypatch.setattr("nemo_retriever.recall.beir.Retriever", _FakeRetriever)
+    monkeypatch.setattr("nemo_retriever.tools.recall.beir.Retriever", _FakeRetriever)
 
     cfg = BeirConfig(
         lancedb_uri="/tmp/lancedb",
@@ -311,5 +517,5 @@ def test_evaluate_lancedb_beir_uses_loader_and_retriever(monkeypatch) -> None:
     assert metrics["ndcg@10"] == 1.0
     assert metrics["recall@5"] == 1.0
     assert "embed_use_vllm" not in retriever_instances[0].kwargs
-    assert retriever_instances[0].kwargs.get("local_query_embed_backend") == "hf"
-    assert retriever_instances[0].kwargs.get("local_reranker_backend") == "vllm"
+    assert retriever_instances[0].kwargs["embed_kwargs"].get("local_ingest_embed_backend") == "hf"
+    assert retriever_instances[0].kwargs["rerank_kwargs"].get("local_reranker_backend") == "vllm"

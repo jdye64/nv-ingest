@@ -4,33 +4,301 @@
 
 from __future__ import annotations
 
+import sys
 import tomllib
 from pathlib import Path
+from types import ModuleType
+
+import pytest
+from packaging.requirements import Requirement
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = PROJECT_ROOT.parent
 
 
-def test_local_extra_depends_on_versioned_ocr_v2_nightly() -> None:
+def _install_ocr_import_stubs(monkeypatch: pytest.MonkeyPatch) -> None:
+    torch_mod = ModuleType("torch")
+    nn_mod = ModuleType("torch.nn")
+
+    class _Module:
+        pass
+
+    nn_mod.Module = _Module
+    torch_mod.nn = nn_mod
+    torch_mod.Tensor = object
+    torch_mod.float16 = "float16"
+
+    pil_mod = ModuleType("PIL")
+    image_mod = ModuleType("PIL.Image")
+    pil_mod.Image = image_mod
+
+    monkeypatch.setitem(sys.modules, "torch", torch_mod)
+    monkeypatch.setitem(sys.modules, "torch.nn", nn_mod)
+    monkeypatch.setitem(sys.modules, "PIL", pil_mod)
+    monkeypatch.setitem(sys.modules, "PIL.Image", image_mod)
+
+
+def _install_upstream_ocr_v2_stub(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
+    captured_kwargs: list[dict[str, object]] = []
+
+    from nemo_retriever.models.local.nemotron_ocr_v2 import NemotronOCRV2 as _WrapperOCRV2
+
+    class _NemotronOCRV2:
+        def __init__(self, **kwargs: object) -> None:
+            if kwargs.get("lang") not in _WrapperOCRV2._VALID_LANG_SELECTORS:
+                raise ValueError(f"unsupported upstream lang selector: {kwargs.get('lang')!r}")
+            captured_kwargs.append(kwargs)
+            if getattr(pipeline_mod, "_download_on_init", False):
+                repo_id = (
+                    "nvidia/nemotron-ocr-v1" if kwargs.get("lang") in {"v1", "legacy"} else "nvidia/nemotron-ocr-v2"
+                )
+                pipeline_mod.hf_hub_download(repo_id=repo_id, filename="checkpoints/detector.pth")
+
+    nemotron_ocr_mod = ModuleType("nemotron_ocr")
+    inference_mod = ModuleType("nemotron_ocr.inference")
+    pipeline_mod = ModuleType("nemotron_ocr.inference.pipeline")
+    pipeline_v2_mod = ModuleType("nemotron_ocr.inference.pipeline_v2")
+    setattr(pipeline_mod, "hf_hub_download", lambda *args, **kwargs: "/unpatched/model.bin")
+    pipeline_v2_mod.NemotronOCRV2 = _NemotronOCRV2
+    inference_mod.pipeline = pipeline_mod
+    inference_mod.pipeline_v2 = pipeline_v2_mod
+    nemotron_ocr_mod.inference = inference_mod
+
+    monkeypatch.setitem(sys.modules, "nemotron_ocr", nemotron_ocr_mod)
+    monkeypatch.setitem(sys.modules, "nemotron_ocr.inference", inference_mod)
+    monkeypatch.setitem(sys.modules, "nemotron_ocr.inference.pipeline", pipeline_mod)
+    monkeypatch.setitem(sys.modules, "nemotron_ocr.inference.pipeline_v2", pipeline_v2_mod)
+    monkeypatch.delenv("RETRIEVER_ENABLE_TORCH_TRT", raising=False)
+
+    return captured_kwargs
+
+
+def _requirement(dependencies: list[str], name: str) -> Requirement:
+    return next(Requirement(dep) for dep in dependencies if Requirement(dep).name == name)
+
+
+def test_local_extra_is_stable_and_uv_dev_group_uses_nightly_nemotron_specs() -> None:
     pyproject = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
-    local_deps = pyproject["project"]["optional-dependencies"]["local"]
+    optional_deps = pyproject["project"]["optional-dependencies"]
+    dependency_groups = pyproject["dependency-groups"]
+    local_deps = optional_deps["local"]
+    dev_group = dependency_groups["dev"]
+    all_deps = optional_deps["all"]
     uv_tool = pyproject["tool"]["uv"]
     uv_sources = uv_tool["sources"]
+    uv_indexes = uv_tool["index"]
 
-    assert "nemotron-ocr>=1.0.2.dev0,<1.0.2a0; sys_platform == 'linux'" in local_deps
-    assert "nemotron-ocr-v2>=2.0.0.dev0,<2.0.0a0; sys_platform == 'linux'" in local_deps
+    assert "local-nightly" not in optional_deps
+    assert "local-base" not in optional_deps
+    assert "conflicts" not in uv_tool
+    assert "nemo_retriever[all]" in dev_group
+    assert "nemo_retriever[dev]" in dev_group
+    assert "uv-local" not in dependency_groups
+    assert {"include-group": "uv-local"} not in dev_group
+    assert "build>=1.2.2" not in dev_group
+    assert "pytest>=8.0.2" not in dev_group
+    assert "tritonclient" in local_deps
+    dev_nemotron_deps = [dep for dep in dev_group if isinstance(dep, str) and dep.startswith("nemotron-")]
+    assert len(dev_nemotron_deps) == 3
+    assert any("local" in dep for dep in all_deps)
+    assert not any("local-nightly" in dep or "uv-local" in dep for dep in all_deps)
+
+    stable_page_requirement = _requirement(local_deps, "nemotron-page-elements-v3")
+    assert stable_page_requirement.specifier.contains("3.0.1")
+    assert stable_page_requirement.specifier.contains("3.5.0")
+    assert stable_page_requirement.specifier.contains("3.0.2.dev1", prereleases=True)
+    assert not stable_page_requirement.specifier.contains("4.0.0")
+
+    stable_table_requirement = _requirement(local_deps, "nemotron-table-structure-v1")
+    assert stable_table_requirement.specifier.contains("1.0.0")
+    assert stable_table_requirement.specifier.contains("1.5.0")
+    assert stable_table_requirement.specifier.contains("1.0.1.dev1", prereleases=True)
+    assert not stable_table_requirement.specifier.contains("2.0.0")
+
+    stable_ocr_requirement = _requirement(local_deps, "nemotron-ocr")
+    assert stable_ocr_requirement.specifier.contains("2.0.0")
+    assert stable_ocr_requirement.specifier.contains("2.5.0")
+    assert stable_ocr_requirement.specifier.contains("2.0.1.dev1", prereleases=True)
+    assert not stable_ocr_requirement.specifier.contains("3.0.0")
+    assert not stable_ocr_requirement.specifier.contains("1.0.1")
+    assert str(stable_ocr_requirement.marker) == (
+        'sys_platform == "linux" and (platform_machine == "x86_64" or platform_machine == "aarch64")'
+    )
+
+    nightly_page_requirement = _requirement(dev_nemotron_deps, "nemotron-page-elements-v3")
+    assert nightly_page_requirement.specifier.contains("3.0.1.dev1", prereleases=True)
+    assert nightly_page_requirement.specifier.contains("3.0.2.dev1", prereleases=True)
+    assert not nightly_page_requirement.specifier.contains("3.0.1", prereleases=True)
+    assert not nightly_page_requirement.specifier.contains("3.0.2", prereleases=True)
+
+    nightly_table_requirement = _requirement(dev_nemotron_deps, "nemotron-table-structure-v1")
+    assert not nightly_table_requirement.specifier.contains("1.0.0.dev1", prereleases=True)
+    assert nightly_table_requirement.specifier.contains("1.0.1.dev1", prereleases=True)
+    assert not nightly_table_requirement.specifier.contains("1.0.0", prereleases=True)
+    assert not nightly_table_requirement.specifier.contains("1.0.1", prereleases=True)
+
+    nightly_ocr_requirement = _requirement(dev_nemotron_deps, "nemotron-ocr")
+    assert nightly_ocr_requirement.specifier.contains("2.0.1.dev1", prereleases=True)
+    assert nightly_ocr_requirement.specifier.contains("2.0.2.dev1", prereleases=True)
+    assert not nightly_ocr_requirement.specifier.contains("2.0.0", prereleases=True)
+    assert not nightly_ocr_requirement.specifier.contains("2.0.1", prereleases=True)
+    assert not nightly_ocr_requirement.specifier.contains("2.0.2", prereleases=True)
+    assert str(nightly_ocr_requirement.marker) == str(stable_ocr_requirement.marker)
+
+    assert not any(dep.startswith("nemotron-ocr-v2") for dep in local_deps + dev_nemotron_deps)
     assert "nemotron-ocr" in uv_tool["no-build-package"]
-    assert "nemotron-ocr-v2" in uv_tool["no-build-package"]
-    assert uv_sources["nemotron-ocr"] == {"index": "test-pypi"}
-    assert uv_sources["nemotron-ocr-v2"] == {"index": "test-pypi"}
+    assert "nemotron-ocr-v2" not in uv_tool["no-build-package"]
+    assert "nemotron-ocr" not in uv_sources
+    assert "nemotron-ocr-v2" not in uv_sources
+    assert "test-pypi" not in {index["name"] for index in uv_indexes}
+    assert all("test.pypi.org" not in index["url"] for index in uv_indexes)
 
 
-def test_local_ocr_v2_wrapper_imports_versioned_module() -> None:
-    source = (PROJECT_ROOT / "src" / "nemo_retriever" / "model" / "local" / "nemotron_ocr_v2.py").read_text(
+def test_local_ocr_v2_wrapper_uses_original_namespace_and_package_lang_selectors() -> None:
+    source = (PROJECT_ROOT / "src" / "nemo_retriever" / "models" / "local" / "nemotron_ocr_v2.py").read_text(
         encoding="utf-8"
     )
 
-    assert "from nemotron_ocr_v2.inference import pipeline_v2" in source
-    assert "from nemotron_ocr.inference import pipeline_v2" not in source
-    assert "Local Nemotron OCR v2 requires the `nemotron_ocr_v2` package." in source
+    assert "from nemotron_ocr.inference import pipeline as _nemotron_ocr_pipeline" in source
+    assert "from nemotron_ocr.inference import pipeline_v2" in source
+    assert "install_pinned_hf_hub_download(_nemotron_ocr_pipeline)" in source
+    assert "install_pinned_hf_hub_download(_nemotron_ocr_pipeline_v2)" not in source
+    assert 'lang: str = "multi"' in source
+    assert "_NEMOTRON_OCR_LANG_ALIASES" not in source
+    assert "package_lang" not in source
+    assert "_NemotronOCRV2(model_dir=model_dir, lang=lang)" in source
+    assert "_NemotronOCRV2(lang=lang)" in source
+    assert "nemotron_ocr_v2" not in source
+    assert "nemotron-ocr-v2` from TestPyPI" not in source
+
+
+def test_local_ocr_v2_wrapper_rejects_invalid_lang_selector(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_ocr_import_stubs(monkeypatch)
+
+    from nemo_retriever.models.local.nemotron_ocr_v2 import NemotronOCRV2
+
+    with pytest.raises(ValueError, match=r"Invalid lang selector 'v3'"):
+        NemotronOCRV2(lang="v3")
+
+    with pytest.raises(ValueError, match=r"Invalid lang selector 'v2_multi'"):
+        NemotronOCRV2(lang="v2_multi")
+
+
+def test_local_ocr_v2_wrapper_defaults_to_package_multi_selector(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_ocr_import_stubs(monkeypatch)
+    captured_kwargs = _install_upstream_ocr_v2_stub(monkeypatch)
+
+    from nemo_retriever.models.local.nemotron_ocr_v2 import NemotronOCRV2
+
+    NemotronOCRV2()
+
+    assert captured_kwargs == [{"lang": "multi"}]
+
+
+@pytest.mark.parametrize(
+    "selector",
+    ["en", "english", "multi", "multilingual", "v1", "legacy"],
+)
+def test_local_ocr_v2_wrapper_accepts_package_lang_selectors_and_passes_them_through(
+    monkeypatch: pytest.MonkeyPatch,
+    selector: str,
+) -> None:
+    _install_ocr_import_stubs(monkeypatch)
+    captured_kwargs = _install_upstream_ocr_v2_stub(monkeypatch)
+
+    from nemo_retriever.models.local.nemotron_ocr_v2 import NemotronOCRV2
+
+    NemotronOCRV2(lang=selector)
+
+    assert captured_kwargs == [{"lang": selector}]
+
+
+def test_local_ocr_v2_wrapper_passes_package_lang_selector_with_model_dir(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_ocr_import_stubs(monkeypatch)
+    captured_kwargs = _install_upstream_ocr_v2_stub(monkeypatch)
+
+    from nemo_retriever.models.local.nemotron_ocr_v2 import NemotronOCRV2
+
+    NemotronOCRV2(model_dir="/models/ocr", lang="english")
+
+    assert captured_kwargs == [{"model_dir": "/models/ocr", "lang": "english"}]
+
+
+@pytest.mark.parametrize(
+    ("selector", "repo_id", "revision"),
+    [
+        ("multi", "nvidia/nemotron-ocr-v2", "0e83e83f17943524b90afa6c0fd82ac2bc1a40ca"),
+        ("legacy", "nvidia/nemotron-ocr-v1", "8657d08d3279f4864002d5fd3fdcd47ad8c96bcb"),
+    ],
+)
+def test_local_ocr_v2_wrapper_patches_base_pipeline_downloads_with_registered_revision(
+    monkeypatch: pytest.MonkeyPatch,
+    selector: str,
+    repo_id: str,
+    revision: str,
+) -> None:
+    _install_ocr_import_stubs(monkeypatch)
+    _install_upstream_ocr_v2_stub(monkeypatch)
+
+    from nemo_retriever.models import hf_model_registry as registry
+    from nemo_retriever.models.local.nemotron_ocr_v2 import NemotronOCRV2
+
+    calls: list[dict[str, object]] = []
+
+    def fake_download(*args: object, **kwargs: object) -> str:
+        calls.append(kwargs)
+        return "/cache/model.bin"
+
+    monkeypatch.setattr(registry, "hf_hub_download", fake_download)
+    pipeline_mod = sys.modules["nemotron_ocr.inference.pipeline"]
+    pipeline_v2_mod = sys.modules["nemotron_ocr.inference.pipeline_v2"]
+    setattr(pipeline_mod, "_download_on_init", True)
+
+    NemotronOCRV2(lang=selector)
+
+    assert not hasattr(pipeline_v2_mod, "hf_hub_download")
+    assert calls == [
+        {
+            "repo_id": repo_id,
+            "filename": "checkpoints/detector.pth",
+            "revision": revision,
+        }
+    ]
+
+
+def test_huggingface_ocr_nightly_does_not_carry_namespace_patch_knobs() -> None:
+    workflow_path = REPO_ROOT / ".github" / "workflows" / "huggingface-nightly.yml"
+    if not workflow_path.exists():
+        pytest.skip("Hugging Face nightly workflow is not available in this checkout")
+
+    workflow = workflow_path.read_text(encoding="utf-8")
+    v2_stanza = workflow.split("- id: nemotron-ocr-v2", 1)[1].split("container:", 1)[0]
+
+    assert "nemotron-ocr-v1" not in workflow
+    assert 'nightly_base_version: "2.0.2"' in v2_stanza
+    assert "project_name:" not in workflow
+    assert "package_rename:" not in workflow
+    assert "expected_project_name:" not in workflow
+    assert "expected_package:" not in workflow
+    assert "--project-name" not in workflow
+    assert "--rename-python-package" not in workflow
+
+
+def test_ocr_nightly_builds_and_verifies_vllm_compatible_torch_stack() -> None:
+    workflow_path = REPO_ROOT / ".github" / "workflows" / "huggingface-nightly.yml"
+    if not workflow_path.exists():
+        pytest.skip("Hugging Face nightly workflow is not available in this checkout")
+
+    workflow = workflow_path.read_text(encoding="utf-8")
+
+    assert 'OCR_TORCH_VERSION: "2.11.0"' in workflow
+    assert 'OCR_TORCHVISION_VERSION: "0.26.0"' in workflow
+    assert '--venv-pip-install "torch==${OCR_TORCH_VERSION}"' in workflow
+    assert '--venv-pip-install "torchvision==${OCR_TORCHVISION_VERSION}"' in workflow
+    assert "expected_runtime_dependencies" in workflow
+    assert "def declares_runtime_dependency(" in workflow
+    assert "if not declares_runtime_dependency(metadata, package, specifier):" in workflow

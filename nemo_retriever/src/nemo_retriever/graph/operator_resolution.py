@@ -4,10 +4,11 @@
 
 from __future__ import annotations
 
-from nemo_retriever.graph.abstract_operator import AbstractOperator
-from nemo_retriever.graph.operator_archetype import ArchetypeOperator
+from nemo_retriever.operators.abstract_operator import AbstractOperator
+from nemo_retriever.operators.operator_archetype import ArchetypeOperator
 from nemo_retriever.graph.pipeline_graph import Graph, Node
-from nemo_retriever.utils.ray_resource_hueristics import ClusterResources, Resources, gather_local_resources
+from nemo_retriever.common import ray_resource_hueristics as _rrh
+from nemo_retriever.common.ray_resource_hueristics import ClusterResources, Resources
 
 
 def resolve_operator_class(
@@ -18,6 +19,16 @@ def resolve_operator_class(
     if issubclass(operator_class, ArchetypeOperator):
         return operator_class.resolve_operator_class(resources, operator_kwargs=operator_kwargs)
     return operator_class
+
+
+def resolve_operator_kwargs(
+    operator_class: type[AbstractOperator],
+    resolved_class: type[AbstractOperator],
+    operator_kwargs: dict | None = None,
+) -> dict:
+    if issubclass(operator_class, ArchetypeOperator):
+        return operator_class.variant_operator_kwargs(resolved_class, operator_kwargs=operator_kwargs)
+    return dict(operator_kwargs or {})
 
 
 def resolve_graph(
@@ -36,11 +47,13 @@ def resolve_graph(
         if isinstance(operator, ArchetypeOperator):
             operator = type(operator)(**node.operator_kwargs)
 
+        resolved_class = resolve_operator_class(node.operator_class, resources, operator_kwargs=node.operator_kwargs)
+        resolved_kwargs = resolve_operator_kwargs(node.operator_class, resolved_class, node.operator_kwargs)
         cloned = Node(
             operator,
             name=node.name,
-            operator_class=resolve_operator_class(node.operator_class, resources, operator_kwargs=node.operator_kwargs),
-            operator_kwargs=dict(node.operator_kwargs),
+            operator_class=resolved_class,
+            operator_kwargs=resolved_kwargs,
         )
         visited[node_id] = cloned
         for child in node.children:
@@ -56,4 +69,4 @@ def resolve_graph(
 
 
 def resolve_graph_for_local_execution(graph: Graph) -> Graph:
-    return resolve_graph(graph, gather_local_resources())
+    return resolve_graph(graph, _rrh.gather_local_resources())

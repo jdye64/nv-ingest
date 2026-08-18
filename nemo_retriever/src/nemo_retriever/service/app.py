@@ -15,24 +15,11 @@ from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 from typing import AsyncIterator
 
-import traceback as _traceback
-
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
-from pathlib import Path
-
 from nemo_retriever.service.config import ServiceConfig
-from nemo_retriever.service.db.engine import DatabaseEngine
-from nemo_retriever.service.db.repository import Repository
-from nemo_retriever.service.event_bus import EventBus
-from nemo_retriever.service.metrics import (
-    setup_instrumentation as setup_metrics_instrumentation,
-    start_refresh_loop as start_metrics_refresh_loop,
-)
-from nemo_retriever.service.processing.pool import ProcessingPool
-from nemo_retriever.service.spool import SpoolStore
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +43,11 @@ def _configure_logging(config: ServiceConfig) -> None:
     file_handler.setFormatter(fmt)
     root.addHandler(file_handler)
 
-    logger.info("Logging configured: level=%s file=%s", config.logging.level, config.logging.file)
+    logger.info(
+        "Logging configured: level=%s file=%s",
+        config.logging.level,
+        config.logging.file,
+    )
 
 
 def _apply_resource_limits(config: ServiceConfig) -> None:
@@ -86,123 +77,171 @@ def _apply_resource_limits(config: ServiceConfig) -> None:
             logger.warning("Could not set memory limit: %s", exc)
 
 
-def _resolve_spool_root(config: ServiceConfig) -> Path:
-    """Pick the spool directory: explicit override, else ``<db_dir>/spool``."""
-    if config.spool.path:
-        return Path(config.spool.path)
-    return Path(config.database.path).resolve().parent / "spool"
+def _check_media_dependencies(mode: str) -> None:
+    """Log a startup banner when ``ffmpeg``/``ffprobe`` are missing.
+
+    Audio and video ingestion uploads fail with HTTP 501 when these
+    binaries are absent (see :func:`enforce_media_dependencies`). Surfacing
+    a clear WARNING at startup gives cluster operators a chance to fix
+    the deployment (set ``service.installFfmpeg=true`` or bake FFmpeg
+    into a custom image) before the first media upload arrives, instead
+    of debugging a worker traceback after the fact.
+
+    The gateway pod does not run pipeline workers, so its missing FFmpeg
+    is only a problem if it also classifies media uploads — which it
+    does (it computes the routing category before forwarding). The
+    warning therefore applies to every service role.
+    """
+    from nemo_retriever.common.modality.audio.media_interface import (
+        HELM_FFMPEG_INSTALL_VALUE,
+        MANUAL_FFMPEG_INSTALL_COMMAND,
+        is_media_available,
+        missing_media_dependencies,
+    )
+
+    if is_media_available():
+        logger.info(
+            "Media dependencies (ffmpeg, ffprobe) detected — audio/video ingestion enabled (mode=%s)",
+            mode,
+        )
+        return
+
+    missing = ", ".join(missing_media_dependencies()) or "ffmpeg, ffprobe"
+    logger.warning(
+        "Media dependencies missing in this container: %s. Audio and video "
+        "uploads will be rejected with HTTP 501 (mode=%s). To enable "
+        "media ingestion, redeploy the Helm chart with "
+        "`--set %s`, install FFmpeg manually with `%s`, or build a "
+        "custom image that includes ffmpeg/ffprobe.",
+        missing,
+        mode,
+        HELM_FFMPEG_INSTALL_VALUE,
+        MANUAL_FFMPEG_INSTALL_COMMAND,
+    )
 
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Startup / shutdown lifecycle for the service."""
+    """Startup / shutdown lifecycle for the service.
+
+    Note:
+        The config object (`app.state.config`) is constructed prior to app startup,
+        typically via a factory that parses YAML, environment variables, or other
+        runtime configuration sources, and validates it as a `ServiceConfig` object.
+    """
+    # The config is built externally (before this function is called) and stored on `app.state.config`.
     config: ServiceConfig = app.state.config
+    mode = config.mode
 
-    db_engine = DatabaseEngine(config.database.path)
-    db_engine.initialize()
-    app.state.db_engine = db_engine
-    app.state.repository = Repository(db_engine)
-
-    event_bus = EventBus(
-        default_maxsize=config.event_bus.queue_maxsize,
-        buffer_size=config.event_bus.replay_buffer_size,
-        overflow_policy=config.event_bus.overflow_policy,
-        publish_timeout_s=config.event_bus.publish_timeout_s,
+    from nemo_retriever.service.services.event_bus import (
+        init_event_bus,
+        shutdown_event_bus,
     )
-    app.state.event_bus = event_bus
+    from nemo_retriever.service.services.job_tracker import (
+        init_job_tracker,
+        shutdown_job_tracker,
+    )
+    from nemo_retriever.service.services.metrics import init_metrics, shutdown_metrics
+    from nemo_retriever.service.services.pipeline_pool import (
+        init_pipeline_pool,
+        shutdown_pipeline_pool,
+    )
+    from nemo_retriever.service.services.proxy import init_proxy, shutdown_proxy
+    from nemo_retriever.service.services.sidecar_store import init_sidecar_store, shutdown_sidecar_store
+    from nemo_retriever.service.services.worker_result_store import validate_result_store
+    from nemo_retriever.service.services.work_queue import init_work_broker, shutdown_work_broker
 
-    spool_store: SpoolStore | None = None
-    if config.spool.enabled:
-        spool_root = _resolve_spool_root(config)
-        spool_store = SpoolStore(spool_root)
-        app.state.spool_store = spool_store
-        logger.info("Spool enabled at %s", spool_root)
+    validate_result_store()
+
+    if mode in ("gateway", "standalone"):
+        app.state.metrics = init_metrics()
     else:
-        app.state.spool_store = None
-        logger.warning(
-            "Spool DISABLED — accepted pages live only in RAM until processed; "
-            "a pod restart between accept and processing will lose them"
+        app.state.metrics = None
+
+    tracker = init_job_tracker()
+    if app.state.metrics is not None:
+        tracker.add_terminal_observer(app.state.metrics.record_terminal_transition)
+    event_bus = init_event_bus()
+    tracker.set_event_bus(event_bus)
+    app.state.sidecar_store = (
+        init_sidecar_store(max_payload_bytes=config.sidecar_store.max_payload_bytes)
+        if mode in ("gateway", "standalone")
+        else None
+    )
+
+    if mode == "gateway":
+        app.state.proxy = init_proxy(
+            config.gateway,
+            internal_api_token=config.vectordb.internal_api_token,
+            public_auth_header=config.auth.header_name,
+        )
+        app.state.work_broker = await init_work_broker(config.work_queue, config.pipeline)
+        app.state.pipeline_pool = None
+    else:
+        from nemo_retriever.service.services.pipeline_executor import (
+            create_batch_work_fn,
+            create_realtime_work_fn,
         )
 
-    loop = asyncio.get_running_loop()
-    pool = ProcessingPool(config, db_engine, event_bus, loop, spool_store=spool_store)
-    pool.start()
-    app.state.processing_pool = pool
+        rt_fn = create_realtime_work_fn(config) if mode in ("standalone", "realtime") else None
+        bt_fn = create_batch_work_fn(config) if mode in ("standalone", "batch") else None
+        app.state.proxy = None
+        app.state.work_broker = None
+        app.state.pipeline_pool = init_pipeline_pool(
+            config.pipeline,
+            mode=mode,
+            realtime_work_fn=rt_fn,
+            batch_work_fn=bt_fn,
+            work_queue_config=config.work_queue,
+            auth_config=config.auth,
+            internal_api_token=config.vectordb.internal_api_token,
+        )
 
-    # Recover any pages that were spooled but never processed — must
-    # happen BEFORE we start accepting new HTTP requests so recovery
-    # doesn't race fresh ingest for the (limited) batch buffer.
-    if spool_store is not None:
-        try:
-            recovered = await asyncio.to_thread(pool.recover_from_spool)
-            if recovered:
-                logger.info("Spool recovery re-enqueued %d page(s)", recovered)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Spool recovery failed — continuing with cold start")
-            try:
-                from nemo_retriever.service.event_logger import record_event
-                from nemo_retriever.service.failure_types import EventCategory
-                from nemo_retriever.service.models.event_log import EventOutcome, EventSeverity
+        if (
+            mode in ("standalone", "realtime", "batch")
+            and config.local_models.enabled
+            and config.local_models.warmup_on_startup
+        ):
+            import asyncio
 
-                record_event(
-                    app.state.repository,
-                    category=EventCategory.SPOOL.value,
-                    severity=EventSeverity.ERROR,
-                    outcome=EventOutcome.FAILED,
-                    summary=f"Spool recovery failed at startup: {type(exc).__name__}: {exc}"[:200],
-                    detail=str(exc),
-                    stack_trace=_traceback.format_exc(),
-                    stage="spool_recovery",
-                    endpoint="startup",
-                )
-            except Exception:
-                pass
-        pool.start_spool_cleanup()
+            from nemo_retriever.service.services.pipeline_executor import (
+                warmup_process_pool_workers,
+            )
 
-    metrics_task = start_metrics_refresh_loop(app)
+            warmup_status = await asyncio.to_thread(warmup_process_pool_workers)
+            logger.info("Local model warmup status: %s", warmup_status)
+
+    _check_media_dependencies(mode)
 
     logger.info(
-        "Retriever service started — host=%s port=%d workers=%d " "spool=%s event_bus.policy=%s",
+        "Retriever service started — mode=%s host=%s port=%d",
+        mode,
         config.server.host,
         config.server.port,
-        config.processing.num_workers,
-        "on" if spool_store else "off",
-        config.event_bus.overflow_policy,
     )
 
     yield
 
-    metrics_task.cancel()
-    try:
-        await metrics_task
-    except asyncio.CancelledError:
-        pass
-
-    drain_timeout_s = float(getattr(getattr(config, "drain", None), "timeout_s", 60.0))
-    logger.info(
-        "Shutting down: draining pool (timeout=%.1fs, in_flight=%d)",
-        drain_timeout_s,
-        pool.in_flight_batches() if hasattr(pool, "in_flight_batches") else 0,
+    from nemo_retriever.service.services.pipeline_executor import (
+        shutdown_process_executors,
     )
-    drained = await pool.drain(drain_timeout_s) if hasattr(pool, "drain") else True
-    if not drained:
-        logger.warning(
-            "Drain incomplete after %.1fs; forcing executor shutdown — "
-            "in-flight pages remain durable in the spool and will be re-enqueued on next start.",
-            drain_timeout_s,
-        )
-    pool.shutdown()
-    db_engine.close()
+
+    shutdown_process_executors()
+    await shutdown_work_broker()
+    await shutdown_proxy()
+    await shutdown_pipeline_pool()
+    shutdown_sidecar_store()
+    shutdown_event_bus()
+    shutdown_job_tracker()
+    shutdown_metrics()
+    from nemo_retriever.service.metrics_otel import shutdown_metrics as shutdown_otel_metrics
+
+    shutdown_otel_metrics()
     logger.info("Retriever service stopped")
 
 
 class _RequestIdMiddleware(BaseHTTPMiddleware):
-    """Attach a unique ``request_id`` to every incoming HTTP request.
-
-    Routers read ``request.state.request_id`` and pass it to
-    :func:`record_event` so all provenance events from one HTTP call
-    can be correlated in the event log.
-    """
+    """Attach a unique ``request_id`` to every incoming HTTP request."""
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         request.state.request_id = uuid.uuid4().hex
@@ -215,69 +254,151 @@ def create_app(config: ServiceConfig) -> FastAPI:
     _configure_logging(config)
     _apply_resource_limits(config)
 
+    lifespan = _lifespan
+    mcp_asgi_app = None
+    if config.mcp.enabled:
+        try:
+            from fastmcp.utilities.lifespan import combine_lifespans
+
+            from nemo_retriever.service.mcp_server import (
+                build_mcp_app,
+                settings_from_service_config,
+            )
+
+            mcp_asgi_app = build_mcp_app(settings_from_service_config(config))
+            lifespan = combine_lifespans(_lifespan, mcp_asgi_app.lifespan)
+        except ImportError as exc:
+            mcp_asgi_app = None
+            logger.warning(
+                "FastMCP service integration failed to initialise; /mcp will not be mounted: %s",
+                exc,
+            )
+
+    from nemo_retriever.service.metrics_otel import configure_metrics, instrument_app as instrument_otel_metrics
+    from nemo_retriever.service.tracing import configure_tracing
+
+    configure_metrics(service_role=config.mode)
+    configure_tracing(service_role=config.mode)
+
     app = FastAPI(
         title="Retriever Service",
         description="Low-latency document ingestion service powered by nemo-retriever",
-        version="1.0.0",
+        version="26.5.0",
         docs_url="/docs",
-        lifespan=_lifespan,
+        lifespan=lifespan,
     )
     app.state.config = config
 
     app.add_middleware(_RequestIdMiddleware)
 
-    if config.auth.api_token:
-        from nemo_retriever.service.auth import BearerAuthMiddleware
+    from nemo_retriever.service.auth import BearerAuthMiddleware
 
-        app.add_middleware(BearerAuthMiddleware, config=config.auth)
-        logger.info(
-            "Bearer-token authentication ENABLED (header=%s, bypass=%s)",
-            config.auth.header_name,
-            config.auth.bypass_paths,
-        )
-    else:
-        logger.info("Bearer-token authentication DISABLED (no api_token configured)")
+    app.add_middleware(
+        BearerAuthMiddleware,
+        config=config.auth,
+        internal_api_token=config.vectordb.internal_api_token,
+        service_mode=config.mode,
+    )
+    logger.info(
+        "Scope authorization configured (enabled=%s, header=%s, secret_file=%s, allow_unscoped_dev=%s)",
+        config.auth.enabled,
+        config.auth.header_name,
+        bool(config.auth.scope_token_file),
+        config.auth.allow_unscoped_dev,
+    )
 
-    from nemo_retriever.service.routers import events, ingest, internal, metrics, query, rerank, stream, system
+    if mcp_asgi_app is not None:
+        app.mount(config.mcp.path, mcp_asgi_app)
+        logger.info("FastMCP service endpoint mounted at %s", config.mcp.path)
 
-    app.include_router(events.router, prefix="/v1")
+    from nemo_retriever.service.routers import admin, collections, ingest, metrics, work
+    from nemo_retriever.service.services.prometheus import instrument_app
+
     app.include_router(ingest.router, prefix="/v1")
-    app.include_router(internal.router, prefix="/v1")
+    app.include_router(collections.router, prefix="/v1")
     app.include_router(metrics.router, prefix="/v1")
-    app.include_router(query.router, prefix="/v1")
-    app.include_router(rerank.router, prefix="/v1")
-    app.include_router(stream.router, prefix="/v1")
-    app.include_router(system.router, prefix="/v1")
+    # Admin/internal endpoints — pool_stats etc. Registered on every
+    # role; the handler self-reports an empty pool dict on gateway pods.
+    app.include_router(admin.router, prefix="/v1")
+    app.include_router(work.router, prefix="/v1")
+    instrument_otel_metrics(app, role=config.mode)
+    instrument_app(app, role=config.mode)
 
-    # Prometheus instrumentation must be wired before the app starts —
-    # the lifespan only kicks off the periodic gauge-refresh task.
-    setup_metrics_instrumentation(app)
+    if config.mode == "gateway":
+        from pathlib import Path as _Path
+
+        from fastapi.staticfiles import StaticFiles
+
+        from nemo_retriever.service.routers import dashboard
+
+        app.include_router(dashboard.router, prefix="/v1/dashboard")
+        _dashboard_static = _Path(__file__).parent / "dashboard" / "static"
+        if _dashboard_static.is_dir():
+            app.mount(
+                "/v1/dashboard/static",
+                StaticFiles(directory=str(_dashboard_static)),
+                name="dashboard-static",
+            )
+
+    @app.get("/v1/live", tags=["system"], summary="Shallow liveness probe")
+    async def live() -> dict:
+        """Report whether this service process can answer HTTP requests."""
+        return {"status": "ok", "mode": config.mode}
+
+    @app.get("/v1/health", tags=["system"], summary="Deep readiness probe")
+    async def health() -> JSONResponse:
+        """Report whether this service role is ready to serve its workload."""
+        base: dict = {"status": "ok", "mode": config.mode}
+        if (
+            config.mode in ("standalone", "realtime", "batch")
+            and config.local_models.enabled
+            and config.local_models.warmup_on_startup
+        ):
+            from nemo_retriever.service.services.pipeline_executor import (
+                get_service_warmup_status,
+            )
+
+            warmup = get_service_warmup_status()
+            base["models_warm"] = bool(warmup.get("complete"))
+            base["local_models_warmup"] = warmup
+            if not warmup.get("complete"):
+                base["status"] = "starting"
+        if config.mode == "gateway":
+            from nemo_retriever.service.services.proxy import get_proxy
+
+            proxy = get_proxy()
+            if proxy is None:
+                base["status"] = "unavailable"
+                base["backends"] = {"status": "unavailable", "error": "Gateway proxy not initialised"}
+            else:
+                from nemo_retriever.service.services.pipeline_pool import PoolType
+
+                realtime, batch = await asyncio.gather(
+                    proxy.check_backend(PoolType.REALTIME),
+                    proxy.check_backend(PoolType.BATCH),
+                )
+                base["backends"] = {
+                    "realtime": realtime,
+                    "batch": batch,
+                }
+                if any(backend["status"] != "ok" for backend in base["backends"].values()):
+                    base["status"] = "unavailable"
+
+        status_code = 200 if base["status"] == "ok" else 503
+
+        return JSONResponse(status_code=status_code, content=base)
 
     @app.exception_handler(Exception)
     async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-        """Catch-all for unhandled exceptions: persist to provenance log."""
-        from nemo_retriever.service.event_logger import record_event
-        from nemo_retriever.service.failure_types import EventCategory
-        from nemo_retriever.service.models.event_log import EventOutcome, EventSeverity
-
         logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
-        req_id = getattr(request.state, "request_id", "")
-        try:
-            repo = Repository(app.state.db_engine)
-            record_event(
-                repo,
-                category=EventCategory.INTERNAL.value,
-                severity=EventSeverity.ERROR,
-                outcome=EventOutcome.FAILED,
-                summary=f"Unhandled exception: {type(exc).__name__}: {exc}"[:200],
-                detail=str(exc),
-                stack_trace=_traceback.format_exc(),
-                stage="http_handler",
-                endpoint=request.url.path,
-                request_id=req_id,
-            )
-        except Exception:
-            pass
-        return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": f"{type(exc).__name__}: {exc}",
+                "method": request.method,
+                "path": request.url.path,
+                "mode": config.mode,
+            },
+        )
 
     return app

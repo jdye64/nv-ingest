@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -16,13 +16,31 @@ REPO_ROOT = NEMO_RETRIEVER_ROOT.parent
 DEFAULT_TEST_CONFIG_PATH = NEMO_RETRIEVER_ROOT / "harness" / "test_configs.yaml"
 DEFAULT_NIGHTLY_CONFIG_PATH = NEMO_RETRIEVER_ROOT / "harness" / "nightly_config.yaml"
 VALID_RUN_MODES = {"batch", "inprocess", "service"}
-VALID_EVALUATION_MODES = {"recall", "beir"}
-VALID_RECALL_ADAPTERS = {"none", "page_plus_one", "financebench_json"}
-VALID_BEIR_LOADERS = {"bo10k_csv", "bo767_csv", "earnings_csv", "financebench_json", "vidore_hf"}
+VALID_EVALUATION_MODES = {"none", "audio_recall", "beir"}
+VALID_RECALL_ADAPTERS = {"none"}
+VALID_BEIR_LOADERS = {"bo10k_csv", "bo767_csv", "earnings_csv", "financebench_json", "jp20_csv", "vidore_hf"}
 VALID_BEIR_DOC_ID_FIELDS = {"pdf_basename", "pdf_page", "pdf_page_modality", "source_id", "path"}
 VALID_EMBED_MODALITIES = {"text", "image", "text_image"}
 VALID_EMBED_GRANULARITIES = {"element", "page"}
-REMOVED_HARNESS_KEYS = {"image_elements_modality"}
+VALID_OCR_LANGS = {"multi", "english"}
+# The harness should eventually integrate these pipeline storage settings directly.
+REMOVED_HARNESS_KEY_MESSAGES = {
+    "image_elements_modality": (
+        "image_elements_modality is no longer supported by the harness; use embed_modality instead"
+    ),
+    "store_images_uri": (
+        "store_images_uri is no longer supported by the harness; use the pipeline CLI store flags instead"
+    ),
+    "store_text": "store_text is no longer supported by the harness; use the pipeline CLI store flags instead",
+    "strip_base64": "strip_base64 is no longer supported by the harness; use the pipeline CLI store flags instead",
+}
+REMOVED_HARNESS_KEYS = set(REMOVED_HARNESS_KEY_MESSAGES)
+REMOVED_HARNESS_ENV_KEYS = {
+    "HARNESS_IMAGE_ELEMENTS_MODALITY": "image_elements_modality",
+    "HARNESS_STORE_IMAGES_URI": "store_images_uri",
+    "HARNESS_STORE_TEXT": "store_text",
+    "HARNESS_STRIP_BASE64": "strip_base64",
+}
 DEFAULT_NIGHTLY_SLACK_METRIC_KEYS = [
     "pages",
     "ingest_secs",
@@ -55,17 +73,20 @@ class HarnessConfig:
     dataset_dir: str
     dataset_label: str
     preset: str
-    run_mode: str = "batch"
+    run_mode: str = "inprocess"
 
     query_csv: str | None = None
     input_type: str = "pdf"
     recall_required: bool = True
-    recall_match_mode: str = "pdf_page"
+    # Audio recall fields only apply when evaluation_mode="audio_recall".
+    recall_match_mode: str = "audio_segment"
     recall_adapter: str = "none"
     audio_match_tolerance_secs: float = 2.0
     segment_audio: bool = False
     audio_split_type: str = "size"
     audio_split_interval: int = 500000
+    evaluation_mode: str = "none"
+    beir_loader: str | None = None
     video_extract_audio: bool = True
     video_extract_frames: bool = True
     video_frame_fps: float = 1.0
@@ -73,8 +94,6 @@ class HarnessConfig:
     video_frame_text_dedup: bool = True
     video_frame_text_dedup_max_dropped_frames: int = 2
     video_av_fuse: bool = True
-    evaluation_mode: str = "recall"
-    beir_loader: str | None = None
     beir_dataset_name: str | None = None
     beir_split: str = "test"
     beir_query_language: str | None = None
@@ -84,24 +103,39 @@ class HarnessConfig:
     artifacts_dir: str | None = None
     ray_address: str | None = None
     lancedb_uri: str = "lancedb"
+    lancedb_table_name: str = "nv-ingest"
     hybrid: bool = False
     embed_model_name: str = "nvidia/llama-nemotron-embed-1b-v2"
     embed_modality: str = "text"
     embed_granularity: str = "element"
+    ocr_version: str | None = None
+    ocr_lang: str | None = None
     extract_page_as_image: bool = True
     extract_infographics: bool = False
     write_detection_file: bool = False
     use_heuristics: bool = False
-    store_images_uri: str | None = None
-    store_text: bool = False
-    strip_base64: bool = True
 
     service_url: str | None = None
     service_max_concurrency: int = 8
 
+    manage_service: bool = False
+    keep_up: bool = False
+    helm_chart: str | None = None
+    helm_chart_version: str | None = None
+    helm_release: str = "nemo-retriever-harness"
+    helm_namespace: str | None = None
+    helm_values_file: str | None = None
+    helm_set: dict[str, Any] = field(default_factory=dict)
+    helm_timeout: int = 600
+    readiness_timeout: int = 600
+    helm_service_local_port: int = 7670
+    helm_bin: str = "helm"
+    helm_sudo: bool = False
+    kubectl_bin: str = "kubectl"
+    kubectl_sudo: bool = False
+
     page_elements_invoke_url: str | None = None
     ocr_invoke_url: str | None = None
-    graphic_elements_invoke_url: str | None = None
     table_structure_invoke_url: str | None = None
     embed_invoke_url: str | None = None
     caption_invoke_url: str | None = None
@@ -138,38 +172,52 @@ class HarnessConfig:
             errors.append(f"run_mode must be one of {sorted(VALID_RUN_MODES)}")
 
         if self.run_mode == "service":
-            if not self.service_url:
-                errors.append("service_url is required when run_mode='service'")
+            if not self.manage_service and not self.service_url:
+                errors.append("service_url is required when run_mode='service' and manage_service=false")
             if self.service_max_concurrency < 1:
                 errors.append("service_max_concurrency must be >= 1")
+            if self.manage_service:
+                if not str(self.helm_release).strip():
+                    errors.append("helm_release must be a non-empty string when manage_service=true")
+                if self.helm_timeout < 1:
+                    errors.append("helm_timeout must be >= 1")
+                if self.readiness_timeout < 1:
+                    errors.append("readiness_timeout must be >= 1")
+                if self.helm_service_local_port < 1:
+                    errors.append("helm_service_local_port must be >= 1")
+                if not isinstance(self.helm_set, dict):
+                    errors.append("helm_set must be a mapping/dict")
             return errors
 
         if self.evaluation_mode not in VALID_EVALUATION_MODES:
             errors.append(f"evaluation_mode must be one of {sorted(VALID_EVALUATION_MODES)}")
 
-        if self.evaluation_mode == "recall" and self.recall_required and not self.query_csv:
+        if self.evaluation_mode == "audio_recall" and self.recall_required and not self.query_csv:
             errors.append("recall_required=true requires query_csv")
 
         if self.input_type not in {"pdf", "txt", "html", "doc", "audio", "video"}:
             errors.append(f"input_type must be one of pdf/txt/html/doc/audio/video, got '{self.input_type}'")
 
-        if self.evaluation_mode == "recall":
-            if self.recall_match_mode not in {"pdf_page", "pdf_only", "audio_segment"}:
-                errors.append("recall_match_mode must be one of pdf_page/pdf_only/audio_segment")
+        if self.evaluation_mode == "audio_recall":
+            if self.input_type != "audio":
+                errors.append("evaluation_mode=audio_recall is only supported for input_type=audio")
+            else:
+                if self.recall_match_mode != "audio_segment":
+                    errors.append("recall_match_mode must be audio_segment when evaluation_mode=audio_recall")
 
-            if self.recall_adapter not in VALID_RECALL_ADAPTERS:
-                errors.append(f"recall_adapter must be one of {sorted(VALID_RECALL_ADAPTERS)}")
-            if float(self.audio_match_tolerance_secs) < 0.0:
-                errors.append("audio_match_tolerance_secs must be >= 0.0")
-            if self.audio_split_type not in {"size", "time", "frame"}:
-                errors.append("audio_split_type must be one of size/time/frame")
-            if int(self.audio_split_interval) < 1:
-                errors.append("audio_split_interval must be >= 1")
-            if float(self.video_frame_fps) <= 0.0:
-                errors.append("video_frame_fps must be > 0.0")
-            if int(self.video_frame_text_dedup_max_dropped_frames) < 0:
-                errors.append("video_frame_text_dedup_max_dropped_frames must be >= 0")
-        else:
+                if self.recall_adapter not in VALID_RECALL_ADAPTERS:
+                    errors.append(f"recall_adapter must be one of {sorted(VALID_RECALL_ADAPTERS)}")
+                if float(self.audio_match_tolerance_secs) < 0.0:
+                    errors.append("audio_match_tolerance_secs must be >= 0.0")
+                if self.audio_split_type not in {"size", "time", "frame"}:
+                    errors.append("audio_split_type must be one of size/time/frame")
+                if int(self.audio_split_interval) < 1:
+                    errors.append("audio_split_interval must be >= 1")
+                if float(self.video_frame_fps) <= 0.0:
+                    errors.append("video_frame_fps must be > 0.0")
+                if int(self.video_frame_text_dedup_max_dropped_frames) < 0:
+                    errors.append("video_frame_text_dedup_max_dropped_frames must be >= 0")
+        elif self.evaluation_mode == "beir":
             if self.beir_loader not in VALID_BEIR_LOADERS:
                 errors.append(f"beir_loader must be one of {sorted(VALID_BEIR_LOADERS)}")
             if self.beir_doc_id_field not in VALID_BEIR_DOC_ID_FIELDS:
@@ -196,6 +244,16 @@ class HarnessConfig:
         if self.embed_granularity not in VALID_EMBED_GRANULARITIES:
             errors.append(f"embed_granularity must be one of {sorted(VALID_EMBED_GRANULARITIES)}")
 
+        if self.ocr_version is not None and self.ocr_version not in {"v1", "v2"}:
+            errors.append("ocr_version must be one of ['v1', 'v2'] when provided")
+        if self.ocr_lang is not None and self.ocr_lang not in VALID_OCR_LANGS:
+            errors.append(f"ocr_lang must be one of {sorted(VALID_OCR_LANGS)} when provided")
+        if self.ocr_version == "v1" and self.ocr_lang is not None:
+            errors.append("ocr_lang is only supported when ocr_version='v2'")
+
+        if not str(self.lancedb_table_name).strip():
+            errors.append("lancedb_table_name must be a non-empty string")
+
         _ZERO_ALLOWED_WORKERS = {f for f in TUNING_FIELDS if f.endswith("_workers")} if self.use_heuristics else set()
         for name in TUNING_FIELDS:
             val = getattr(self, name)
@@ -217,6 +275,40 @@ def _parse_number(value: str) -> int | float:
     if "." in value:
         return float(value)
     return int(value)
+
+
+def _parse_scalar(value: str) -> Any:
+    low = str(value).strip().lower()
+    if low in {"true", "false"}:
+        return _parse_bool(value)
+    if low in {"null", "none"}:
+        return None
+    return value
+
+
+def _parse_helm_set_items(items: list[str] | None) -> dict[str, Any]:
+    parsed: dict[str, Any] = {}
+    for item in items or []:
+        if "=" not in item:
+            raise ValueError(f"Helm override must be KEY=VALUE, got: {item}")
+        key, raw_val = item.split("=", 1)
+        key = key.strip()
+        if not key:
+            raise ValueError(f"Invalid Helm override key in: {item}")
+        parsed[key] = _parse_scalar(raw_val.strip())
+    return parsed
+
+
+def _parse_helm_set_env(value: str) -> dict[str, Any]:
+    stripped = str(value).strip()
+    if not stripped:
+        return {}
+    if stripped.startswith("{"):
+        parsed = yaml.safe_load(stripped)
+        if not isinstance(parsed, dict):
+            raise ValueError("HARNESS_HELM_SET must be a mapping when provided as YAML/JSON")
+        return parsed
+    return _parse_helm_set_items([part.strip() for part in stripped.split(",") if part.strip()])
 
 
 def _resolve_config_path(config_file: str | None, default_path: Path) -> Path:
@@ -292,8 +384,9 @@ def _resolve_query_csv_path(value: str | None, *, config_path: Path) -> str | No
 
 
 def _apply_env_overrides(config_dict: dict[str, Any]) -> None:
-    if os.getenv("HARNESS_IMAGE_ELEMENTS_MODALITY") not in {None, ""}:
-        raise ValueError("image_elements_modality is no longer supported by the harness; use embed_modality instead")
+    for env_key, removed_key in REMOVED_HARNESS_ENV_KEYS.items():
+        if os.getenv(env_key) not in {None, ""}:
+            raise ValueError(REMOVED_HARNESS_KEY_MESSAGES[removed_key])
 
     env_map: dict[str, tuple[str, Any]] = {
         "HARNESS_DATASET": ("dataset", str),
@@ -328,23 +421,37 @@ def _apply_env_overrides(config_dict: dict[str, Any]) -> None:
         "HARNESS_ARTIFACTS_DIR": ("artifacts_dir", str),
         "HARNESS_RAY_ADDRESS": ("ray_address", str),
         "HARNESS_LANCEDB_URI": ("lancedb_uri", str),
+        "HARNESS_LANCEDB_TABLE_NAME": ("lancedb_table_name", str),
         "HARNESS_HYBRID": ("hybrid", _parse_bool),
         "HARNESS_EMBED_MODEL_NAME": ("embed_model_name", str),
         "HARNESS_EMBED_MODALITY": ("embed_modality", str),
         "HARNESS_EMBED_GRANULARITY": ("embed_granularity", str),
+        "HARNESS_OCR_VERSION": ("ocr_version", str),
+        "HARNESS_OCR_LANG": ("ocr_lang", str),
         "HARNESS_EXTRACT_PAGE_AS_IMAGE": ("extract_page_as_image", _parse_bool),
         "HARNESS_EXTRACT_INFOGRAPHICS": ("extract_infographics", _parse_bool),
         "HARNESS_WRITE_DETECTION_FILE": ("write_detection_file", _parse_bool),
         "HARNESS_USE_HEURISTICS": ("use_heuristics", _parse_bool),
-        "HARNESS_STORE_IMAGES_URI": ("store_images_uri", str),
-        "HARNESS_STORE_TEXT": ("store_text", _parse_bool),
-        "HARNESS_STRIP_BASE64": ("strip_base64", _parse_bool),
         "HARNESS_SERVICE_URL": ("service_url", str),
         "HARNESS_SERVICE_MAX_CONCURRENCY": ("service_max_concurrency", _parse_number),
+        "HARNESS_MANAGE_SERVICE": ("manage_service", _parse_bool),
+        "HARNESS_KEEP_UP": ("keep_up", _parse_bool),
+        "HARNESS_HELM_CHART": ("helm_chart", str),
+        "HARNESS_HELM_CHART_VERSION": ("helm_chart_version", str),
+        "HARNESS_HELM_RELEASE": ("helm_release", str),
+        "HARNESS_HELM_NAMESPACE": ("helm_namespace", str),
+        "HARNESS_HELM_VALUES_FILE": ("helm_values_file", str),
+        "HARNESS_HELM_SET": ("helm_set", _parse_helm_set_env),
+        "HARNESS_HELM_TIMEOUT": ("helm_timeout", _parse_number),
+        "HARNESS_READINESS_TIMEOUT": ("readiness_timeout", _parse_number),
+        "HARNESS_HELM_SERVICE_LOCAL_PORT": ("helm_service_local_port", _parse_number),
+        "HARNESS_HELM_BIN": ("helm_bin", str),
+        "HARNESS_HELM_SUDO": ("helm_sudo", _parse_bool),
+        "HARNESS_KUBECTL_BIN": ("kubectl_bin", str),
+        "HARNESS_KUBECTL_SUDO": ("kubectl_sudo", _parse_bool),
         "HARNESS_API_KEY": ("api_key", str),
         "HARNESS_PAGE_ELEMENTS_INVOKE_URL": ("page_elements_invoke_url", str),
         "HARNESS_OCR_INVOKE_URL": ("ocr_invoke_url", str),
-        "HARNESS_GRAPHIC_ELEMENTS_INVOKE_URL": ("graphic_elements_invoke_url", str),
         "HARNESS_TABLE_STRUCTURE_INVOKE_URL": ("table_structure_invoke_url", str),
         "HARNESS_EMBED_INVOKE_URL": ("embed_invoke_url", str),
         "HARNESS_CAPTION_INVOKE_URL": ("caption_invoke_url", str),
@@ -371,7 +478,7 @@ def _parse_cli_overrides(overrides: list[str] | None) -> dict[str, Any]:
         if not key:
             raise ValueError(f"Invalid override key in: {item}")
         if key in REMOVED_HARNESS_KEYS:
-            raise ValueError(f"{key} is no longer supported by the harness; use embed_modality instead")
+            raise ValueError(REMOVED_HARNESS_KEY_MESSAGES[key])
 
         low = raw_val.lower()
         if low in {"true", "false"}:
@@ -392,6 +499,7 @@ def load_harness_config(
     sweep_overrides: dict[str, Any] | None = None,
     cli_overrides: list[str] | None = None,
     cli_recall_required: bool | None = None,
+    cli_helm_set: list[str] | None = None,
 ) -> HarnessConfig:
     config_path = _resolve_config_path(config_file, DEFAULT_TEST_CONFIG_PATH)
     yaml_cfg = _read_yaml_mapping(config_path)
@@ -439,6 +547,10 @@ def load_harness_config(
     merged.update(preset_values)
     merged.update({k: v for k, v in sweep_data.items() if k not in {"dataset", "preset"}})
     merged.update(cli_override_map)
+    if cli_helm_set:
+        helm_set = dict(merged.get("helm_set") or {})
+        helm_set.update(_parse_helm_set_items(cli_helm_set))
+        merged["helm_set"] = helm_set
     if cli_recall_required is not None:
         merged["recall_required"] = cli_recall_required
     _apply_env_overrides(merged)
@@ -452,6 +564,9 @@ def load_harness_config(
     if merged.get("artifacts_dir") is not None:
         merged["artifacts_dir"] = _resolve_path_like(str(merged["artifacts_dir"]), REPO_ROOT)
 
+    if merged.get("helm_values_file") is not None:
+        merged["helm_values_file"] = _resolve_path_like(str(merged["helm_values_file"]), config_path.parent)
+
     if merged.get("lancedb_uri") is None:
         merged["lancedb_uri"] = "lancedb"
 
@@ -459,9 +574,13 @@ def load_harness_config(
     merged["preset"] = str(merged.get("preset") or "single_gpu")
     if merged.get("evaluation_mode") == "beir" and merged.get("beir_dataset_name") is None:
         merged["beir_dataset_name"] = merged["dataset_label"]
+    if merged.get("evaluation_mode") != "beir":
+        merged["beir_loader"] = None
+        merged["beir_dataset_name"] = None
+        merged["beir_query_language"] = None
     for removed_key in sorted(REMOVED_HARNESS_KEYS):
         if removed_key in merged:
-            raise ValueError(f"{removed_key} is no longer supported by the harness; use embed_modality instead")
+            raise ValueError(REMOVED_HARNESS_KEY_MESSAGES[removed_key])
 
     if "query_csv" not in merged:
         merged["query_csv"] = None

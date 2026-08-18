@@ -1,74 +1,473 @@
-# Retriever CLI — Replacement Examples for `nv-ingest-cli`
+# Retriever CLI
 
-This folder contains `retriever` command-line examples that deliver the same
-end-user outcomes as the `nv-ingest-cli` examples in
-`nv-ingest/docs/`, `nv-ingest/api/`, `nv-ingest/client/`, and `nv-ingest/deploy/`.
+This page describes the public `retriever` command-line workflow for document
+ingest and retrieval.
 
-The original `nv-ingest-cli` documentation is **not removed** — these files sit
-alongside it as a new-CLI counterpart you can link to or migrate to.
+For product-facing examples, prefer these commands:
 
-## Key shape difference
+- `retriever ingest` - ingest supported documents and media into a Retriever index.
+- `retriever query` - query a local LanceDB table written by local or batch ingest.
+- `retriever query service` - query a Retriever service deployment.
+- `retriever harness run` - run a named, code-owned benchmark.
+- `retriever service` - operate a Retriever service deployment.
 
-`nv-ingest-cli` is a **single command that talks to a running REST service on
-`localhost:7670`** and composes work via repeated `--task extract|split|caption|embed|dedup|filter|udf`.
+Format names and internal stages are not root commands. Use `retriever ingest`
+for PDF, HTML, TXT, image, Office, audio, and video inputs; it owns extraction,
+embedding, and index creation as one workflow.
 
-`retriever` is a **multi-subcommand Typer app**. Most of the old CLI examples
-map to `retriever pipeline run INPUT_PATH`, which runs the graph pipeline
-locally (in-process or via Ray) and writes results to LanceDB and, optionally,
-to Parquet / object storage. Other subcommands cover focused tasks:
+## Public ingest shape
 
-| Old intent | New subcommand |
-|------------|----------------|
-| Extract + embed + store a batch of documents | `retriever pipeline run` |
-| Run an ad-hoc PDF extraction stage | `retriever pdf stage` |
-| Run an HTML / text / audio / chart stage | `retriever html run`, `retriever txt run`, `retriever audio extract`, `retriever chart run` |
-| Upload stage output to LanceDB | `retriever vector-store stage` |
-| Query LanceDB + compute recall@k | `retriever recall vdb-recall` |
-| Run a QA evaluation sweep | `retriever eval run` |
-| Serve / submit to the online REST API | `retriever online serve` / `retriever online stream-pdf` |
-| Benchmark stage throughput | `retriever benchmark {split,extract,audio-extract,page-elements,ocr,all}` |
-| Benchmark orchestration | `retriever harness {run,sweep,nightly,summary,compare}` |
+`retriever ingest` defaults to local, in-process ingest:
 
-## Contents
+```bash
+retriever ingest DOCUMENTS...
+```
 
-| New file | Replaces example(s) in |
-|----------|------------------------|
-| [`retriever_cli.md`](retriever_cli.md) | `nv-ingest/docs/docs/extraction/nv-ingest_cli.md` and the rebranded mirror `cli-reference.md` |
-| [`quickstart.md`](quickstart.md) | `nv-ingest/docs/docs/extraction/quickstart-guide.md` (the `nv-ingest-cli` section) |
-| [`pdf-split-tuning.md`](pdf-split-tuning.md) | `nv-ingest/docs/docs/extraction/v2-api-guide.md` (CLI example) |
-| [`smoke-test.md`](smoke-test.md) | `nv-ingest/api/api_tests/smoke_test.sh` |
-| [`cli-client-usage.md`](cli-client-usage.md) | `nv-ingest/client/client_examples/examples/cli_client_usage.ipynb` |
-| [`pdf-blueprint.md`](pdf-blueprint.md) | `nv-ingest/deploy/pdf-blueprint.ipynb` (CLI cell) |
-| [`benchmarking.md`](benchmarking.md) | `nv-ingest/docs/docs/extraction/benchmarking.md` and `nv-ingest/tools/harness/README.md` |
+Explicit modes are also available:
 
-## Gaps with no retriever-CLI equivalent (kept out of this folder)
+```bash
+retriever ingest local DOCUMENTS...
+retriever ingest batch DOCUMENTS...
+retriever ingest service DOCUMENTS...
+```
 
-The following `nv-ingest-cli` examples are **not** migrated here because the
-new CLI does not yet expose an equivalent — continue to use `nv-ingest-cli`
-for these cases:
+The root ingest CLI uses subcommands instead of a `--run-mode` flag. Choose
+the command that matches where ingest runs and where results are stored.
 
-- `--task 'udf:{…}'` — user-defined functions
-  (`nemo_retriever/src/nemo_retriever/graph/README.md`,
-  `nv-ingest/examples/udfs/README.md`). `retriever` does not expose UDFs.
-- `--task 'filter:{content_type:"image", min_size:…, min_aspect_ratio:…, max_aspect_ratio:…}'`.
-  The image scale/aspect-ratio filter stage is not reproduced in the new CLI.
-- Bare service submission (`nv-ingest-cli --doc foo.pdf` with no extract tasks
-  and full content-type metadata returned by the service). `retriever online submit`
-  is currently a stub — only `retriever online stream-pdf` is implemented.
-- `gen_dataset.py` dataset creation with enumeration and sampling.
-- `--collect_profiling_traces --zipkin_host --zipkin_port`. Use
-  `--runtime-metrics-dir` / `--runtime-metrics-prefix` instead for a different
-  metrics flavor.
+| Command | What It Does | Writes To | Use When |
+|---|---|---|---|
+| `retriever ingest ...` | Local in-process ingest | local LanceDB | Default local ingest and CI/small corpus runs. |
+| `retriever ingest local ...` | Local in-process ingest | local LanceDB | Same as the default, but explicit. |
+| `retriever ingest batch ...` | Ray-backed batch ingest | local LanceDB | Larger or batch-tuned runs. |
+| `retriever ingest service ...` | Sends documents to a Retriever service | service-configured storage | Remote service ingest. |
 
-## Conventions used in the examples
+This separation keeps invalid flag combinations out of the parser. For example,
+service ingest does not expose LanceDB target flags, Ray tuning, local endpoint
+configuration, local embed backend selection, or local media controls.
 
-- Input paths assume you invoke `retriever` from the `nv-ingest/nemo_retriever`
-  directory (or point at absolute paths).
-- `--save-intermediate <dir>` writes the extraction DataFrame as Parquet for
-  inspection. LanceDB output goes to `--lancedb-uri` (defaults to `./lancedb`).
-- `--store-images-uri <uri>` stores extracted images to a local path or an
-  fsspec URI (e.g. `s3://bucket/prefix`).
-- `--run-mode inprocess` skips Ray and is ideal for single-file demos and CI;
-  `--run-mode batch` (the default) uses Ray Data for throughput.
+<!-- --8<-- [start:quickstart] -->
 
-Run `retriever pipeline run --help` for the authoritative flag list.
+> Use `retriever ingest` and `retriever query` for product-facing workflows.
+> Use `retriever harness run` only for benchmark execution.
+
+## Quick start
+
+### Ingest a PDF locally
+
+```bash
+retriever ingest ./data/multimodal_test.pdf
+```
+
+Then query the default LanceDB table:
+
+```bash
+retriever query "What is in this document?"
+```
+
+By default, local ingest auto-detects supported input formats and writes to
+`lancedb/nemo-retriever`; `retriever query` reads from the same table. Use
+explicit high-level options when a task needs behavior beyond the current ingest
+defaults.
+
+The plain `retriever query` examples below apply to local and batch ingest output
+written to LanceDB. Use `retriever query service` to query a Retriever service.
+
+### Ingest a larger corpus with batch mode
+
+```bash
+retriever ingest batch ./data/pdf_corpus \
+  --profile fast-text \
+  --pdf-extract-workers 4 \
+  --embed-workers 2
+```
+
+Batch mode exposes Ray runtime and batch tuning flags such as `--ray-address`,
+`--pdf-extract-workers`, `--ocr-workers`, and `--embed-workers`.
+
+### Ingest through a Retriever service
+
+```bash
+retriever ingest service ./data/pdf_corpus \
+  --service-url http://localhost:7670 \
+  --service-concurrency 8
+```
+
+Use `--service-api-token` or `NEMO_RETRIEVER_API_TOKEN` when the service requires
+a bearer token. Service ingest does not expose `--lancedb-uri`; the service
+configures its vector database. Query the service with:
+
+```bash
+retriever query service "What is in this corpus?" \
+  --service-url http://localhost:7670
+```
+
+### Route ingest to hosted or self-hosted NIM endpoints
+
+```bash
+export NVIDIA_API_KEY=nvapi-...
+
+retriever ingest ./data/multimodal_test.pdf \
+  --page-elements-invoke-url https://ai.api.nvidia.com/v1/cv/nvidia/nemotron-page-elements-v3 \
+  --ocr-invoke-url https://ai.api.nvidia.com/v1/cv/nvidia/nemotron-ocr-v2 \
+  --table-structure-invoke-url https://ai.api.nvidia.com/v1/cv/nvidia/nemotron-table-structure-v1 \
+  --embed-invoke-url https://integrate.api.nvidia.com/v1/embeddings \
+  --embed-model-name nvidia/llama-nemotron-embed-1b-v2
+```
+
+`NVIDIA_API_KEY` is required only when those URLs point at hosted
+build.nvidia.com endpoints. `NGC_API_KEY` is used separately when pulling or
+running self-hosted NIM containers.
+
+For NVIDIA inference hub rerank models that expose the Cohere-style rerank
+route, pass the full `/v1/rerank` URL and the model name shown in the hub
+snippet:
+
+```bash
+export NGC_INFERENCE_API_KEY=...
+
+retriever query "What is in this document?" \
+  --embed-invoke-url https://integrate.api.nvidia.com/v1/embeddings \
+  --embed-model-name nvidia/llama-nemotron-embed-1b-v2 \
+  --reranker-invoke-url https://inference-api.nvidia.com/v1/rerank \
+  --reranker-model-name nvidia/nvidia/llama-3.2-nv-rerankqa-1b-v2 \
+  --reranker-api-key-env NGC_INFERENCE_API_KEY
+```
+
+### Query result controls
+
+Both `retriever query` and `retriever query service` return compact JSON hits
+with `source`, `page_number`, and `text`. Use `--candidate-k`, `--page-dedup`,
+and `--content-types` to control how results are selected after vector
+retrieval:
+
+```bash
+retriever query "annual revenue by region" \
+  --top-k 5 \
+  --candidate-k 40 \
+  --content-types table
+```
+
+`--top-k` is the final number of results to return after filtering and
+deduplication. `--candidate-k` is the number of raw results to retrieve from
+LanceDB or the Retriever service before filtering, page deduplication, and
+final truncation. If omitted, the candidate pool is the same size as
+`--top-k`. Set `--candidate-k` larger than `--top-k` when page deduplication
+or content-type filtering might remove too many of the nearest retrieved rows.
+It must always be greater than or equal to `--top-k`.
+
+Page deduplication and content-type filtering are applied after vector
+retrieval, preserving retriever ranking order and truncating the final output to
+`--top-k`. Local and batch ingest record the canonical embedding model on the
+LanceDB table, and non-service query uses that model automatically. Use
+`--embed-model-name` only as an explicit override or when querying a legacy or
+third-party table without model metadata. Endpoint URLs and provider prefixes
+remain runtime configuration, so continue to pass `--embed-invoke-url` and
+`--embed-model-provider-prefix` when the selected model must be routed remotely.
+For example, a table can store the canonical model
+`nvidia/llama-nemotron-embed-vl-1b-v2` while a LiteLLM-routed request uses
+`nvidia/nvidia/llama-nemotron-embed-vl-1b-v2`. The endpoint and routing prefix
+are intentionally not persisted on the table.
+
+`--content-types` accepts comma-separated content types such as `text`, `table`,
+`chart`, `image`, and `infographic`. `images` is accepted as an alias for
+captioned image rows emitted by ingest. This option filters by content-type
+metadata only; it does not filter by source, page, or other metadata
+predicates. Hits with missing or unknown content-type metadata are excluded
+while `--content-types` is active. In service mode, results must include
+content-type metadata to match this filter. Default display values in the JSON
+output are not used for content-type matching.
+
+### Agentic retrieval
+
+`--agentic` swaps the single dense pass for an LLM-driven ReAct loop: the agent
+issues several retrieval sub-queries, fuses the candidates, and selects a final
+ranking. It searches the same LanceDB table built by `retriever ingest`, so it is
+a drop-in alternative to standard retrieval.
+
+By default, agentic retrieval runs the agent LLM in process with local vLLM and
+`nemotron-8b` (`nvidia/Llama-3.1-Nemotron-Nano-8B-v1`). This requires a CUDA GPU
+host and the local extras installed. Provide `--agentic-invoke-url` when you want
+a custom model or a separately hosted OpenAI-compatible endpoint.
+
+```bash
+# default local vLLM agent LLM: nemotron-8b
+retriever query "how does the ingestion pipeline handle tables?" \
+  --agentic
+
+# custom/self-hosted model through an OpenAI-compatible endpoint
+retriever query "summarize the deployment options" \
+  --agentic \
+  --agentic-llm-model custom-remote-model \
+  --agentic-invoke-url http://localhost:9000/v1/chat/completions \
+  --embed-invoke-url http://localhost:8000/v1 \
+  --agentic-react-max-steps 5
+```
+
+Unlike the dense path (which returns text-enriched hits), agentic mode returns
+the agent's ranked document IDs as JSON, each annotated with the source that
+produced it (`final_results`, `rrf`, or `selection_agent`). It reuses the same
+`--top-k`, `--lancedb-uri`, `--table-name`, `--embed-invoke-url`, and
+`--embed-model-name` options as standard retrieval. Agentic retrieval uses the
+selected table's model automatically when `--embed-model-name` is omitted.
+
+**How it works.** Each agentic query runs `Query -> ReActAgentOperator -> (RRF
+fusion) -> SelectionAgentOperator -> ranked results`:
+
+- `ReActAgentOperator` runs the per-query ReAct loop; every `retrieve` tool call
+  delegates to the standard `Retriever`, so the agent searches the same vector
+  DB and embedding config as dense retrieval.
+- `RRFAggregatorOperator` fuses candidates from the loop's multiple searches with
+  reciprocal rank fusion.
+- `SelectionAgentOperator` runs a final LLM selection pass over the fused set and
+  emits the ranked document IDs.
+
+Agentic-only knobs (apply only with `--agentic`):
+
+- `--agentic-llm-model` — local profile alias/model ID when no invoke URL is
+  provided (`nemotron-8b` by default; `super-49b` also supported), or the remote
+  model ID when `--agentic-invoke-url` is provided.
+- `--agentic-local-tensor-parallel-size` (default `1`) — vLLM
+  `tensor_parallel_size` for the in-process agent LLM. Use `2+` with matching
+  `CUDA_VISIBLE_DEVICES` for multi-GPU local profiles (for example
+  `super-49b`). Ignored when `--agentic-invoke-url` is set. When the first
+  `tensor_parallel_size` CUDA-visible GPUs are not NVLink-connected (typical
+  dual-GPU PCIe workstations), tensor-parallel startup automatically sets
+  `NCCL_NVLS_ENABLE=0` and `TORCH_SYMM_MEM_DISABLE_MULTICAST=1`, because NVLink
+  multicast collectives abort vLLM startup there; set either variable yourself
+  to override. Detection is scoped to that TP device group, not the whole host
+  or extra visible GPUs outside the shard.
+- `--agentic-invoke-url` — OpenAI-compatible chat-completions endpoint for the
+  agent LLM. Providing it routes agent LLM calls to that remote endpoint; omit it
+  to run the in-process local model.
+- `--agentic-llm-client` (optional) — LLM client that builds the agent LLM.
+  Defaults to `callable`. It drives the in-process
+  adapter when `--agentic-invoke-url` is omitted, and the shared chat-completions
+  HTTP client when it is set.
+- `--agentic-reasoning-effort` (default `high`) — `reasoning_effort` forwarded on
+  OpenAI-compatible agentic LLM calls; ignored by the local adapter.
+- `--agentic-react-max-steps` (default `50`) — maximum ReAct loop iterations.
+- `--agentic-text-truncation` (default `0`) — max characters of each candidate
+  shown to the agent; `0` disables truncation.
+- `--agentic-temperature` (default: unset) — sampling temperature for agent LLM
+  calls; omit to use the endpoint/model default (`0.0` = greedy). Local and
+  non-NVIDIA OpenAI-compatible endpoints allow up to `2.0`; NVIDIA-hosted
+  endpoints allow up to `1.0`.
+
+<!-- --8<-- [end:quickstart] -->
+
+## Common ingest options
+
+### Local and batch ingest
+
+These options apply to `retriever ingest`, `retriever ingest local`, and
+`retriever ingest batch` unless otherwise noted.
+
+| Option | Default | Notes |
+|---|---|---|
+| `DOCUMENTS...` | required | Files, directories, or shell globs. Supported file families are detected automatically. |
+| `--profile` | `auto` | `auto` is normal manifest-routed ingest. `fast-text` is a PDF/document text-only profile for faster fallback ingest. |
+| `--lancedb-uri` | `lancedb` | LanceDB database URI. |
+| `--table-name` | `nemo-retriever` | LanceDB table name. Must match query-time storage flags. |
+| `--overwrite/--append` | overwrite | Overwrite the table by default; use `--append` to add rows. |
+| `--index-mode` | `dense` | Dense vector index by default; `hybrid` also builds BM25/FTS and `sparse` builds an FTS-only table. |
+| `--method` | planner default | PDF extraction method such as `pdfium` or `nemotron_parse`. |
+| `--extract-text`, `--extract-tables`, `--extract-charts` | planner default | Enable or disable extraction families. |
+| `--ocr-version` | planner default | OCR engine version for local extraction. |
+| `--ocr-lang` | planner default | OCR v2 language selector for local extraction. |
+| `--caption` | off | Add a captioning stage. |
+| `--caption-model-name` | `nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16` | Local vLLM caption model. The default has approximately 62 GiB of BF16 weights. On a dedicated 80 GB GPU, its local profile reserves `0.95` of GPU memory for vLLM model and KV-cache use. Nano models retain the `0.5` profile default and remain available as explicit overrides. For remote endpoints, pass the endpoint API model ID. |
+| `--caption-gpu-memory-utilization` | model profile | Fraction of a local caption GPU that vLLM can reserve. The Omni BF16 profile defaults to `0.95`; other local caption profiles default to `0.5`. Use this option only with `--caption` and local vLLM captioning. |
+| `--dedup` | off | Add image deduplication before captioning and embedding. |
+| `--text-chunk` | off | Enable token chunking during extraction. |
+| `--store-images-uri` | unset | Store extracted images at a local path or fsspec-compatible URI. |
+| `--dry-run` | off | Print the resolved ingest plan without creating an ingestor. |
+| `--quiet/--no-quiet` | quiet | Suppress verbose progress output by default. |
+
+Batch-only options include `--ray-address`, `--ray-log-to-driver`,
+`--pdf-split-batch-size`, `--pdf-extract-workers`, `--ocr-workers`,
+`--table-structure-workers`, `--nemotron-parse-workers`, `--embed-workers`, and
+related batch-size / CPU / GPU tuning flags.
+
+### Service ingest
+
+`retriever ingest service` exposes only service-supported request controls.
+It does not expose LanceDB target flags, Ray tuning, local endpoint URLs/API
+keys, local embed backend selection, `--ocr-lang`, or local audio/video media
+controls.
+
+| Option | Default | Notes |
+|---|---|---|
+| `DOCUMENTS...` | required | Files, directories, or shell globs sent to the service client. |
+| `--service-url` | `http://localhost:7670` | Retriever service base URL. |
+| `--service-concurrency` | `8` | Maximum concurrent document uploads. |
+| `--service-api-token` | env fallback | Bearer token; also reads `NEMO_RETRIEVER_API_TOKEN`. |
+| `--profile` | `auto` | Same profile names as local and batch ingest where supported. |
+| `--caption`, `--dedup`, `--text-chunk` | off | Service-supported ingest controls. |
+| `--store-images-uri` | unset | Service-accessible image storage URI. |
+| `--dry-run` | off | Print the resolved service ingest request. Tokens are redacted. |
+
+## Examples
+
+### Custom LanceDB location
+
+```bash
+retriever ingest ./data/multimodal_test.pdf \
+  --lancedb-uri ./my-lancedb \
+  --table-name my-corpus
+```
+
+```bash
+retriever query "What is in this document?" \
+  --lancedb-uri ./my-lancedb \
+  --table-name my-corpus
+```
+
+### Fast text-only PDF fallback
+
+```bash
+retriever ingest ./data/pdf_corpus \
+  --profile fast-text \
+  --embed-model-name nvidia/llama-nemotron-embed-1b-v2
+```
+
+### Dense Nemotron embedding checkpoints
+
+`--embed-model-name` accepts a Hugging Face repository ID or an on-disk
+checkpoint compatible with a supported dense Nemotron text or vision-language
+embedding profile:
+
+```bash
+retriever ingest ./data/pdf_corpus \
+  --embed-model-name acme/my-finetuned-nemotron-embed
+```
+
+Tested official checkpoints:
+
+- `nvidia/llama-3.2-nv-embedqa-1b-v2`
+- `nvidia/llama-nemotron-embed-1b-v2`
+- `nvidia/llama-nemotron-embed-vl-1b-v2`
+- `nvidia/llama-nemotron-embed-vl-1b-v2-fp8`
+- `nvidia/llama-nv-embed-reasoning-3b`
+- `nvidia/llama-embed-nemotron-8b`
+
+Equivalent local checkpoints and weight-only fine-tunes are supported. A
+compatible checkpoint must be complete and loadable, use
+`LlamaBidirectionalModel` or `LlamaNemotronVLModel`, and declare average
+pooling with a positive output width. LanceDB infers the schema from the
+produced vectors; the tested official checkpoints use 2048, 3072, and 4096
+dimensions. Query and document prompts are read from
+`config_sentence_transformers.json` when the checkpoint supplies it.
+Fine-tunes that require prefixes other than `query: ` and `passage: ` must
+retain that prompt metadata.
+
+This does not add support for every model in the Nemotron RAG collection,
+including rerankers, ColEmbed late-interaction models, Omni Embed, OCR, or
+parsing models. Nemotron 3 Embed is also excluded because its Ministral3
+architecture requires a newer Transformers stack than this project currently
+supports. Those models require different dependencies, outputs, modalities,
+or operator contracts.
+
+Unregistered Hub repositories are resolved to an immutable commit and loaded
+with `trust_remote_code=True`; only use repositories you trust. The resolved
+model name and revision are recorded on the LanceDB table and reused by local
+query.
+
+For a compatible ModelOpt checkpoint, including FP8 or NVFP4 variants, select
+vLLM for ingest. Local query detects the ModelOpt configuration and selects
+vLLM automatically:
+
+```bash
+retriever ingest ./data/pdf_corpus \
+  --embed-model-name /models/my-finetuned-nemotron-embed-fp8 \
+  --local-ingest-embed-backend vllm
+
+retriever query "What is in this corpus?" \
+  --table-name nemo-retriever
+```
+
+Hugging Face remains the local query backend for non-ModelOpt checkpoints.
+Local directories must contain `config.json`, and their absolute path must be
+available to every Ray worker or service replica that loads the model.
+
+### PDF extraction method
+
+Use `--method` to select how the CLI extracts text from PDF pages. The default
+method is `pdfium`.
+
+- `pdfium` extracts native PDF text. It does not use OCR as a fallback for
+  scanned-page text.
+- `pdfium_hybrid` extracts native PDF text and uses OCR as a fallback for
+  scanned pages.
+- `ocr` uses OCR for PDF page text.
+- `nemotron_parse` uses the Nemotron Parse extraction path.
+
+For example, select hybrid extraction for a PDF that contains scanned pages:
+
+```bash
+retriever ingest ./data/scanned.pdf \
+  --method pdfium_hybrid
+```
+
+`--ocr-version` and `--ocr-lang` configure the local OCR engine when an enabled
+stage uses OCR. These options do not select a PDF extraction method.
+
+### OCR language mode
+
+```bash
+retriever ingest ./data/multimodal_test.pdf \
+  --ocr-version v2 \
+  --ocr-lang english
+```
+
+For mixed-script documents, use `--ocr-lang multi` where supported by the local
+OCR engine.
+
+### Text chunking
+
+```bash
+retriever ingest ./data/test.pdf \
+  --text-chunk \
+  --text-chunk-max-tokens 512 \
+  --text-chunk-overlap-tokens 64
+```
+
+### Captioning and image storage
+
+```bash
+retriever ingest ./data/test.pdf \
+  --caption \
+  --caption-invoke-url https://integrate.api.nvidia.com/v1/chat/completions \
+  --api-key "${NVIDIA_API_KEY}" \
+  --store-images-uri ./processed_docs/images
+```
+
+For local Hugging Face Omni BF16 captioning, use a dedicated GPU. The default
+profile reserves `0.95` of GPU memory so that vLLM can allocate both the model
+and its KV cache. Override that reservation when your deployment requires it:
+
+```bash
+retriever ingest ./data/test.png \
+  --caption \
+  --caption-gpu-memory-utilization 0.95
+```
+
+An 80 GB requirement for a self-hosted Omni NIM does not by itself establish
+that direct local Hugging Face vLLM inference has sufficient KV-cache capacity.
+
+## Results and diagnostics
+
+Local and batch ingest report the number of input files and LanceDB rows written:
+
+```text
+Ingested 20 file(s) -> 1884 row(s) in LanceDB lancedb/nemo-retriever.
+```
+
+Service ingest reports the row count returned by the service result when
+available:
+
+```text
+Ingested 20 file(s) -> 1940 row(s) through retriever service http://localhost:7670.
+```
+
+Use `--dry-run` on any ingest mode to inspect the resolved request without
+creating an ingestor or contacting the service.

@@ -11,45 +11,91 @@ from functools import partial
 from typing import cast
 from typing import Any
 
-from nemo_retriever.caption.caption import CaptionActor
-from nemo_retriever.audio import ASRActor
-from nemo_retriever.audio import MediaChunkActor
-from nemo_retriever.chart.chart_detection import GraphicElementsActor
-from nemo_retriever.dedup.dedup import dedup_images
+from nemo_retriever.operators.extract.caption.caption import CaptionActor
+from nemo_retriever.operators.extract.audio.asr_actor import ASRActor
+from nemo_retriever.operators.extract.audio.chunk_actor import MediaChunkActor
+from nemo_retriever.operators.dedup import dedup_images
 from nemo_retriever.graph import Graph, StoreOperator, UDFOperator, WebhookNotifyOperator
-from nemo_retriever.graph.content_transforms import (
+from nemo_retriever.common.modality.content_transforms import (
     _CONTENT_COLUMNS,
     collapse_content_to_page_rows,
     explode_content_to_rows,
 )
-from nemo_retriever.graph.multi_type_extract_operator import MultiTypeExtractOperator
-from nemo_retriever.text_embed.operators import _BatchEmbedActor
-from nemo_retriever.video import (
-    AudioVisualFuser,
-    VideoFrameOCRActor,
-    VideoFrameTextDedup,
-    VideoSplitActor,
-)
-from nemo_retriever.ocr.ocr import resolve_ocr_archetype
-from nemo_retriever.parse.nemotron_parse import NemotronParseActor
-from nemo_retriever.page_elements.page_elements import PageElementDetectionActor
-from nemo_retriever.table.table_detection import TableStructureActor
-from nemo_retriever.pdf.extract import PDFExtractionActor
-from nemo_retriever.pdf.split import PDFSplitActor
-from nemo_retriever.params import TextChunkParams, resolve_split_params
-from nemo_retriever.txt.ray_data import TextChunkActor
-from nemo_retriever.utils.convert.to_pdf import DocToPdfConversionActor
-from nemo_retriever.ingest_plans import IngestExecutionPlan
-from nemo_retriever.utils.ray_resource_hueristics import (
+from nemo_retriever.operators.graph_ops.multi_type_extract_operator import MultiTypeExtractOperator
+from nemo_retriever.operators.embed.operators import _BatchEmbedActor
+from nemo_retriever.operators.extract.video.audio_visual_fuser import AudioVisualFuser
+from nemo_retriever.operators.extract.video.ocr_actor import VideoFrameOCRActor
+from nemo_retriever.operators.extract.video.text_dedup import VideoFrameTextDedup
+from nemo_retriever.operators.extract.video.split import VideoSplitActor
+from nemo_retriever.operators.extract.ocr.ocr import resolve_ocr_archetype
+from nemo_retriever.operators.extract.parse.nemotron_parse import NemotronParseActor
+from nemo_retriever.operators.extract.page_elements.page_elements import PageElementDetectionActor
+from nemo_retriever.operators.extract.table.table_detection import TableStructureActor
+from nemo_retriever.operators.extract.pdf.extract import PDFExtractionActor, build_pdf_extraction_kwargs
+from nemo_retriever.operators.extract.pdf.split import PDFSplitActor
+from nemo_retriever.common.params import TextChunkParams, VdbUploadParams, resolve_split_params
+from nemo_retriever.operators.vdb import IngestVdbOperator
+from nemo_retriever.operators.extract.txt.ray_data import TextChunkActor
+from nemo_retriever.common.modality.convert.to_pdf import DocToPdfConversionActor
+from nemo_retriever.ingestor.plans import IngestExecutionPlan
+from nemo_retriever.common.ray_resource_hueristics import (
     ClusterResources,
     resolve_requested_plan,
 )
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_STORE_WORKERS = 4
+DEFAULT_STORE_CPUS_PER_ACTOR = 0.1
+
 
 def _batch_tuning(params: Any) -> Any:
     return getattr(params, "batch_tuning", None)
+
+
+def _local_embed_requested(params: Any) -> bool:
+    """Return whether embedding configuration explicitly requires a local actor."""
+    if params is None:
+        return False
+    endpoint = getattr(params, "embed_invoke_url", None) or getattr(params, "embedding_endpoint", None)
+    if str(endpoint or "").strip():
+        return False
+    fields_set = getattr(params, "model_fields_set", set())
+    if "local_ingest_embed_backend" in fields_set:
+        return True
+    gpu_embed = getattr(_batch_tuning(params), "gpu_embed", None)
+    return gpu_embed is not None and float(gpu_embed) > 0
+
+
+def default_concurrency_node_names(
+    extract_params: Any | None,
+    embed_params: Any | None,
+    store_params: Any | None,
+    caption_params: Any | None,
+) -> set[str]:
+    """Return pools whose concurrency came from an unspecified default."""
+    names: set[str] = set()
+    extract_tuning = _batch_tuning(extract_params)
+    if extract_params is not None:
+        worker_fields = {
+            resolve_ocr_archetype(extract_params).__name__: "ocr_workers",
+            PageElementDetectionActor.__name__: "page_elements_workers",
+            TableStructureActor.__name__: "table_structure_workers",
+            PDFExtractionActor.__name__: "pdf_extract_workers",
+            NemotronParseActor.__name__: "nemotron_parse_workers",
+        }
+        names.update(
+            name for name, field in worker_fields.items() if not _positive(getattr(extract_tuning, field, None))
+        )
+    embed_tuning = _batch_tuning(embed_params)
+    if embed_params is not None and not _positive(getattr(embed_tuning, "embed_workers", None)):
+        names.add(_BatchEmbedActor.__name__)
+    store_tuning = _batch_tuning(store_params)
+    if store_params is not None and not _positive(getattr(store_tuning, "store_workers", None)):
+        names.add(StoreOperator.__name__)
+    if caption_params is not None:
+        names.add(CaptionActor.__name__)
+    return names
 
 
 def _positive(value: Any) -> Any:
@@ -76,8 +122,9 @@ def batch_tuning_to_node_overrides(
     caption_params: Any | None = None,
     caption_gpus_per_actor: float | None = None,
     video_frame_params: Any | None = None,
+    store_params: Any | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Translate BatchTuningParams from extract/embed params into RayDataExecutor node_overrides.
+    """Translate BatchTuningParams from stage params into RayDataExecutor node_overrides.
 
     Explicit (non-zero) values from BatchTuningParams always win.  When a field
     is absent or zero, the heuristic default from ``resolve_requested_plan`` is
@@ -88,7 +135,7 @@ def batch_tuning_to_node_overrides(
     PDF extract concurrency is capped so that it cannot exhaust the cluster CPU
     budget when all other persistent actors are running simultaneously.
     """
-    auto_allow_no_gpu = bool(cluster_resources is not None and cluster_resources.available_gpu_count() == 0)
+    auto_allow_no_gpu = bool(cluster_resources is not None and cluster_resources.total_gpu_count() == 0)
     effective_allow_no_gpu = allow_no_gpu if allow_no_gpu is not None else auto_allow_no_gpu
     plan = (
         resolve_requested_plan(
@@ -126,6 +173,20 @@ def batch_tuning_to_node_overrides(
     embed_tuning = _batch_tuning(embed_params)
     embed_concurrency: int = 0
     embed_cpus: float = 1.0
+    local_caption_concurrency: int | None = None
+    local_caption_gpus_per_actor: float | None = None
+    if caption_params is not None and cluster_resources is not None:
+        caption_invoke_url = _positive(getattr(caption_params, "endpoint_url", None))
+        if not effective_allow_no_gpu and not caption_invoke_url:
+            available_gpus = max(1, int(cluster_resources.available_gpu_count()))
+            local_caption_gpus_per_actor = (
+                _resolve(caption_gpus_per_actor, plan.caption_gpus_per_actor if plan else None) or 1.0
+            )
+            # Local captioning is the visual-workload bottleneck. On DGX-class
+            # hosts, use the GPU pool for caption actors and leave one GPU's
+            # budget for downstream embedding.
+            local_caption_concurrency = 1 if available_gpus <= 1 else max(1, available_gpus - 1)
+
     if embed_params is not None:
         embed_invoke_url = _positive(getattr(embed_params, "embed_invoke_url", None))
         explicit_bs = getattr(embed_tuning, "embed_batch_size", None) if embed_tuning is not None else None
@@ -133,10 +194,25 @@ def batch_tuning_to_node_overrides(
         _set(_BatchEmbedActor.__name__, "batch_size", embed_bs)
         if embed_bs:
             overrides.setdefault(_BatchEmbedActor.__name__, {})["target_num_rows_per_block"] = embed_bs
+        explicit_embed_workers = getattr(embed_tuning, "embed_workers", None) if embed_tuning is not None else None
+        embed_workers_fallback = plan.embed_initial_actors if plan else None
+        if (
+            local_caption_concurrency is not None
+            and local_caption_gpus_per_actor is not None
+            and _positive(explicit_embed_workers) is None
+            and cluster_resources is not None
+            and plan is not None
+        ):
+            caption_gpu_budget = local_caption_concurrency * local_caption_gpus_per_actor
+            remaining_gpu_budget = max(0.0, float(cluster_resources.available_gpu_count()) - caption_gpu_budget)
+            if remaining_gpu_budget > 0 and plan.embed_gpus_per_actor > 0:
+                embed_workers_fallback = max(1, int(remaining_gpu_budget // plan.embed_gpus_per_actor))
+            else:
+                embed_workers_fallback = 1
         embed_concurrency = (
             _resolve(
-                getattr(embed_tuning, "embed_workers", None) if embed_tuning is not None else None,
-                plan.embed_initial_actors if plan else None,
+                explicit_embed_workers,
+                embed_workers_fallback,
             )
             or 0
         )
@@ -162,6 +238,8 @@ def batch_tuning_to_node_overrides(
         if effective_allow_no_gpu:
             _force_cpu_only(CaptionActor.__name__)
         elif not caption_invoke_url:
+            if local_caption_concurrency is not None:
+                overrides.setdefault(CaptionActor.__name__, {})["concurrency"] = local_caption_concurrency
             _set_gpu(
                 CaptionActor.__name__,
                 caption_gpus_per_actor,
@@ -238,46 +316,31 @@ def batch_tuning_to_node_overrides(
 
         # --- Table Structure ---
         table_structure_invoke_url = _positive(getattr(extract_params, "table_structure_invoke_url", None))
-        ts_bs = plan.table_structure_batch_size if plan else None
+        ts_bs = _positive(
+            getattr(extract_tuning, "table_structure_batch_size", None) if extract_tuning is not None else None
+        ) or (plan.table_structure_batch_size if plan else None)
         _set(TableStructureActor.__name__, "batch_size", ts_bs)
         if ts_bs:
             overrides.setdefault(TableStructureActor.__name__, {})["target_num_rows_per_block"] = ts_bs
-        ts_concurrency: int = 0
-        if table_structure_invoke_url:
-            ts_concurrency = (plan.table_structure_initial_actors if plan else None) or 2
-        else:
-            ts_concurrency = (plan.table_structure_initial_actors if plan else None) or 0
+        ts_concurrency = _resolve(
+            getattr(extract_tuning, "table_structure_workers", None) if extract_tuning is not None else None,
+            plan.table_structure_initial_actors if plan else None,
+        ) or (2 if table_structure_invoke_url else 0)
         _set(TableStructureActor.__name__, "concurrency", ts_concurrency or None)
-        _set(TableStructureActor.__name__, "num_cpus", 1)
+        ts_cpus = (
+            _resolve(
+                getattr(extract_tuning, "table_structure_cpus_per_actor", None) if extract_tuning is not None else None,
+            )
+            or 1.0
+        )
+        _set(TableStructureActor.__name__, "num_cpus", ts_cpus)
         if effective_allow_no_gpu:
             _force_cpu_only(TableStructureActor.__name__)
         elif not table_structure_invoke_url:
-            _set(
+            _set_gpu(
                 TableStructureActor.__name__,
-                "num_gpus",
+                getattr(extract_tuning, "gpu_table_structure", None) if extract_tuning is not None else None,
                 plan.table_structure_gpus_per_actor if plan else None,
-            )
-
-        # --- Graphic Elements ---
-        graphic_elements_invoke_url = _positive(getattr(extract_params, "graphic_elements_invoke_url", None))
-        ge_bs = plan.graphic_elements_batch_size if plan else None
-        _set(GraphicElementsActor.__name__, "batch_size", ge_bs)
-        if ge_bs:
-            overrides.setdefault(GraphicElementsActor.__name__, {})["target_num_rows_per_block"] = ge_bs
-        ge_concurrency: int = 0
-        if graphic_elements_invoke_url:
-            ge_concurrency = (plan.graphic_elements_initial_actors if plan else None) or 2
-        else:
-            ge_concurrency = (plan.graphic_elements_initial_actors if plan else None) or 0
-        _set(GraphicElementsActor.__name__, "concurrency", ge_concurrency or None)
-        _set(GraphicElementsActor.__name__, "num_cpus", 1)
-        if effective_allow_no_gpu:
-            _force_cpu_only(GraphicElementsActor.__name__)
-        elif not graphic_elements_invoke_url:
-            _set(
-                GraphicElementsActor.__name__,
-                "num_gpus",
-                plan.graphic_elements_gpus_per_actor if plan else None,
             )
 
         np_bs = _positive(
@@ -314,27 +377,6 @@ def batch_tuning_to_node_overrides(
             plan.pdf_extract_tasks if plan else None,
         )
 
-        # Cap PDF extract concurrency so persistent actors for page-elements,
-        # OCR, embed, and caption plus fixed pipeline tasks (DocToPdf,
-        # PDFSplit, UDFOperator(s), ReadBinary) cannot exhaust the cluster
-        # CPU budget.
-        if pdf_extract_tasks is not None and cluster_resources is not None:
-            # Fixed overhead: ReadBinary + DocToPdf + PDFSplit + UDFOperator.
-            # Caption adds CaptionGPUActor + a second UDFOperator.
-            fixed_cpu_overhead = 4 + (2 if caption_params is not None else 0)
-            non_pdf_cpu_overhead = (
-                fixed_cpu_overhead
-                + page_elements_concurrency * page_elements_cpus
-                + ocr_concurrency * ocr_cpus
-                + embed_concurrency * embed_cpus
-                + ts_concurrency * 1
-                + ge_concurrency * 1
-            )
-            pdf_extract_tasks = min(
-                pdf_extract_tasks,
-                max(1, int((cluster_resources.total_cpu_count() - non_pdf_cpu_overhead) // pdf_extract_cpus)),
-            )
-
         _set(PDFExtractionActor.__name__, "batch_size", pdf_bs)
         _set(PDFExtractionActor.__name__, "concurrency", pdf_extract_tasks)
         _set(PDFExtractionActor.__name__, "num_cpus", pdf_extract_cpus if pdf_extract_cpus != 1.0 else None)
@@ -350,6 +392,15 @@ def batch_tuning_to_node_overrides(
         cpus = cluster_resources.total_cpu_count() if cluster_resources is not None else 0
         if cpus > 0:
             _set(VideoSplitActor.__name__, "concurrency", max(1, min(cpus // 4, 8)))
+
+    if store_params is not None:
+        store_tuning = _batch_tuning(store_params)
+        store_workers = _positive(getattr(store_tuning, "store_workers", None) if store_tuning is not None else None)
+        store_workers = int(store_workers or DEFAULT_STORE_WORKERS)
+        store_override = overrides.setdefault(StoreOperator.__name__, {})
+        # Ray actor pool tuple is (min, max, initial); keep store lazy at startup.
+        store_override["concurrency"] = (1, store_workers, 1) if store_workers > 1 else 1
+        store_override["num_cpus"] = DEFAULT_STORE_CPUS_PER_ACTOR
 
     return overrides
 
@@ -424,14 +475,38 @@ def _resolve_execution_inputs(
 
 def _should_build_audio_graph(
     *,
+    extraction_mode: str | None,
     extract_params: Any | None,
     asr_params: Any | None,
 ) -> bool:
+    """True iff the audio-only ``MediaChunkActor → ASRActor`` graph applies.
+
+    The audio-only shortcut graph is dedicated to **audio inputs**: it
+    constructs :class:`MediaChunkActor` unconditionally and has no
+    dispatch path for PDF / image / text / HTML uploads. Routing a
+    non-audio request through this branch is the bug that surfaces as
+    ``RuntimeError: MediaChunkActor requires media dependencies; missing:
+    ffmpeg, ffprobe`` for PDF ingestion.
+
+    Returning ``True`` therefore requires an explicit audio signal:
+
+    * ``extraction_mode == "audio"`` — the caller (or the upstream
+      auto-detector in :meth:`GraphIngestor._resolve_effective_extraction_inputs`)
+      classified the inputs as audio.
+    * ``extract_params.method == "audio"`` — the legacy params-driven
+      opt-in used by tests and a few direct callers.
+
+    The mere presence of ``asr_params`` is **not** a sufficient signal:
+    in service mode ``asr_params`` is auto-derived from the cluster's
+    ``audio_grpc_endpoint`` and would otherwise force every PDF upload
+    through the audio-only graph.
+    """
+    if (extraction_mode or "").strip().lower() == "audio":
+        return True
     method = str(getattr(extract_params, "method", "") or "").strip().lower()
     if method == "audio":
         return True
-    if asr_params is not None:
-        return True
+    _ = asr_params  # kept for backwards-compatible kw signature
     return False
 
 
@@ -449,15 +524,15 @@ def _maybe_append_chunk_actor(graph: Graph, split_config: dict[str, Any], key: s
 def _append_ordered_transform_stages(
     graph: Graph,
     *,
-    extraction_mode: str,
     dedup_params: Any | None,
     caption_params: Any | None,
     store_params: Any | None,
     embed_params: Any | None,
+    vdb_upload_params: VdbUploadParams | None = None,
     webhook_params: Any | None = None,
     stage_order: tuple[str, ...],
     supports_dedup: bool,
-    reshape_for_modal_content: bool,
+    reshape_content_before_embed: bool,
 ) -> Graph:
     """Append post-extraction transform stages in the exact recorded plan order."""
 
@@ -485,8 +560,7 @@ def _append_ordered_transform_stages(
         elif stage_name == "caption" and caption_params is not None:
             graph = graph >> CaptionActor(caption_params)
         elif stage_name == "embed" and embed_params is not None:
-            needs_content_reshape = reshape_for_modal_content and extraction_mode in {"pdf", "image", "auto"}
-            if needs_content_reshape:
+            if reshape_content_before_embed:
                 content_columns = (_CONTENT_COLUMNS + ("images",)) if caption_params is not None else _CONTENT_COLUMNS
                 if embed_params.embed_granularity == "page":
                     graph = graph >> UDFOperator(
@@ -496,6 +570,7 @@ def _append_ordered_transform_stages(
                             content_columns=content_columns,
                         ),
                         name="CollapseContentToPageRows",
+                        preserve_pandas_output=True,
                     )
                 else:
                     graph = graph >> UDFOperator(
@@ -508,13 +583,50 @@ def _append_ordered_transform_stages(
                             content_columns=content_columns,
                         ),
                         name="ExplodeContentToRows",
+                        preserve_pandas_output=True,
                     )
-            graph = graph >> _BatchEmbedActor(params=embed_params)
+            graph = graph >> _BatchEmbedActor(
+                params=embed_params,
+                force_local=_local_embed_requested(embed_params),
+            )
+
+    if vdb_upload_params is not None:
+        graph = graph >> IngestVdbOperator(
+            vdb_op=vdb_upload_params.vdb_op,
+            vdb_kwargs=vdb_upload_params.to_ingest_operator_kwargs(),
+        )
 
     if webhook_params is not None and getattr(webhook_params, "endpoint_url", None):
         graph = graph >> WebhookNotifyOperator(params=webhook_params)
 
     return graph
+
+
+def build_post_extract_graph(
+    *,
+    dedup_params: Any | None = None,
+    embed_params: Any | None = None,
+    caption_params: Any | None = None,
+    store_params: Any | None = None,
+    vdb_upload_params: VdbUploadParams | None = None,
+    webhook_params: Any | None = None,
+    stage_order: tuple[str, ...] = (),
+    reshape_content_before_embed: bool = True,
+) -> Graph:
+    """Build only the common stages that run after extraction branch union."""
+
+    return _append_ordered_transform_stages(
+        Graph(),
+        dedup_params=dedup_params,
+        caption_params=caption_params,
+        store_params=store_params,
+        embed_params=embed_params,
+        vdb_upload_params=vdb_upload_params,
+        webhook_params=webhook_params,
+        stage_order=stage_order,
+        supports_dedup=True,
+        reshape_content_before_embed=reshape_content_before_embed,
+    )
 
 
 def build_graph(
@@ -531,6 +643,7 @@ def build_graph(
     split_config: dict[str, Any] | None = None,
     caption_params: Any | None = None,
     store_params: Any | None = None,
+    vdb_upload_params: VdbUploadParams | None = None,
     webhook_params: Any | None = None,
     video_frame_params: Any | None = None,
     video_text_dedup_params: Any | None = None,
@@ -570,6 +683,14 @@ def build_graph(
         stage_order=stage_order,
     )
 
+    sink_vdb: VdbUploadParams | None = None
+    if execution_plan is not None:
+        for sink in execution_plan.sinks:
+            if sink.name == "vdb_upload":
+                sink_vdb = sink.params
+                break
+    effective_vdb_upload_params = vdb_upload_params if vdb_upload_params is not None else sink_vdb
+
     # GraphIngestor pre-resolves split_config; tests and other direct callers
     # may omit it, in which case fill in defaults consistently with the
     # ingestor surface.
@@ -586,7 +707,8 @@ def build_graph(
         # This skips the eager Parakeet load when audio is off and avoids
         # empty Ray Data MapBatches stages cluttering the dashboard.
         audio_enabled = audio_chunk_params is not None and getattr(audio_chunk_params, "enabled", True)
-        frames_enabled = getattr(video_frame_params, "enabled", True)
+        audio_only = audio_chunk_params is not None and getattr(audio_chunk_params, "audio_only", False)
+        frames_enabled = getattr(video_frame_params, "enabled", True) and not audio_only
         text_dedup_enabled = (
             frames_enabled and video_text_dedup_params is not None and getattr(video_text_dedup_params, "enabled", True)
         )
@@ -603,6 +725,8 @@ def build_graph(
         if frames_enabled:
             graph = graph >> VideoFrameOCRActor(
                 ocr_invoke_url=getattr(extract_params, "ocr_invoke_url", None),
+                ocr_version=getattr(extract_params, "ocr_version", "v2"),
+                ocr_lang=getattr(extract_params, "ocr_lang", None),
                 api_key=getattr(extract_params, "ocr_api_key", None) or getattr(extract_params, "api_key", None),
                 inference_batch_size=int(getattr(extract_params, "inference_batch_size", None) or 8),
                 request_timeout_s=float(
@@ -617,6 +741,7 @@ def build_graph(
             graph = graph >> AudioVisualFuser(params=av_fuse_params)
         graph = _maybe_append_chunk_actor(graph, split_config, "video")
     elif _should_build_audio_graph(
+        extraction_mode=extraction_mode,
         extract_params=extract_params,
         asr_params=asr_params,
     ):
@@ -632,6 +757,7 @@ def build_graph(
             asr_params=asr_params,
             caption_params=caption_params,
             video_frame_params=video_frame_params,
+            video_text_dedup_params=video_text_dedup_params,
             av_fuse_params=av_fuse_params,
             split_config=split_config,
         )
@@ -647,17 +773,7 @@ def build_graph(
             and (_positive(getattr(tuning, "nemotron_parse_batch_size", None)) is not None)
         )
 
-        extract_kwargs: dict[str, Any] = {
-            "method": extract_params.method,
-            "dpi": int(extract_params.dpi),
-            "extract_text": extract_params.extract_text,
-            "extract_images": extract_params.extract_images,
-            "extract_tables": extract_params.extract_tables,
-            "extract_charts": extract_params.extract_charts,
-            "extract_infographics": extract_params.extract_infographics,
-            "extract_page_as_image": extract_params.extract_page_as_image,
-            "api_key": extract_params.api_key,
-        }
+        extract_kwargs = build_pdf_extraction_kwargs(extract_params)
 
         if parse_mode:
             # PDF extraction renders pages to images required by Nemotron Parse.
@@ -694,12 +810,14 @@ def build_graph(
                 ocr_kwargs["extract_text"] = True
             if extract_params.extract_tables:
                 ocr_kwargs["extract_tables"] = True
-            if extract_params.extract_charts and not extract_params.use_graphic_elements:
+            if extract_params.extract_charts:
                 ocr_kwargs["extract_charts"] = True
             if extract_params.extract_infographics:
                 ocr_kwargs["extract_infographics"] = True
-            ocr_kwargs["use_graphic_elements"] = extract_params.use_graphic_elements
             ocr_kwargs["use_table_structure"] = extract_params.use_table_structure
+            ocr_kwargs["ocr_version"] = getattr(extract_params, "ocr_version", "v2")
+            if getattr(extract_params, "ocr_lang", None) is not None:
+                ocr_kwargs["ocr_lang"] = extract_params.ocr_lang
             if extract_params.ocr_invoke_url:
                 ocr_kwargs["ocr_invoke_url"] = extract_params.ocr_invoke_url
             if extract_params.api_key:
@@ -710,8 +828,6 @@ def build_graph(
             if detect_batch_size:
                 ocr_kwargs["inference_batch_size"] = int(detect_batch_size)
 
-            load_ocr_v2 = getattr(extract_params, "ocr_version", "v2") == "v2"
-
             table_kwargs: dict[str, Any] = {}
             if extract_params.table_structure_invoke_url:
                 table_kwargs["table_structure_invoke_url"] = extract_params.table_structure_invoke_url
@@ -721,33 +837,27 @@ def build_graph(
                 table_kwargs["api_key"] = extract_params.api_key
             if extract_params.table_output_format:
                 table_kwargs["table_output_format"] = extract_params.table_output_format
-            table_kwargs["load_ocr_v2"] = load_ocr_v2
-
-            graphic_kwargs: dict[str, Any] = {}
-            if extract_params.graphic_elements_invoke_url:
-                graphic_kwargs["graphic_elements_invoke_url"] = extract_params.graphic_elements_invoke_url
-            if extract_params.ocr_invoke_url:
-                graphic_kwargs["ocr_invoke_url"] = extract_params.ocr_invoke_url
-            if extract_params.api_key:
-                graphic_kwargs["api_key"] = extract_params.api_key
-            graphic_kwargs["load_ocr_v2"] = load_ocr_v2
+            table_kwargs["ocr_version"] = getattr(extract_params, "ocr_version", "v2")
+            if getattr(extract_params, "ocr_lang", None) is not None:
+                table_kwargs["ocr_lang"] = extract_params.ocr_lang
 
             _rr = _nim_remote_http_kwargs(extract_params)
             detect_kwargs.update(_rr)
             ocr_kwargs.update(_rr)
             table_kwargs.update(_rr)
-            graphic_kwargs.update(_rr)
-
-            graph = graph >> PDFExtractionActor(**extract_kwargs) >> PageElementDetectionActor(**detect_kwargs)
-            if extract_params.use_table_structure and extract_params.extract_tables:
-                graph = graph >> TableStructureActor(**table_kwargs)
-            if extract_params.use_graphic_elements and extract_params.extract_charts:
-                graph = graph >> GraphicElementsActor(**graphic_kwargs)
 
             needs_ocr = any(
                 bool(ocr_kwargs.get(key))
                 for key in ("extract_text", "extract_tables", "extract_charts", "extract_infographics")
             )
+            page_elements_needed = extract_params.use_page_elements and (
+                (extract_params.use_table_structure and extract_params.extract_tables) or needs_ocr
+            )
+            graph = graph >> PDFExtractionActor(**extract_kwargs)
+            if page_elements_needed:
+                graph = graph >> PageElementDetectionActor(**detect_kwargs)
+            if extract_params.use_table_structure and extract_params.extract_tables:
+                graph = graph >> TableStructureActor(**table_kwargs)
             if needs_ocr:
                 ocr_archetype = resolve_ocr_archetype(extract_params)
                 logger.info(
@@ -761,15 +871,15 @@ def build_graph(
 
     return _append_ordered_transform_stages(
         graph,
-        extraction_mode=extraction_mode,
         dedup_params=dedup_params,
         caption_params=caption_params,
         store_params=store_params,
         embed_params=embed_params,
+        vdb_upload_params=effective_vdb_upload_params,
         webhook_params=webhook_params,
         stage_order=stage_order,
         supports_dedup=True,
-        reshape_for_modal_content=True,
+        reshape_content_before_embed=extraction_mode in {"pdf", "image", "auto"},
     )
 
 

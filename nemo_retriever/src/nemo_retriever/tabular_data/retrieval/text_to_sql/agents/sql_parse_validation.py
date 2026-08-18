@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES.
+# All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """
 SQL Validation Agent
 
@@ -22,10 +26,10 @@ from typing import Dict, Any
 from nemo_retriever.tabular_data.ingestion.services.queries import parse_query_single
 from nemo_retriever.tabular_data.retrieval.text_to_sql.base import BaseAgent
 from nemo_retriever.tabular_data.retrieval.text_to_sql.state import AgentState
-from nemo_retriever.tabular_data.retrieval.text_to_sql.utils import (
+from nemo_retriever.tabular_data.retrieval.data_access.custom_analyses import get_custom_analyses_ids
+from nemo_retriever.tabular_data.retrieval.data_access.graph_schemas import (
     get_all_schemas_ids,
     get_schemas_by_ids,
-    get_custom_analyses_ids,
 )
 
 logger = logging.getLogger(__name__)
@@ -80,12 +84,12 @@ class SQLValidationAgent(BaseAgent):
         """
         path_state = state.get("path_state", {})
         response = path_state.get("sql_generation_result")
-        connector = state.get("connector")
-        dialect = connector.dialect
+        connectors = state.get("connectors") or []
+        dialects = [c.dialect for c in connectors if getattr(c, "dialect", None)]
         schemas_ids = get_all_schemas_ids()
         schemas = get_schemas_by_ids(schemas_ids)
 
-        validation_result = self._sql_parse_validation(schemas, response.sql_code, dialect)
+        validation_result = self._sql_parse_validation(schemas, response.sql_code, dialects)
 
         if validation_result.get("error"):
             error_msg = validation_result["error"]
@@ -119,13 +123,13 @@ class SQLValidationAgent(BaseAgent):
         }
 
     @staticmethod
-    def _sql_parse_validation(schemas, sql: str, dialect: str) -> dict:
+    def _sql_parse_validation(schemas, sql: str, dialects: list[str]) -> dict:
         result: dict = {}
         try:
             parse_query_single(
                 sql=sql,
-                dialect=dialect,
                 schemas=schemas,
+                dialects=dialects,
             )
             result["success"] = True
         except Exception as error:

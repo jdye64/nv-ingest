@@ -2,7 +2,7 @@
 # All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unit tests for nemo_retriever.video.audio_visual_fuser.AudioVisualFuser.
+"""Unit tests for nemo_retriever.operators.extract.video.audio_visual_fuser.AudioVisualFuser.
 
 The fuser's behaviour is fixed (no per-call knobs beyond ``enabled``):
   * one fused row per audio utterance with at least one concurrent frame,
@@ -10,15 +10,15 @@ The fuser's behaviour is fixed (no per-call knobs beyond ``enabled``):
   * visual capped at ``FRAME_TEXT_MAX_CHARS`` characters,
   * fused text rendered as ``"[AUDIO] <audio> | [VISUAL] <visual>"``,
   * source audio rows whose window produced a fused row are dropped,
-  * ``video_frame`` rows are not passed through downstream.
+  * only the ``video_frame`` rows selected for fusion are consumed.
 """
 
 from __future__ import annotations
 
 import pandas as pd
 
-from nemo_retriever.params import AudioVisualFuseParams
-from nemo_retriever.video.audio_visual_fuser import AudioVisualFuser, FRAME_TEXT_MAX_CHARS
+from nemo_retriever.common.params import AudioVisualFuseParams
+from nemo_retriever.operators.extract.video.audio_visual_fuser import AudioVisualFuser, FRAME_TEXT_MAX_CHARS
 
 
 def _audio_row(source: str, text: str, start: float, end: float) -> dict:
@@ -63,12 +63,12 @@ def test_fuser_emits_one_fused_row_per_overlapping_utterance() -> None:
     # Top-level _content_type set so the LanceDB sink picks it up.
     assert fused[0]["_content_type"] == "audio_visual"
     # Audio row whose window produced the fused row is dropped; the orphan
-    # audio utterance (no concurrent frame) is preserved. All ``video_frame``
-    # rows are dropped — paired ones are folded into the fused row, orphan
-    # ones were shown to be net-noise in retrieval.
+    # audio utterance (no concurrent frame) is preserved. The selected frame
+    # is folded into the fused row, while unselected and orphan OCR frames
+    # remain independently retrievable.
     kinds = [r["metadata"]["_content_type"] for _, r in out.iterrows()]
     assert kinds.count("audio") == 1  # only the second utterance
-    assert kinds.count("video_frame") == 0
+    assert kinds.count("video_frame") == 2
     assert kinds.count("audio_visual") == 1
 
 
@@ -79,10 +79,28 @@ def test_fuser_skips_when_no_concurrent_frame_text() -> None:
     ]
     df = pd.DataFrame(rows)
     out = AudioVisualFuser(AudioVisualFuseParams()).run(df)
-    # No fused row is appended (no overlap), the audio row is preserved,
-    # and the orphan ``video_frame`` row is dropped.
+    # No fused row is appended (no overlap), so neither source row may be
+    # discarded from the public result.
     kinds = [r["metadata"]["_content_type"] for _, r in out.iterrows()]
-    assert kinds == ["audio"]
+    assert kinds == ["audio", "video_frame"]
+
+
+def test_fuser_preserves_all_visual_rows_when_no_audio_window_fuses() -> None:
+    rows = [
+        _audio_row("/v.mp4", "speech after the title", 5.0, 8.0),
+        _frame_row("/v.mp4", "TITLE ONLY VISIBLE ON SCREEN", 1.0),
+        _frame_row("/v.mp4", "SECOND VISUAL", 3.0),
+    ]
+
+    out = AudioVisualFuser(AudioVisualFuseParams()).run(pd.DataFrame(rows))
+
+    kinds = [r["metadata"]["_content_type"] for _, r in out.iterrows()]
+    assert kinds == ["audio", "video_frame", "video_frame"]
+    assert out["text"].tolist() == [
+        "speech after the title",
+        "TITLE ONLY VISIBLE ON SCREEN",
+        "SECOND VISUAL",
+    ]
 
 
 def test_fuser_preserves_segment_window_from_audio_row() -> None:

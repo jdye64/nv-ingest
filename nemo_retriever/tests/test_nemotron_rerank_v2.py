@@ -5,7 +5,7 @@
 """
 Unit tests for NemotronRerankV2 and the rerank module helpers.
 
-All heavy dependencies (torch, transformers, nemo_retriever.utils.hf_cache)
+All heavy dependencies (torch, transformers, nemo_retriever.models.hf_cache)
 are stubbed via sys.modules injection so no GPU or model download is required.
 """
 
@@ -84,9 +84,9 @@ def _patch_heavy_deps(monkeypatch):
     monkeypatch.setitem(sys.modules, "transformers", transformers_stub)
 
     # Stub hf_cache so configure_global_hf_cache_base() is a no-op.
-    hf_cache_mod = ModuleType("nemo_retriever.utils.hf_cache")
+    hf_cache_mod = ModuleType("nemo_retriever.models.hf_cache")
     hf_cache_mod.configure_global_hf_cache_base = MagicMock()
-    monkeypatch.setitem(sys.modules, "nemo_retriever.utils.hf_cache", hf_cache_mod)
+    monkeypatch.setitem(sys.modules, "nemo_retriever.models.hf_cache", hf_cache_mod)
 
     # Also stub the parent model module so BaseModel import works.
     # We bypass by importing NemotronRerankV2 after patching.
@@ -99,8 +99,8 @@ def _patch_heavy_deps(monkeypatch):
 
 
 def test_prompt_template_format():
-    from nemo_retriever.rerank.rerank import _rerank_via_endpoint  # noqa: F401 — just ensure importable
-    from nemo_retriever.model.local.nemotron_rerank_v2 import _prompt_template
+    from nemo_retriever.operators.rerank import _rerank_via_endpoint  # noqa: F401 — just ensure importable
+    from nemo_retriever.models.local.nemotron_rerank_v2 import _prompt_template
 
     result = _prompt_template("What is ML?", "Machine learning is a branch of AI.")
     assert "question:What is ML?" in result
@@ -117,7 +117,7 @@ class TestNemotronRerankV2Properties:
 
     def _make_instance(self, model_name: str = "nvidia/llama-nemotron-rerank-1b-v2") -> object:
         """Instantiate NemotronRerankV2 with all heavy ops mocked out."""
-        from nemo_retriever.model.local import nemotron_rerank_v2 as mod
+        from nemo_retriever.models.local import nemotron_rerank_v2 as mod
 
         with (
             patch.object(mod, "configure_global_hf_cache_base"),
@@ -156,7 +156,7 @@ class TestNemotronRerankV2Properties:
         assert obj.model_name == "my-org/my-reranker"
 
     def test_default_model_loads_with_pinned_revision(self):
-        from nemo_retriever.model.local import nemotron_rerank_v2 as mod
+        from nemo_retriever.models.local import nemotron_rerank_v2 as mod
 
         with (
             patch.object(mod, "configure_global_hf_cache_base"),
@@ -195,7 +195,7 @@ class TestNemotronRerankV2Score:
 
     @pytest.fixture()
     def reranker(self):
-        from nemo_retriever.model.local import nemotron_rerank_v2 as mod
+        from nemo_retriever.models.local import nemotron_rerank_v2 as mod
 
         with (
             patch.object(mod, "configure_global_hf_cache_base"),
@@ -345,13 +345,13 @@ class TestRerankHits:
         return [{"text": f"{prefix}{i}", "_distance": float(i)} for i in range(n)]
 
     def test_empty_hits_returns_empty(self):
-        from nemo_retriever.rerank import rerank_hits
+        from nemo_retriever.operators.rerank import rerank_hits
 
         model = MagicMock()
         assert rerank_hits("q", [], model=model) == []
 
     def test_results_sorted_by_score_descending(self):
-        from nemo_retriever.rerank import rerank_hits
+        from nemo_retriever.operators.rerank import rerank_hits
 
         hits = self._make_hits(3)
         model = MagicMock()
@@ -363,7 +363,7 @@ class TestRerankHits:
         assert scores == sorted(scores, reverse=True)
 
     def test_rerank_score_added_to_each_hit(self):
-        from nemo_retriever.rerank import rerank_hits
+        from nemo_retriever.operators.rerank import rerank_hits
 
         hits = [{"text": "hello"}, {"text": "world"}]
         model = MagicMock()
@@ -373,7 +373,7 @@ class TestRerankHits:
         assert all("_rerank_score" in h for h in out)
 
     def test_top_n_truncates_output(self):
-        from nemo_retriever.rerank import rerank_hits
+        from nemo_retriever.operators.rerank import rerank_hits
 
         hits = self._make_hits(5)
         model = MagicMock()
@@ -383,7 +383,7 @@ class TestRerankHits:
         assert len(out) == 3
 
     def test_model_score_called_with_query_and_texts(self):
-        from nemo_retriever.rerank import rerank_hits
+        from nemo_retriever.operators.rerank import rerank_hits
 
         hits = [{"text": "first"}, {"text": "second"}]
         model = MagicMock()
@@ -394,13 +394,13 @@ class TestRerankHits:
         model.score.assert_called_once_with("my query", ["first", "second"], max_length=512, batch_size=32)
 
     def test_raises_without_model_or_endpoint(self):
-        from nemo_retriever.rerank import rerank_hits
+        from nemo_retriever.operators.rerank import rerank_hits
 
-        with pytest.raises(ValueError, match="model.*invoke_url"):
+        with pytest.raises(ValueError, match="model.*rerank_invoke_url"):
             rerank_hits("q", [{"text": "doc"}])
 
     def test_custom_text_key(self):
-        from nemo_retriever.rerank import rerank_hits
+        from nemo_retriever.operators.rerank import rerank_hits
 
         hits = [{"content": "alpha"}, {"content": "beta"}]
         model = MagicMock()
@@ -410,7 +410,7 @@ class TestRerankHits:
         assert len(out) == 2
 
     def test_original_hit_keys_preserved(self):
-        from nemo_retriever.rerank import rerank_hits
+        from nemo_retriever.operators.rerank import rerank_hits
 
         hits = [{"text": "t", "metadata": "m", "_distance": 0.5}]
         model = MagicMock()
@@ -428,7 +428,7 @@ class TestRerankHits:
 
 class TestRerankViaEndpoint:
     def test_posts_to_ranking_url(self):
-        from nemo_retriever.rerank.rerank import _rerank_via_endpoint
+        from nemo_retriever.operators.rerank import _rerank_via_endpoint
 
         mock_resp = MagicMock()
         mock_resp.json.return_value = {
@@ -458,7 +458,7 @@ class TestRerankViaEndpoint:
         assert scores == [0.9, 0.3]
 
     def test_scores_aligned_with_input_order(self):
-        from nemo_retriever.rerank.rerank import _rerank_via_endpoint
+        from nemo_retriever.operators.rerank import _rerank_via_endpoint
 
         # Server returns results in reversed order
         mock_resp = MagicMock()
@@ -482,8 +482,38 @@ class TestRerankViaEndpoint:
         assert scores[1] == 0.5  # index 1
         assert scores[2] == 0.1  # index 2
 
+    def test_posts_to_inference_api_rerank_url(self):
+        from nemo_retriever.operators.rerank import _rerank_via_endpoint
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "results": [
+                {"index": 1, "relevance_score": 0.7},
+                {"index": 0, "relevance_score": 0.2},
+            ]
+        }
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch("requests.post", return_value=mock_resp) as mock_post:
+            scores = _rerank_via_endpoint(
+                "What is ML?",
+                ["Machine learning is...", "Paris is..."],
+                endpoint="https://inference-api.nvidia.com/v1/rerank",
+                model_name="nvidia/nvidia/llama-3.2-nv-rerankqa-1b-v2",
+            )
+
+        call_args = mock_post.call_args
+        assert call_args[0][0] == "https://inference-api.nvidia.com/v1/rerank"
+        assert call_args[1]["json"] == {
+            "model": "nvidia/nvidia/llama-3.2-nv-rerankqa-1b-v2",
+            "query": "What is ML?",
+            "documents": ["Machine learning is...", "Paris is..."],
+            "top_n": 2,
+        }
+        assert scores == [0.2, 0.7]
+
     def test_authorization_header_sent_when_api_key_provided(self):
-        from nemo_retriever.rerank.rerank import _rerank_via_endpoint
+        from nemo_retriever.operators.rerank import _rerank_via_endpoint
 
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"rankings": [{"index": 0, "logit": 1.0}]}
@@ -501,7 +531,7 @@ class TestRerankViaEndpoint:
         assert headers["Authorization"] == "Bearer my-secret-key"
 
     def test_trailing_slash_on_endpoint_normalized(self):
-        from nemo_retriever.rerank.rerank import _rerank_via_endpoint
+        from nemo_retriever.operators.rerank import _rerank_via_endpoint
 
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"rankings": [{"index": 0, "logit": 0.5}]}
@@ -514,7 +544,7 @@ class TestRerankViaEndpoint:
         assert url == "http://localhost:8000/v1/ranking"
 
     def test_top_n_not_in_payload_when_not_specified(self):
-        from nemo_retriever.rerank.rerank import _rerank_via_endpoint
+        from nemo_retriever.operators.rerank import _rerank_via_endpoint
 
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"rankings": [{"index": 0, "logit": 0.5}]}
@@ -535,24 +565,109 @@ class TestRerankViaEndpoint:
 class TestNemotronRerankActor:
     """Test the Ray Data-compatible actor."""
 
-    def test_actor_with_invoke_url_skips_local_model(self):
-        from nemo_retriever.rerank.rerank import NemotronRerankCPUActor
+    def test_cpu_actor_defaults_to_hosted_vl_endpoint(self, monkeypatch):
+        from nemo_retriever.operators.rerank import NemotronRerankCPUActor
 
-        actor = NemotronRerankCPUActor(invoke_url="http://localhost:8000")
+        monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test")
+        monkeypatch.delenv("NGC_API_KEY", raising=False)
+
+        actor = NemotronRerankCPUActor()
+
         assert actor._model is None
+        assert actor._kwargs["api_key"] == "nvapi-test"
+        assert actor._kwargs["rerank_invoke_url"] == (
+            "https://ai.api.nvidia.com/v1/retrieval/nvidia/llama-nemotron-rerank-vl-1b-v2/reranking"
+        )
 
-    def test_actor_with_rerank_invoke_url_alias(self):
-        from nemo_retriever.rerank.rerank import NemotronRerankCPUActor
+    def test_cpu_actor_uses_hosted_vl_endpoint_for_explicit_vl_model(self, monkeypatch):
+        from nemo_retriever.operators.rerank import NemotronRerankCPUActor
+
+        monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test")
+        monkeypatch.delenv("NGC_API_KEY", raising=False)
+
+        actor = NemotronRerankCPUActor(model_name="nvidia/llama-nemotron-rerank-vl-1b-v2")
+
+        assert actor._kwargs["rerank_invoke_url"] == (
+            "https://ai.api.nvidia.com/v1/retrieval/nvidia/llama-nemotron-rerank-vl-1b-v2/reranking"
+        )
+
+    def test_cpu_actor_default_endpoint_requires_api_key(self, monkeypatch):
+        from nemo_retriever.operators.rerank import NemotronRerankCPUActor
+
+        monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
+        monkeypatch.delenv("NGC_API_KEY", raising=False)
+
+        with pytest.raises(ValueError, match="hosted rerank endpoint"):
+            NemotronRerankCPUActor()
+
+    def test_actor_with_rerank_invoke_url_skips_local_model(self):
+        from nemo_retriever.operators.rerank import NemotronRerankCPUActor
 
         actor = NemotronRerankCPUActor(rerank_invoke_url="http://localhost:8000")
         assert actor._model is None
-        assert actor._kwargs.get("invoke_url") == "http://localhost:8000"
+        assert actor._kwargs.get("rerank_invoke_url") == "http://localhost:8000"
+
+    def test_cpu_actor_accepts_invoke_url_alias(self):
+        from nemo_retriever.operators.rerank import NemotronRerankCPUActor
+
+        actor = NemotronRerankCPUActor(invoke_url="http://localhost:8015")
+
+        assert actor._model is None
+        assert actor._kwargs["rerank_invoke_url"] == "http://localhost:8015"
+
+    def test_cpu_actor_prefers_canonical_endpoint_key_over_alias(self):
+        from nemo_retriever.operators.rerank import NemotronRerankCPUActor
+
+        actor = NemotronRerankCPUActor(
+            rerank_invoke_url="http://canonical:8015",
+            invoke_url="http://alias:8015",
+        )
+
+        assert actor._kwargs["rerank_invoke_url"] == "http://canonical:8015"
+
+    def test_blank_canonical_endpoint_does_not_shadow_alias(self):
+        """A whitespace-only canonical value must not hide a usable alias."""
+        from nemo_retriever.operators.rerank import NemotronRerankActor, NemotronRerankCPUActor
+
+        kwargs = {"rerank_invoke_url": "   ", "invoke_url": "http://localhost:8015"}
+
+        assert NemotronRerankActor.prefers_cpu_variant(kwargs) is True
+        assert NemotronRerankCPUActor(**kwargs)._kwargs["rerank_invoke_url"] == "http://localhost:8015"
+
+    def test_gpu_actor_rejects_blank_canonical_endpoint_with_alias(self):
+        from nemo_retriever.operators.rerank import NemotronRerankGPUActor
+
+        with patch("nemo_retriever.models.create_local_reranker") as create_local_reranker:
+            with pytest.raises(ValueError, match="does not support remote endpoint"):
+                NemotronRerankGPUActor(rerank_invoke_url="   ", invoke_url="http://localhost:8015")
+
+        create_local_reranker.assert_not_called()
+
+    def test_archetype_selects_remote_variant_for_invoke_url_alias(self):
+        from nemo_retriever.operators.rerank import NemotronRerankActor, NemotronRerankCPUActor
+
+        actor = NemotronRerankActor(invoke_url="http://localhost:8015")
+        delegate = actor._resolve_delegate()
+
+        assert NemotronRerankActor.prefers_cpu_variant({"invoke_url": "http://localhost:8015"}) is True
+        assert NemotronRerankActor.prefers_cpu_variant({"invoke_url": "   "}) is False
+        assert isinstance(delegate, NemotronRerankCPUActor)
+        assert delegate._kwargs["rerank_invoke_url"] == "http://localhost:8015"
+
+    def test_gpu_actor_rejects_invoke_url_alias_without_loading_local_model(self):
+        from nemo_retriever.operators.rerank import NemotronRerankGPUActor
+
+        with patch("nemo_retriever.models.create_local_reranker") as create_local_reranker:
+            with pytest.raises(ValueError, match="does not support remote endpoint"):
+                NemotronRerankGPUActor(invoke_url="http://localhost:8015")
+
+        create_local_reranker.assert_not_called()
 
     def test_actor_call_scores_dataframe(self):
         import pandas as pd
-        from nemo_retriever.rerank.rerank import NemotronRerankActor
+        from nemo_retriever.operators.rerank import NemotronRerankActor
 
-        actor = NemotronRerankActor(invoke_url="http://localhost:8000")
+        actor = NemotronRerankActor(rerank_invoke_url="http://localhost:8000")
 
         df = pd.DataFrame({"query": ["q1", "q2"], "text": ["doc A", "doc B"]})
 
@@ -571,29 +686,98 @@ class TestNemotronRerankActor:
 
     def test_actor_call_sorts_descending_by_default(self):
         import pandas as pd
-        from nemo_retriever.rerank.rerank import NemotronRerankActor
+        from nemo_retriever.operators.rerank import NemotronRerankActor
 
-        actor = NemotronRerankActor(invoke_url="http://localhost:8000")
+        actor = NemotronRerankActor(rerank_invoke_url="http://localhost:8000")
         df = pd.DataFrame({"query": ["q", "q"], "text": ["low relevance", "high relevance"]})
 
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
-        mock_resp.json.side_effect = [
-            {"rankings": [{"index": 0, "logit": 0.1}]},
-            {"rankings": [{"index": 0, "logit": 0.9}]},
-        ]
+        mock_resp.json.return_value = {
+            "rankings": [
+                {"index": 0, "logit": 0.1},
+                {"index": 1, "logit": 0.9},
+            ]
+        }
 
-        with patch("requests.post", return_value=mock_resp):
+        with patch("requests.post", return_value=mock_resp) as mock_post:
             out = actor(df)
 
+        mock_post.assert_called_once()
+        payload = mock_post.call_args[1]["json"]
+        assert payload["query"] == {"text": "q"}
+        assert payload["passages"] == [{"text": "low relevance"}, {"text": "high relevance"}]
         scores = out["rerank_score"].tolist()
         assert scores == sorted(scores, reverse=True)
 
+    def test_actor_call_batches_remote_rows_by_query(self):
+        import pandas as pd
+        from nemo_retriever.operators.rerank import NemotronRerankActor
+
+        actor = NemotronRerankActor(rerank_invoke_url="http://localhost:8000", sort_results=False)
+        df = pd.DataFrame(
+            {
+                "query": ["q1", "q1", "q2"],
+                "text": ["doc A", "doc B", "doc C"],
+            }
+        )
+
+        resp_q1 = MagicMock()
+        resp_q1.raise_for_status = MagicMock()
+        resp_q1.json.return_value = {
+            "rankings": [
+                {"index": 1, "logit": 0.7},
+                {"index": 0, "logit": 0.2},
+            ]
+        }
+        resp_q2 = MagicMock()
+        resp_q2.raise_for_status = MagicMock()
+        resp_q2.json.return_value = {"rankings": [{"index": 0, "logit": 0.9}]}
+
+        with patch("requests.post", side_effect=[resp_q1, resp_q2]) as mock_post:
+            out = actor(df)
+
+        assert mock_post.call_count == 2
+        assert mock_post.call_args_list[0][1]["json"]["query"] == {"text": "q1"}
+        assert mock_post.call_args_list[0][1]["json"]["passages"] == [{"text": "doc A"}, {"text": "doc B"}]
+        assert mock_post.call_args_list[1][1]["json"]["query"] == {"text": "q2"}
+        assert mock_post.call_args_list[1][1]["json"]["passages"] == [{"text": "doc C"}]
+        assert out["rerank_score"].tolist() == [0.2, 0.7, 0.9]
+
+    def test_rerank_batch_raises_when_endpoint_score_count_mismatches(self):
+        import pandas as pd
+        from nemo_retriever.operators.rerank import _rerank_batch
+
+        df = pd.DataFrame({"query": ["q", "q"], "text": ["doc A", "doc B"]})
+
+        with (
+            patch("nemo_retriever.operators.rerank._rerank_via_endpoint", return_value=[0.2]),
+            pytest.raises(RuntimeError, match="score alignment is broken"),
+        ):
+            _rerank_batch(df, rerank_invoke_url="http://localhost:8000", sort_results=False)
+
+    def test_rerank_batch_warns_when_unhashable_queries_cannot_batch(self, caplog):
+        import logging
+
+        import pandas as pd
+        from nemo_retriever.operators.rerank import _rerank_batch
+
+        caplog.set_level(logging.WARNING, logger="nemo_retriever.operators.rerank")
+        df = pd.DataFrame({"query": [["q"], ["q"]], "text": ["doc A", "doc B"]})
+
+        with patch("nemo_retriever.operators.rerank._rerank_via_endpoint", side_effect=[[0.2], [0.7]]) as mock_rerank:
+            out = _rerank_batch(df, rerank_invoke_url="http://localhost:8000", sort_results=False)
+
+        assert mock_rerank.call_count == 2
+        assert "Query at row 0 is not hashable (list)" in caplog.text
+        assert "Query at row 1 is not hashable (list)" in caplog.text
+        assert out["rerank_score"].tolist() == [0.2, 0.7]
+
     def test_actor_call_returns_error_payload_on_exception(self):
         import pandas as pd
-        from nemo_retriever.rerank.rerank import NemotronRerankActor
+        from nemo_retriever.operators.rerank import NemotronRerankActor
 
-        actor = NemotronRerankActor(invoke_url="http://localhost:8000")
+        actor = NemotronRerankActor(rerank_invoke_url="http://localhost:8000")
         df = pd.DataFrame({"query": ["q"], "text": ["doc"]})
 
         with patch("requests.post", side_effect=RuntimeError("connection failed")):
@@ -607,9 +791,9 @@ class TestNemotronRerankActor:
 
     def test_actor_custom_score_column_name(self):
         import pandas as pd
-        from nemo_retriever.rerank.rerank import NemotronRerankActor
+        from nemo_retriever.operators.rerank import NemotronRerankActor
 
-        actor = NemotronRerankActor(invoke_url="http://localhost:8000", score_column="my_score")
+        actor = NemotronRerankActor(rerank_invoke_url="http://localhost:8000", score_column="my_score")
         df = pd.DataFrame({"query": ["q"], "text": ["doc"]})
 
         mock_resp = MagicMock()

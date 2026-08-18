@@ -11,13 +11,14 @@ from __future__ import annotations
 import sys
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pandas as pd
 import pytest
 
 # ---------------------------------------------------------------------------
 # Pure helpers from main_text_embed (no transitive-import issues)
 # ---------------------------------------------------------------------------
-from nemo_retriever.text_embed.main_text_embed import (
+from nemo_retriever.models.inference.main_text_embed import (
     _format_image_input_string,
     _format_text_image_pair_input_string,
     _image_from_row,
@@ -28,53 +29,37 @@ from nemo_retriever.text_embed.main_text_embed import (
 # Stub heavy internal modules so the content-transform helpers can be imported
 # in lightweight CI (only pytest, pandas, pydantic, pyyaml).
 #
-# The ``nemo_retriever.ingest_modes`` __init__.py eagerly imports batch/fused/online
-# which pull in ray, torch, nemotron_*, nemo_retriever.api, etc.  And inprocess.py
-# itself imports model/local (torch, nemotron_*), page_elements, ocr, and
-# pdf.extract — each with their own heavy transitive deps.
+# Older ingest modules can pull in ray, torch, nemotron_*, nemo_retriever.common.api,
+# etc. And inprocess.py itself imports model/local (torch, nemotron_*),
+# page_elements, ocr, and pdf.extract — each with their own heavy transitive
+# deps.
 #
 # Rather than chasing every third-party leaf dependency, we pre-populate
 # sys.modules for the heavy *internal* nemo_retriever sub-packages with MagicMock.
 # This cuts off the entire transitive tree at the root.
 # ---------------------------------------------------------------------------
 _HEAVY_INTERNAL = [
-    # -- sibling ingest modes (prevents batch.py/fused.py from loading) ------
+    # -- sibling ingest modes (prevents batch.py from loading) ------------------
     "nemo_retriever.ingest_modes.batch",
-    "nemo_retriever.ingest_modes.fused",
     # -- model / ML packages (torch, nemotron_*, transformers) ---------------
-    "nemo_retriever.model.local",
-    "nemo_retriever.model.local.llama_nemotron_embed_1b_v2_embedder",
-    "nemo_retriever.model.local.nemotron_page_elements_v3",
-    "nemo_retriever.model.local.nemotron_ocr_v1",
-    "nemo_retriever.model.local.nemotron_table_structure_v1",
-    "nemo_retriever.model.local.nemotron_graphic_elements_v1",
+    "nemo_retriever.models.local",
+    "nemo_retriever.models.local.llama_nemotron_embed_1b_v2_embedder",
+    "nemo_retriever.models.local.nemotron_page_elements_v3",
+    "nemo_retriever.models.local.nemotron_ocr_v1",
+    "nemo_retriever.models.local.nemotron_table_structure_v1",
     # -- detection / OCR (nemotron_page_elements_v3, PIL, requests) ----------
     "nemo_retriever.page_elements",
-    "nemo_retriever.page_elements.page_elements",
+    "nemo_retriever.operators.extract.page_elements.page_elements",
     "nemo_retriever.ocr",
-    "nemo_retriever.ocr.ocr",
-    # -- chart (nemo_retriever.api → cv2) ----------------------------------------
-    "nemo_retriever.chart",
-    "nemo_retriever.chart.chart_detection",
-    "nemo_retriever.chart.commands",
-    "nemo_retriever.chart.processor",
-    "nemo_retriever.chart.config",
-    "nemo_retriever.chart.stage",
-    # -- table (nemo_retriever.api → cv2) ----------------------------------------
+    "nemo_retriever.operators.extract.ocr.ocr",
+    # -- table (nemo_retriever.common.api → cv2) ----------------------------------------
     "nemo_retriever.table",
-    "nemo_retriever.table.table_detection",
-    "nemo_retriever.table.config",
+    "nemo_retriever.operators.extract.table.table_detection",
     "nemo_retriever.table.stage",
-    "nemo_retriever.table.commands",
-    "nemo_retriever.table.processor",
-    # -- PDF (pypdfium2, nemo_retriever.api via pdf/__init__ → __main__ → stage) --
+    # -- PDF (pypdfium2 and heavy extraction dependencies) -------------------
     "nemo_retriever.pdf",
-    "nemo_retriever.pdf.__main__",
-    "nemo_retriever.pdf.config",
-    "nemo_retriever.pdf.io",
-    "nemo_retriever.pdf.stage",
-    "nemo_retriever.pdf.extract",
-    "nemo_retriever.pdf.split",
+    "nemo_retriever.operators.extract.pdf.extract",
+    "nemo_retriever.operators.extract.pdf.split",
 ]
 # Track which modules we injected (vs. ones already loaded) so we can
 # remove only our stubs after the import, preventing leaks into other
@@ -85,7 +70,10 @@ for _mod_name in _HEAVY_INTERNAL:
         sys.modules[_mod_name] = MagicMock()
         _injected.append(_mod_name)
 
-from nemo_retriever.graph.content_transforms import collapse_content_to_page_rows, explode_content_to_rows  # noqa: E402
+from nemo_retriever.common.modality.content_transforms import (
+    collapse_content_to_page_rows,
+    explode_content_to_rows,
+)  # noqa: E402
 
 # Clean up injected mocks so they don't poison imports in other test files.
 for _mod_name in _injected:
@@ -203,7 +191,29 @@ class TestExplodeContentToRows:
         assert list(result["_embed_modality"]) == ["text", "text"]
         assert "_image_b64" not in result.columns
 
-    @patch("nemo_retriever.graph.content_transforms._crop_b64_image_by_norm_bbox")
+    def test_arrow_backed_structured_arrays_expand_into_element_rows(self):
+        """Ray Arrow-backed list cells expand like their Python-list equivalents."""
+        df = pd.DataFrame(
+            {
+                "text": ["page text"],
+                "table": [np.array([{"text": "table text"}], dtype=object)],
+                "chart": [np.array([{"text": "chart text"}], dtype=object)],
+            }
+        )
+
+        result = explode_content_to_rows(df)
+
+        assert result["text"].tolist() == ["page text", "table text", "chart text"]
+        assert result["_content_type"].tolist() == ["text", "table", "chart"]
+        assert result.iloc[0]["table"] is not result.iloc[1]["table"]
+
+    @pytest.mark.parametrize("value", [np.array(1, dtype=object), np.ones((2, 2))])
+    def test_non_collection_arrays_are_not_expanded(self, value):
+        result = explode_content_to_rows(pd.DataFrame({"text": ["page text"], "table": [value]}))
+
+        assert result["text"].tolist() == ["page text"]
+
+    @patch("nemo_retriever.common.modality.content_transforms._crop_b64_image_by_norm_bbox")
     def test_text_image_carries_image(self, mock_crop):
         """text_image mode copies page image to _image_b64, crops for structured content."""
         mock_crop.return_value = ("cropped_b64", None)
@@ -258,6 +268,20 @@ class TestCollapseContentToPageRows:
         assert len(result) == 1
         assert result["text"].iloc[0] == "Hello world\n\ntable data\n\nchart data"
         assert result["_embed_modality"].iloc[0] == "text"
+
+    def test_arrow_backed_structured_arrays_are_collapsed_into_page_text(self):
+        """Ray Arrow-backed list cells contribute their text to the page row."""
+        df = pd.DataFrame(
+            {
+                "text": ["page text"],
+                "table": [np.array([{"text": "table text"}], dtype=object)],
+                "chart": [np.array([{"text": "chart text"}], dtype=object)],
+            }
+        )
+
+        result = collapse_content_to_page_rows(df)
+
+        assert result["text"].tolist() == ["page text\n\ntable text\n\nchart text"]
 
     def test_full_page_image_used(self):
         """In image modalities, _image_b64 is the full page image (no cropping)."""

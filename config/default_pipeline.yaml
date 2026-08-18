@@ -225,33 +225,6 @@ stages:
         memory_per_replica_mb: 10000
         limit: 6
 
-  - name: "chart_extractor"
-    type: "stage"
-    phase: 1  # EXTRACTION
-    actor: "nv_ingest.framework.orchestration.ray.stages.extractors.chart_extractor:ChartExtractorStage"
-    config:
-      endpoint_config:
-        yolox_endpoints: [
-          $YOLOX_GRAPHIC_ELEMENTS_GRPC_ENDPOINT|"graphic-elements:8001",
-          $YOLOX_GRAPHIC_ELEMENTS_HTTP_ENDPOINT|""
-        ]
-        yolox_infer_protocol: $YOLOX_GRAPHIC_ELEMENTS_INFER_PROTOCOL|grpc
-        ocr_endpoints: [
-          $OCR_GRPC_ENDPOINT|"ocr:8001",
-          $OCR_HTTP_ENDPOINT|""
-        ]
-        ocr_infer_protocol: $OCR_INFER_PROTOCOL|grpc
-        auth_token: $NGC_API_KEY|$NVIDIA_API_KEY
-    replicas:
-      min_replicas: 0
-      max_replicas:
-        strategy: "memory_thresholding"
-        memory_per_replica_mb: 10000
-      static_replicas:
-        strategy: "memory_static_global_percent"
-        memory_per_replica_mb: 10000
-        limit: 6
-
   # Post-processing / Mutators
   - name: "image_filter"
     type: "stage"
@@ -296,24 +269,54 @@ stages:
         value: 1
 
   # Transforms and Synthesis
+  #
+  # NOTE: ``image_caption`` is a remote-only stage (it calls the VLM NIM
+  # over HTTP and does no local GPU work), so the bottleneck per replica
+  # is the VLM round-trip — typically 1–3 s per image. With a single
+  # replica the stage's input channel (``image_caption_channel_in``)
+  # becomes a strict FIFO behind whatever multi-image document is
+  # currently being processed.
+  #
+  # Concretely: while client B's caption-heavy document drains its
+  # images one at a time through the lone replica, client A's
+  # text-only document — which has *zero* caption work to do — still
+  # has to wait its turn in the queue because every item flows
+  # through every stage (the stage no-ops items whose task list does
+  # not include ``caption``, but it must still dequeue them serially).
+  # The resulting head-of-line block stretches A's wall-clock from
+  # the expected sub-second to ~queue_depth × per-image VLM latency.
+  #
+  # Mitigation: scale the stage horizontally so concurrent items are
+  # dequeued in parallel.  Mirrors ``text_embedder`` (also a remote
+  # HTTP-only stage); VLM NIMs do continuous batching internally so a
+  # handful of in-flight requests is the regime they expect.  A true
+  # bypass for no-caption items requires upstream changes in
+  # nv-ingest (priority dispatch / per-task fast lanes) and is
+  # tracked separately.
   - name: "image_caption"
     type: "stage"
     phase: 4  # TRANSFORM
     actor: "nv_ingest.framework.orchestration.ray.stages.transforms.image_caption:ImageCaptionTransformStage"
     config:
       api_key: $NGC_API_KEY|$NVIDIA_API_KEY
-      model_name: $VLM_CAPTION_MODEL_NAME|"nvidia/nemotron-nano-12b-v2-vl"
+      model_name: $VLM_CAPTION_MODEL_NAME|"nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
       endpoint_url: $VLM_CAPTION_ENDPOINT|"http://vlm:8000/v1/chat/completions"
       prompt: $VLM_CAPTION_PROMPT|"Caption the content of this image:"
       system_prompt: $VLM_CAPTION_SYSTEM_PROMPT|"/no_think"
     replicas:
       min_replicas: 0
+      # Bumped from 1 → 8 to allow horizontal scale-out during caption
+      # bursts.  Keeps the operator-managed VLM NIM as the throughput
+      # ceiling rather than a single-actor serialization point.
       max_replicas:
         strategy: "static"
-        value: 1
+        value: 8
+      # Bumped from 1 → 4: at least four concurrent in-flight items
+      # so an unrelated no-caption client never blocks behind more
+      # than ~queue_size / 4 of the busy client's queued images.
       static_replicas:
         strategy: "static"
-        value: 1
+        value: 4
 
   - name: "text_embedder"
     type: "stage"
@@ -444,9 +447,6 @@ edges:
     to: "table_extractor"
     queue_size: 32
   - from: "table_extractor"
-    to: "chart_extractor"
-    queue_size: 32
-  - from: "chart_extractor"
     to: "image_filter"
     queue_size: 32
 
@@ -487,7 +487,6 @@ edges:
 
 # Pipeline Runtime Configuration
 pipeline:
-  disable_dynamic_scaling: $INGEST_DISABLE_DYNAMIC_SCALING|false
   dynamic_memory_threshold: $INGEST_DYNAMIC_MEMORY_THRESHOLD|0.75
   static_memory_threshold: $INGEST_STATIC_MEMORY_THRESHOLD|0.75
   pid_controller:

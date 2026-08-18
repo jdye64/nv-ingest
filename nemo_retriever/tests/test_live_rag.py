@@ -32,7 +32,7 @@ import pytest
 
 def _make_retriever():
     """Build a bare ``Retriever`` instance with all defaults."""
-    from nemo_retriever.retriever import Retriever
+    from nemo_retriever.graph.retriever import Retriever
 
     return Retriever()
 
@@ -52,13 +52,13 @@ def _fake_hits() -> list[dict]:
 
 def _fake_generation(answer: str = "RAG retrieves context and uses an LLM.", error: str | None = None):
     """Build a GenerationResult with the given answer / error."""
-    from nemo_retriever.llm.types import GenerationResult
+    from nemo_retriever.models.llm.types import GenerationResult
 
     return GenerationResult(answer=answer, latency_s=0.12, model="fake-llm/test", error=error)
 
 
-def _fake_judge_result(score: int | None = 5, reasoning: str = "correct and complete"):
-    from nemo_retriever.llm.types import JudgeResult
+def _fake_judge_result(score: float | None = 1.0, reasoning: str = "correct and complete"):
+    from nemo_retriever.models.llm.types import JudgeResult
 
     return JudgeResult(score=score, reasoning=reasoning, error=None)
 
@@ -68,14 +68,14 @@ class TestRetrieveProtocol:
 
     def test_retriever_satisfies_protocol(self):
         """isinstance check must pass via @runtime_checkable."""
-        from nemo_retriever.llm.types import RetrieverStrategy
+        from nemo_retriever.models.llm.types import RetrieverStrategy
 
         r = _make_retriever()
         assert isinstance(r, RetrieverStrategy)
 
     def test_retrieve_returns_result_shape(self):
         """``retrieve`` adapts ``.query()`` hits into a RetrievalResult."""
-        from nemo_retriever.llm.types import RetrievalResult
+        from nemo_retriever.models.llm.types import RetrievalResult
 
         r = _make_retriever()
         with patch.object(r, "query", return_value=_fake_hits()) as mock_query:
@@ -110,8 +110,13 @@ class TestAnswer:
         with patch.object(r, "query", return_value=_fake_hits()):
             result = r.answer("q?", llm=llm)
 
+        from nemo_retriever.models.llm.types import AnswerResult
+
+        assert isinstance(result, AnswerResult)
         assert result.answer == "RAG retrieves context and uses an LLM."
         assert result.chunks and result.metadata
+        assert result.chunk_count == 3
+        assert result.model_dump()["chunk_count"] == 3
         assert result.model == "fake-llm/test"
         assert result.error is None
         assert result.token_f1 is None
@@ -119,6 +124,18 @@ class TestAnswer:
         assert result.answer_in_context is None
         assert result.judge_score is None
         assert result.failure_mode is None
+        assert llm.generate.call_args.kwargs == {}
+
+    def test_answer_forwards_reasoning_override_when_set(self):
+        """Per-call reasoning override is forwarded only when requested."""
+        r = _make_retriever()
+        llm = MagicMock()
+        llm.generate.return_value = _fake_generation()
+
+        with patch.object(r, "query", return_value=_fake_hits()):
+            r.answer("q?", llm=llm, reasoning_enabled=False)
+
+        assert llm.generate.call_args.kwargs == {"reasoning_enabled": False}
 
     def test_answer_with_reference_no_judge(self):
         """Reference supplied -> Tier 1+2 populated, Tier 3 left None."""
@@ -147,7 +164,7 @@ class TestAnswer:
         llm = MagicMock()
         llm.generate.return_value = _fake_generation()
         judge = MagicMock()
-        judge.judge.return_value = _fake_judge_result(score=5)
+        judge.judge.return_value = _fake_judge_result(score=1.0)
 
         with patch.object(r, "query", return_value=_fake_hits()):
             result = r.answer(
@@ -157,7 +174,7 @@ class TestAnswer:
                 reference="RAG retrieves context and uses an LLM.",
             )
 
-        assert result.judge_score == 5
+        assert result.judge_score == 1.0
         assert result.judge_reasoning == "correct and complete"
         assert result.token_f1 is not None
         assert result.exact_match is not None
@@ -214,7 +231,7 @@ class TestAnswer:
 
         def _slow_judge(query, reference, candidate):
             time.sleep(judge_latency)
-            return _fake_judge_result(score=4)
+            return _fake_judge_result(score=1.0)
 
         judge.judge.side_effect = _slow_judge
 
@@ -228,7 +245,7 @@ class TestAnswer:
             )
             elapsed = time.perf_counter() - start
 
-        assert result.judge_score == 4
+        assert result.judge_score == 1.0
         assert result.token_f1 is not None
         assert (
             elapsed < judge_latency + 0.2
@@ -248,8 +265,8 @@ class TestLiveRetrievalOperator:
         regression back to the quadratic path.
         """
 
-        from nemo_retriever.evaluation.live_retrieval import LiveRetrievalOperator
-        from nemo_retriever.llm.types import RetrievalResult
+        from nemo_retriever.tools.evaluation.live_retrieval import LiveRetrievalOperator
+        from nemo_retriever.models.llm.types import RetrievalResult
 
         mock_retriever = MagicMock()
         mock_retriever.retrieve_batch.return_value = [
@@ -283,8 +300,8 @@ class TestLiveRetrievalOperator:
     def test_process_scales_to_ten_rows_with_single_call(self):
         """A 10-row frame still triggers exactly one ``retrieve_batch`` call."""
 
-        from nemo_retriever.evaluation.live_retrieval import LiveRetrievalOperator
-        from nemo_retriever.llm.types import RetrievalResult
+        from nemo_retriever.tools.evaluation.live_retrieval import LiveRetrievalOperator
+        from nemo_retriever.models.llm.types import RetrievalResult
 
         mock_retriever = MagicMock()
         mock_retriever.retrieve_batch.return_value = [
@@ -302,8 +319,8 @@ class TestLiveRetrievalOperator:
     def test_process_rejects_mismatched_batch_length(self):
         """Guard against a retrieve_batch that drops or duplicates rows."""
 
-        from nemo_retriever.evaluation.live_retrieval import LiveRetrievalOperator
-        from nemo_retriever.llm.types import RetrievalResult
+        from nemo_retriever.tools.evaluation.live_retrieval import LiveRetrievalOperator
+        from nemo_retriever.models.llm.types import RetrievalResult
 
         mock_retriever = MagicMock()
         mock_retriever.retrieve_batch.return_value = [
@@ -317,7 +334,7 @@ class TestLiveRetrievalOperator:
             op.process(df)
 
     def test_process_requires_dataframe(self):
-        from nemo_retriever.evaluation.live_retrieval import LiveRetrievalOperator
+        from nemo_retriever.tools.evaluation.live_retrieval import LiveRetrievalOperator
 
         op = LiveRetrievalOperator(MagicMock(), top_k=3)
         with pytest.raises(TypeError, match="requires a pandas.DataFrame"):
@@ -430,9 +447,9 @@ class TestPipelineBuilder:
         with patch.object(r, "queries", return_value=[hits]):
             # Mock out the three EvalOperator classes that the builder imports
             # lazily so we can assert which ones were appended and executed.
-            with patch("nemo_retriever.evaluation.generation.QAGenerationOperator") as mock_gen_cls, patch(
-                "nemo_retriever.evaluation.scoring_operator.ScoringOperator"
-            ) as mock_score_cls, patch("nemo_retriever.evaluation.judging.JudgingOperator") as mock_judge_cls:
+            with patch("nemo_retriever.tools.evaluation.generation.QAGenerationOperator") as mock_gen_cls, patch(
+                "nemo_retriever.operators.graph_ops.scoring_operator.ScoringOperator"
+            ) as mock_score_cls, patch("nemo_retriever.tools.evaluation.judging.JudgingOperator") as mock_judge_cls:
                 # Configure each mocked operator to pass the DataFrame through
                 # with a sentinel column so we can verify each step ran.
                 def _gen_process(df, **_):
@@ -447,7 +464,7 @@ class TestPipelineBuilder:
 
                 def _judge_process(df, **_):
                     out = df.copy()
-                    out["judge_score"] = [5] * len(out)
+                    out["judge_score"] = [1.0] * len(out)
                     return out
 
                 mock_gen_cls.return_value = _build_mock_operator("QAGenerationOperator", _gen_process)
@@ -473,9 +490,9 @@ class TestPipelineBuilder:
         r = _make_retriever()
 
         with patch.object(r, "queries", return_value=[_fake_hits()]):
-            with patch("nemo_retriever.evaluation.generation.QAGenerationOperator") as mock_gen_cls, patch(
-                "nemo_retriever.evaluation.scoring_operator.ScoringOperator"
-            ) as mock_score_cls, patch("nemo_retriever.evaluation.judging.JudgingOperator") as mock_judge_cls:
+            with patch("nemo_retriever.tools.evaluation.generation.QAGenerationOperator") as mock_gen_cls, patch(
+                "nemo_retriever.operators.graph_ops.scoring_operator.ScoringOperator"
+            ) as mock_score_cls, patch("nemo_retriever.tools.evaluation.judging.JudgingOperator") as mock_judge_cls:
 
                 def _gen_process(df, **_):
                     out = df.copy()
@@ -507,7 +524,7 @@ class TestPipelineBuilder:
 
         r = _make_retriever()
 
-        with patch("nemo_retriever.evaluation.generation.QAGenerationOperator") as mock_gen_cls:
+        with patch("nemo_retriever.tools.evaluation.generation.QAGenerationOperator") as mock_gen_cls:
             mock_gen_cls.return_value = _build_mock_operator("QAGenerationOperator", lambda df, **_: df)
             llm = _build_fake_llm_client(top_p=0.7)
             r.pipeline().generate(llm)
@@ -524,7 +541,7 @@ class TestPipelineBuilder:
 
         r = _make_retriever()
 
-        with patch("nemo_retriever.evaluation.generation.QAGenerationOperator") as mock_gen_cls:
+        with patch("nemo_retriever.tools.evaluation.generation.QAGenerationOperator") as mock_gen_cls:
             mock_gen_cls.return_value = _build_mock_operator("QAGenerationOperator", lambda df, **_: df)
             llm = _build_fake_llm_client()
             r.pipeline().generate(llm)
@@ -546,7 +563,7 @@ class TestPipelineBuilder:
     def test_builder_reference_length_must_match(self):
         r = _make_retriever()
         llm = _build_fake_llm_client()
-        with patch("nemo_retriever.evaluation.generation.QAGenerationOperator"):
+        with patch("nemo_retriever.tools.evaluation.generation.QAGenerationOperator"):
             with pytest.raises(ValueError, match="reference length must match"):
                 r.pipeline().generate(llm).run(queries=["q1", "q2"], reference=["r1"])
 
@@ -564,7 +581,7 @@ class TestPipelineBuilder:
         hits = _fake_hits()
 
         with patch.object(r, "queries", return_value=[hits, hits, hits]):
-            with patch("nemo_retriever.evaluation.generation.QAGenerationOperator") as mock_gen_cls:
+            with patch("nemo_retriever.tools.evaluation.generation.QAGenerationOperator") as mock_gen_cls:
 
                 def _gen_process(df, **_):
                     out = df.copy()
@@ -600,7 +617,7 @@ def _build_mock_operator(class_name: str, process_fn):
     ``EvalOperator`` so required-column validation does not fire, and
     simply override ``process``.
     """
-    from nemo_retriever.evaluation.eval_operator import EvalOperator
+    from nemo_retriever.operators.graph_ops.eval_operator import EvalOperator
 
     class _Mock(EvalOperator):
         required_columns = ()
@@ -626,6 +643,9 @@ def _build_fake_llm_client(*, top_p: float | None = None):
         extra_params={},
         num_retries=3,
         timeout=120.0,
+        rag_system_prompt=None,
+        rag_system_prompt_prefix=None,
+        reasoning_enabled=True,
     )
     sampling = SimpleNamespace(temperature=0.0, top_p=top_p, max_tokens=512)
     return SimpleNamespace(transport=transport, sampling=sampling)
@@ -641,5 +661,4 @@ def _build_fake_judge():
         num_retries=3,
         timeout=120.0,
     )
-    client = SimpleNamespace(transport=transport)
-    return SimpleNamespace(_client=client)
+    return SimpleNamespace(transport=transport)

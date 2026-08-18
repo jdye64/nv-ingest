@@ -2,19 +2,26 @@
 # All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unit tests for nemo_retriever.text_embed.vllm (no vLLM install required)."""
+"""Unit tests for nemo_retriever.models.inference.vllm (no vLLM install required)."""
 
 import base64
 import io
-from types import SimpleNamespace
+import os
+import sys
+from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 torch = pytest.importorskip("torch")
 
-from nemo_retriever.text_embed.vllm import embed_multimodal_with_vllm_llm, embed_with_vllm_llm
-from nemo_retriever.model.local.llama_nemotron_embed_1b_v2_embedder import LlamaNemotronEmbed1BV2Embedder
+from nemo_retriever.models.inference import vllm as vllm_inference
+from nemo_retriever.models.inference.vllm import (
+    apply_vllm_startup_defaults,
+    embed_multimodal_with_vllm_llm,
+    embed_with_vllm_llm,
+)
+from nemo_retriever.models.local.llama_nemotron_embed_1b_v2_embedder import LlamaNemotronEmbed1BV2Embedder
 
 
 def _make_output(embedding):
@@ -53,6 +60,42 @@ class TestEmbedWithVllmLlm:
         called_batch = llm.embed.call_args[0][0]
         assert called_batch == ["query: world"]
 
+    def test_normalize_false_translates_to_pooling_params(self, monkeypatch):
+        class FakePoolingParams:
+            def __init__(self, *, use_activation):
+                self.use_activation = use_activation
+
+        fake_vllm = ModuleType("vllm")
+        fake_vllm.__path__ = []
+        fake_pooling_params = ModuleType("vllm.pooling_params")
+        fake_pooling_params.PoolingParams = FakePoolingParams
+        monkeypatch.setitem(sys.modules, "vllm", fake_vllm)
+        monkeypatch.setitem(sys.modules, "vllm.pooling_params", fake_pooling_params)
+
+        llm = MagicMock()
+        llm.embed.return_value = [_make_output([0.0])]
+        embed_with_vllm_llm(["world"], llm, normalize=False)
+        pooling_params = llm.embed.call_args.kwargs["pooling_params"]
+        assert isinstance(pooling_params, FakePoolingParams)
+        assert pooling_params.use_activation is False
+
+    def test_normalize_true_preserves_vllm_defaults(self):
+        llm = MagicMock()
+        llm.embed.return_value = [_make_output([0.0])]
+        embed_with_vllm_llm(["world"], llm, normalize=True)
+        assert "pooling_params" not in llm.embed.call_args.kwargs
+
+    def test_normalize_false_import_error_raises_runtime_error(self, monkeypatch):
+        fake_vllm = ModuleType("vllm")
+        fake_vllm.__path__ = []
+        monkeypatch.setitem(sys.modules, "vllm", fake_vllm)
+        monkeypatch.delitem(sys.modules, "vllm.pooling_params", raising=False)
+
+        llm = MagicMock()
+        with pytest.raises(RuntimeError, match="Failed to create PoolingParams"):
+            embed_with_vllm_llm(["world"], llm, normalize=False)
+        llm.embed.assert_not_called()
+
     def test_empty_prompts_early_return(self):
         llm = MagicMock()
         result = embed_with_vllm_llm([], llm)
@@ -79,7 +122,7 @@ def _make_minimal_b64() -> str:
 
 def _make_vllm_vl_embedder():
     """Instantiate LlamaNemotronEmbedVL1BV2VLLMEmbedder without GPU init."""
-    from nemo_retriever.model.local.llama_nemotron_embed_vl_1b_v2_embedder import (
+    from nemo_retriever.models.local.llama_nemotron_embed_vl_1b_v2_embedder import (
         LlamaNemotronEmbedVL1BV2VLLMEmbedder,
     )
 
@@ -131,6 +174,24 @@ class TestEmbedMultimodalWithVllmLlm:
         assert len(result) == 1
         assert len(result[0]) == 2
 
+    def test_normalize_false_translates_to_pooling_params(self, monkeypatch):
+        class FakePoolingParams:
+            def __init__(self, *, use_activation):
+                self.use_activation = use_activation
+
+        fake_vllm = ModuleType("vllm")
+        fake_vllm.__path__ = []
+        fake_pooling_params = ModuleType("vllm.pooling_params")
+        fake_pooling_params.PoolingParams = FakePoolingParams
+        monkeypatch.setitem(sys.modules, "vllm", fake_vllm)
+        monkeypatch.setitem(sys.modules, "vllm.pooling_params", fake_pooling_params)
+
+        llm = MagicMock()
+        llm.embed.return_value = [_make_output([0.0])]
+        embed_multimodal_with_vllm_llm([{"prompt": "<image>"}], llm, normalize=False)
+        pooling_params = llm.embed.call_args.kwargs["pooling_params"]
+        assert pooling_params.use_activation is False
+
 
 class TestCreateVllmLlm:
     def setup_method(self):
@@ -140,7 +201,7 @@ class TestCreateVllmLlm:
         # LLM is imported inside create_vllm_llm's body, so patch at its source
         with patch("vllm.LLM") as mock_llm_cls:
             mock_llm_cls.return_value = MagicMock()
-            from nemo_retriever.text_embed.vllm import create_vllm_llm
+            from nemo_retriever.models.inference.vllm import create_vllm_llm
 
             create_vllm_llm("some-model")
         _, kwargs = mock_llm_cls.call_args
@@ -149,11 +210,236 @@ class TestCreateVllmLlm:
     def test_limit_mm_per_prompt_forwarded_when_provided(self):
         with patch("vllm.LLM") as mock_llm_cls:
             mock_llm_cls.return_value = MagicMock()
-            from nemo_retriever.text_embed.vllm import create_vllm_llm
+            from nemo_retriever.models.inference.vllm import create_vllm_llm
 
             create_vllm_llm("some-model", limit_mm_per_prompt={"image": 1})
         _, kwargs = mock_llm_cls.call_args
         assert kwargs.get("limit_mm_per_prompt") == {"image": 1}
+
+    def test_applies_vllm_startup_defaults_before_constructing_llm(self, monkeypatch):
+        monkeypatch.delenv("VLLM_DEEP_GEMM_WARMUP", raising=False)
+        with patch("vllm.LLM") as mock_llm_cls:
+            mock_llm_cls.return_value = MagicMock()
+            from nemo_retriever.models.inference.vllm import create_vllm_llm
+
+            create_vllm_llm("some-model")
+
+        assert os.environ["VLLM_DEEP_GEMM_WARMUP"] == "skip"
+
+
+class TestVllmStartupDefaults:
+    def test_deep_gemm_warmup_defaults_to_skip(self, monkeypatch):
+        monkeypatch.delenv("VLLM_DEEP_GEMM_WARMUP", raising=False)
+
+        apply_vllm_startup_defaults()
+
+        assert os.environ["VLLM_DEEP_GEMM_WARMUP"] == "skip"
+
+    def test_deep_gemm_warmup_respects_user_override(self, monkeypatch):
+        monkeypatch.setenv("VLLM_DEEP_GEMM_WARMUP", "full")
+
+        apply_vllm_startup_defaults()
+
+        assert os.environ["VLLM_DEEP_GEMM_WARMUP"] == "full"
+
+    def test_single_gpu_keeps_nvlink_collectives_untouched(self, monkeypatch):
+        monkeypatch.delenv("NCCL_NVLS_ENABLE", raising=False)
+        monkeypatch.delenv("TORCH_SYMM_MEM_DISABLE_MULTICAST", raising=False)
+        monkeypatch.setattr(vllm_inference, "nvlink_is_available", lambda **_kwargs: False)
+
+        apply_vllm_startup_defaults(tensor_parallel_size=1)
+
+        assert "NCCL_NVLS_ENABLE" not in os.environ
+        assert "TORCH_SYMM_MEM_DISABLE_MULTICAST" not in os.environ
+
+    def test_tensor_parallel_without_nvlink_disables_multicast_collectives(self, monkeypatch):
+        monkeypatch.delenv("NCCL_NVLS_ENABLE", raising=False)
+        monkeypatch.delenv("TORCH_SYMM_MEM_DISABLE_MULTICAST", raising=False)
+        monkeypatch.setattr(vllm_inference, "nvlink_is_available", lambda **_kwargs: False)
+
+        apply_vllm_startup_defaults(tensor_parallel_size=2)
+
+        assert os.environ["NCCL_NVLS_ENABLE"] == "0"
+        assert os.environ["TORCH_SYMM_MEM_DISABLE_MULTICAST"] == "1"
+
+    def test_tensor_parallel_with_nvlink_keeps_multicast_collectives(self, monkeypatch):
+        monkeypatch.delenv("NCCL_NVLS_ENABLE", raising=False)
+        monkeypatch.delenv("TORCH_SYMM_MEM_DISABLE_MULTICAST", raising=False)
+        monkeypatch.setattr(vllm_inference, "nvlink_is_available", lambda **_kwargs: True)
+
+        apply_vllm_startup_defaults(tensor_parallel_size=2)
+
+        assert "NCCL_NVLS_ENABLE" not in os.environ
+        assert "TORCH_SYMM_MEM_DISABLE_MULTICAST" not in os.environ
+
+    def test_nvlink_fallback_respects_user_override(self, monkeypatch):
+        monkeypatch.setenv("NCCL_NVLS_ENABLE", "1")
+        monkeypatch.delenv("TORCH_SYMM_MEM_DISABLE_MULTICAST", raising=False)
+        monkeypatch.setattr(vllm_inference, "nvlink_is_available", lambda **_kwargs: False)
+
+        apply_vllm_startup_defaults(tensor_parallel_size=2)
+
+        assert os.environ["NCCL_NVLS_ENABLE"] == "1"
+        assert os.environ["TORCH_SYMM_MEM_DISABLE_MULTICAST"] == "1"
+
+
+class TestNvlinkDetection:
+    def _install_fake_pynvml(self, monkeypatch, *, devices_link_states, link_peers=None, support_remote_pci=True):
+        """Install a fake ``pynvml``.
+
+        ``link_peers`` maps a device index to the peer of each of its links:
+        another device index, or ``"switch"`` for an NVSwitch endpoint.
+        """
+
+        class FakeNVMLError(Exception):
+            pass
+
+        fake = ModuleType("pynvml")
+        fake.NVMLError = FakeNVMLError
+        fake.NVML_NVLINK_MAX_LINKS = max((len(states) for states in devices_link_states), default=1)
+        fake.nvmlInit = lambda: None
+        fake.nvmlShutdown = lambda: None
+        fake.nvmlDeviceGetCount = lambda: len(devices_link_states)
+        fake.nvmlDeviceGetHandleByIndex = lambda index: index
+        fake.nvmlDeviceGetPciInfo = lambda handle: SimpleNamespace(busId=f"0000:0{int(handle)}:00.0".encode())
+
+        def get_nvlink_state(handle, link):
+            try:
+                state = devices_link_states[int(handle)][link]
+            except IndexError as exc:
+                raise FakeNVMLError("invalid link") from exc
+            if state is None:
+                raise FakeNVMLError("not supported")
+            return state
+
+        def get_remote_pci_info(handle, link):
+            peers = (link_peers or {}).get(int(handle), [])
+            peer = peers[link] if link < len(peers) else None
+            if peer is None:
+                raise FakeNVMLError("remote pci info unavailable")
+            if peer == "switch":
+                return SimpleNamespace(busId=b"0000:ff:00.0")
+            return SimpleNamespace(busId=f"0000:0{int(peer)}:00.0".encode())
+
+        fake.nvmlDeviceGetNvLinkState = get_nvlink_state
+        if support_remote_pci:
+            fake.nvmlDeviceGetNvLinkRemotePciInfo = get_remote_pci_info
+        monkeypatch.setitem(sys.modules, "pynvml", fake)
+        return fake
+
+    def test_active_link_reports_available(self, monkeypatch):
+        monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+        self._install_fake_pynvml(
+            monkeypatch,
+            devices_link_states=[[0, 1], [0, 1]],
+            link_peers={0: [None, 1], 1: [None, 0]},
+        )
+
+        assert vllm_inference.nvlink_is_available() is True
+
+    def test_active_link_to_gpu_outside_tp_group_reports_unavailable(self, monkeypatch):
+        # Separately bridged pairs 0-1 and 2-3: a TP group of 0 and 2 has active
+        # links on both devices, but neither reaches the other TP member.
+        monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,2")
+        self._install_fake_pynvml(
+            monkeypatch,
+            devices_link_states=[[1], [1], [1], [1]],
+            link_peers={0: [1], 1: [0], 2: [3], 3: [2]},
+        )
+
+        assert vllm_inference.nvlink_is_available(tensor_parallel_size=2) is False
+
+    def test_nvswitch_peer_reports_available(self, monkeypatch):
+        monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+        self._install_fake_pynvml(
+            monkeypatch,
+            devices_link_states=[[1], [1]],
+            link_peers={0: ["switch"], 1: ["switch"]},
+        )
+
+        assert vllm_inference.nvlink_is_available(tensor_parallel_size=2) is True
+
+    def test_unreportable_peer_trusts_active_link(self, monkeypatch):
+        monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+        self._install_fake_pynvml(
+            monkeypatch,
+            devices_link_states=[[1], [1]],
+            support_remote_pci=False,
+        )
+
+        assert vllm_inference.nvlink_is_available(tensor_parallel_size=2) is True
+
+    def test_no_link_support_reports_unavailable(self, monkeypatch):
+        monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+        self._install_fake_pynvml(monkeypatch, devices_link_states=[[None], [None]])
+
+        assert vllm_inference.nvlink_is_available() is False
+
+    def test_inactive_links_report_unavailable(self, monkeypatch):
+        monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+        self._install_fake_pynvml(monkeypatch, devices_link_states=[[0, 0], [0, 0]])
+
+        assert vllm_inference.nvlink_is_available() is False
+
+    def test_visible_pcie_pair_ignores_unrelated_nvlink_devices(self, monkeypatch):
+        # Host has NVLink on 0/1, but CUDA_VISIBLE_DEVICES selects the PCIe-only 2/3 pair.
+        monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "2,3")
+        self._install_fake_pynvml(
+            monkeypatch,
+            devices_link_states=[[1], [1], [0], [0]],
+        )
+
+        assert vllm_inference.nvlink_is_available(tensor_parallel_size=2) is False
+
+    def test_visible_nvlink_pair_reports_available(self, monkeypatch):
+        monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1")
+        self._install_fake_pynvml(
+            monkeypatch,
+            devices_link_states=[[1], [1], [0], [0]],
+            link_peers={0: [1], 1: [0]},
+        )
+
+        assert vllm_inference.nvlink_is_available(tensor_parallel_size=2) is True
+
+    def test_tp_group_ignores_extra_visible_nvlink_devices(self, monkeypatch):
+        # Four visible GPUs: TP=2 uses physical 0/1 (PCIe-only). NVLink on 2/3
+        # must not keep multicast enabled for the TP shard.
+        monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1,2,3")
+        self._install_fake_pynvml(
+            monkeypatch,
+            devices_link_states=[[0], [0], [1], [1]],
+            link_peers={2: [3], 3: [2]},
+        )
+
+        assert vllm_inference.nvlink_is_available(tensor_parallel_size=2) is False
+        assert vllm_inference.nvlink_is_available(tensor_parallel_size=4) is True
+
+    def test_uuid_visible_devices_assume_available(self, monkeypatch):
+        """UUID selections are not resolved here, so keep vLLM's own defaults."""
+        monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-deadbeef")
+        self._install_fake_pynvml(monkeypatch, devices_link_states=[[0], [0]])
+
+        assert vllm_inference.nvlink_is_available(tensor_parallel_size=2) is True
+
+    def test_missing_nvml_assumes_available(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "pynvml", None)
+
+        assert vllm_inference.nvlink_is_available() is True
+
+    def test_nvml_init_error_assumes_available(self, monkeypatch):
+        class FakeNVMLError(Exception):
+            pass
+
+        fake = ModuleType("pynvml")
+        fake.NVMLError = FakeNVMLError
+
+        def fail_init():
+            raise FakeNVMLError("init failed")
+
+        fake.nvmlInit = fail_init
+        monkeypatch.setitem(sys.modules, "pynvml", fake)
+
+        assert vllm_inference.nvlink_is_available() is True
 
 
 class TestVLLMEmbedderImages:
@@ -171,7 +457,7 @@ class TestVLLMEmbedderImages:
 
     def test_calls_multimodal_helper(self):
         b64 = _make_minimal_b64()
-        with patch("nemo_retriever.text_embed.vllm.embed_multimodal_with_vllm_llm") as mock_mm:
+        with patch("nemo_retriever.models.inference.vllm.embed_multimodal_with_vllm_llm") as mock_mm:
             mock_mm.return_value = [[0.6, 0.8]]
             self.embedder.embed_images([b64])
         mock_mm.assert_called_once()
@@ -185,7 +471,7 @@ class TestVLLMEmbedderImages:
         b64 = _make_minimal_b64()
         captured = []
         with patch(
-            "nemo_retriever.text_embed.vllm.embed_multimodal_with_vllm_llm",
+            "nemo_retriever.models.inference.vllm.embed_multimodal_with_vllm_llm",
             side_effect=lambda dicts, llm, **kw: captured.extend(dicts) or [[0.1, 0.2]],
         ):
             self.embedder.embed_images([b64])
@@ -195,17 +481,28 @@ class TestVLLMEmbedderImages:
     def test_output_is_l2_normalized(self):
         b64 = _make_minimal_b64()
         with patch(
-            "nemo_retriever.text_embed.vllm.embed_multimodal_with_vllm_llm",
+            "nemo_retriever.models.inference.vllm.embed_multimodal_with_vllm_llm",
             return_value=[[3.0, 4.0]],
         ):
             result = self.embedder.embed_images([b64])
         assert result.shape == (1, 2)
         assert abs(float(torch.norm(result, dim=-1).item()) - 1.0) < 1e-5
 
+    def test_output_is_unnormalized_when_normalize_false(self):
+        self.embedder.normalize = False
+        b64 = _make_minimal_b64()
+        with patch(
+            "nemo_retriever.models.inference.vllm.embed_multimodal_with_vllm_llm",
+            return_value=[[3.0, 4.0]],
+        ) as mock_mm:
+            result = self.embedder.embed_images([b64])
+        assert mock_mm.call_args.kwargs["normalize"] is False
+        assert result.tolist() == [[3.0, 4.0]]
+
     def test_no_valid_embeddings_returns_empty_tensor(self):
         b64 = _make_minimal_b64()
         with patch(
-            "nemo_retriever.text_embed.vllm.embed_multimodal_with_vllm_llm",
+            "nemo_retriever.models.inference.vllm.embed_multimodal_with_vllm_llm",
             return_value=[[]],
         ):
             result = self.embedder.embed_images([b64])
@@ -234,14 +531,18 @@ class TestLlamaNemotronEmbed1BV2Embedder:
         assert result[1].tolist() == [0.0, 0.0]
 
     def test_embed_uses_passage_prefix_by_default(self):
-        with patch("nemo_retriever.text_embed.vllm.embed_with_vllm_llm", return_value=[[0.6, 0.8]]) as mock_fn:
+        with patch("nemo_retriever.models.inference.vllm.embed_with_vllm_llm", return_value=[[0.6, 0.8]]) as mock_fn:
             self.embedder.embed(["hello"])
         assert mock_fn.call_args[1].get("prefix") == "passage: "
+        assert "use_activation" not in mock_fn.call_args[1]
+        assert mock_fn.call_args[1].get("normalize") is True
 
     def test_embed_queries_uses_query_prefix(self):
-        with patch("nemo_retriever.text_embed.vllm.embed_with_vllm_llm", return_value=[[0.6, 0.8]]) as mock_fn:
+        with patch("nemo_retriever.models.inference.vllm.embed_with_vllm_llm", return_value=[[0.6, 0.8]]) as mock_fn:
             self.embedder.embed_queries(["hello"])
         assert mock_fn.call_args[1].get("prefix") == "query: "
+        assert "use_activation" not in mock_fn.call_args[1]
+        assert mock_fn.call_args[1].get("normalize") is True
 
     def test_embed_empty_input_returns_empty_tensor(self):
         result = self.embedder.embed(["", "  "])
@@ -256,16 +557,43 @@ class TestLlamaNemotronEmbed1BV2Embedder:
 class TestLlamaNemotronEmbed1BV2EmbedderNormalization:
     def test_output_is_l2_normalized_by_default(self):
         embedder = _make_text_embedder()
-        with patch("nemo_retriever.text_embed.vllm.embed_with_vllm_llm", return_value=[[3.0, 4.0]]):
+        with patch("nemo_retriever.models.inference.vllm.embed_with_vllm_llm", return_value=[[3.0, 4.0]]):
             result = embedder.embed(["text"])
         assert abs(float(torch.norm(result, dim=-1).item()) - 1.0) < 1e-5
 
     def test_output_unnormalized_when_normalize_false(self):
         embedder = _make_text_embedder()
         embedder.normalize = False
-        with patch("nemo_retriever.text_embed.vllm.embed_with_vllm_llm", return_value=[[3.0, 4.0]]):
+        with patch("nemo_retriever.models.inference.vllm.embed_with_vllm_llm", return_value=[[3.0, 4.0]]) as mock_fn:
             result = embedder.embed(["text"])
+        assert mock_fn.call_args[1].get("normalize") is False
         assert abs(float(result[0][0].item()) - 3.0) < 1e-5
+
+    def test_query_output_unnormalized_when_normalize_false(self):
+        embedder = _make_text_embedder()
+        embedder.normalize = False
+        with patch("nemo_retriever.models.inference.vllm.embed_with_vllm_llm", return_value=[[3.0, 4.0]]) as mock_fn:
+            result = embedder.embed_queries(["text"])
+        assert mock_fn.call_args[1].get("normalize") is False
+        assert abs(float(result[0][0].item()) - 3.0) < 1e-5
+
+
+class TestLlamaNemotronEmbedVL1BV2VLLMEmbedderNormalization:
+    def test_text_output_unnormalized_when_normalize_false(self):
+        embedder = _make_vllm_vl_embedder()
+        embedder.normalize = False
+        with patch("nemo_retriever.models.inference.vllm.embed_with_vllm_llm", return_value=[[3.0, 4.0]]) as mock_fn:
+            result = embedder.embed(["text"])
+        assert mock_fn.call_args.kwargs["normalize"] is False
+        assert result.tolist() == [[3.0, 4.0]]
+
+    def test_query_output_unnormalized_when_normalize_false(self):
+        embedder = _make_vllm_vl_embedder()
+        embedder.normalize = False
+        with patch("nemo_retriever.models.inference.vllm.embed_with_vllm_llm", return_value=[[3.0, 4.0]]) as mock_fn:
+            result = embedder.embed_queries(["text"])
+        assert mock_fn.call_args.kwargs["normalize"] is False
+        assert result.tolist() == [[3.0, 4.0]]
 
 
 class TestVLLMEmbedderTextImage:
@@ -283,7 +611,7 @@ class TestVLLMEmbedderTextImage:
     def test_calls_multimodal_helper(self):
         b64 = _make_minimal_b64()
         with patch(
-            "nemo_retriever.text_embed.vllm.embed_multimodal_with_vllm_llm",
+            "nemo_retriever.models.inference.vllm.embed_multimodal_with_vllm_llm",
             return_value=[[0.6, 0.8]],
         ) as mock_mm:
             self.embedder.embed_text_image(["hello"], [b64])
@@ -293,7 +621,7 @@ class TestVLLMEmbedderTextImage:
         b64 = _make_minimal_b64()
         captured = []
         with patch(
-            "nemo_retriever.text_embed.vllm.embed_multimodal_with_vllm_llm",
+            "nemo_retriever.models.inference.vllm.embed_multimodal_with_vllm_llm",
             side_effect=lambda dicts, llm, **kw: captured.extend(dicts) or [[0.1, 0.2]],
         ):
             self.embedder.embed_text_image(["my document text"], [b64])
@@ -304,7 +632,7 @@ class TestVLLMEmbedderTextImage:
         b64 = _make_minimal_b64()
         captured = []
         with patch(
-            "nemo_retriever.text_embed.vllm.embed_multimodal_with_vllm_llm",
+            "nemo_retriever.models.inference.vllm.embed_multimodal_with_vllm_llm",
             side_effect=lambda dicts, llm, **kw: captured.extend(dicts) or [[0.1, 0.2]],
         ):
             self.embedder.embed_text_image(["text a", "text b"], [b64, ""])
@@ -313,9 +641,20 @@ class TestVLLMEmbedderTextImage:
     def test_output_is_l2_normalized(self):
         b64 = _make_minimal_b64()
         with patch(
-            "nemo_retriever.text_embed.vllm.embed_multimodal_with_vllm_llm",
+            "nemo_retriever.models.inference.vllm.embed_multimodal_with_vllm_llm",
             return_value=[[3.0, 4.0]],
         ):
             result = self.embedder.embed_text_image(["text"], [b64])
         assert result.shape == (1, 2)
         assert abs(float(torch.norm(result, dim=-1).item()) - 1.0) < 1e-5
+
+    def test_output_is_unnormalized_when_normalize_false(self):
+        self.embedder.normalize = False
+        b64 = _make_minimal_b64()
+        with patch(
+            "nemo_retriever.models.inference.vllm.embed_multimodal_with_vllm_llm",
+            return_value=[[3.0, 4.0]],
+        ) as mock_mm:
+            result = self.embedder.embed_text_image(["text"], [b64])
+        assert mock_mm.call_args.kwargs["normalize"] is False
+        assert result.tolist() == [[3.0, 4.0]]

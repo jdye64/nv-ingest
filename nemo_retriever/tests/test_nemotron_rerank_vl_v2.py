@@ -11,6 +11,7 @@ required.
 
 from __future__ import annotations
 
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -23,7 +24,7 @@ import pytest
 
 class TestNemotronRerankVLV2VLLMProperties:
     def _make_instance(self, model_name="nvidia/llama-nemotron-rerank-vl-1b-v2"):
-        from nemo_retriever.model.local import nemotron_rerank_vl_v2 as mod
+        from nemo_retriever.models.local import nemotron_rerank_vl_v2 as mod
 
         with (
             patch.object(mod, "configure_global_hf_cache_base"),
@@ -51,7 +52,7 @@ class TestNemotronRerankVLV2VLLMProperties:
         assert obj.input_batch_size == 32
 
     def test_llm_created_with_correct_kwargs(self):
-        from nemo_retriever.model.local import nemotron_rerank_vl_v2 as mod
+        from nemo_retriever.models.local import nemotron_rerank_vl_v2 as mod
 
         with (
             patch.object(mod, "configure_global_hf_cache_base"),
@@ -72,6 +73,22 @@ class TestNemotronRerankVLV2VLLMProperties:
                 gpu_memory_utilization=0.7,
             )
 
+    def test_applies_vllm_startup_defaults_before_constructing_llm(self, monkeypatch):
+        from nemo_retriever.models.local import nemotron_rerank_vl_v2 as mod
+
+        monkeypatch.delenv("VLLM_DEEP_GEMM_WARMUP", raising=False)
+
+        def assert_startup_defaults(**_kwargs):
+            assert os.environ["VLLM_DEEP_GEMM_WARMUP"] == "skip"
+            return MagicMock()
+
+        with (
+            patch.object(mod, "configure_global_hf_cache_base"),
+            patch.object(mod, "get_hf_revision", return_value=None),
+            patch("vllm.LLM", side_effect=assert_startup_defaults),
+        ):
+            mod.NemotronRerankVLV2VLLM()
+
 
 # ---------------------------------------------------------------------------
 # NemotronRerankVLV2VLLM — score()
@@ -81,7 +98,7 @@ class TestNemotronRerankVLV2VLLMProperties:
 class TestNemotronRerankVLV2VLLMScore:
     @pytest.fixture()
     def reranker(self):
-        from nemo_retriever.model.local import nemotron_rerank_vl_v2 as mod
+        from nemo_retriever.models.local import nemotron_rerank_vl_v2 as mod
 
         with (
             patch.object(mod, "configure_global_hf_cache_base"),
@@ -158,7 +175,7 @@ class TestNemotronRerankVLV2VLLMScore:
         assert reranker._llm.score.call_count == 2
 
     def test_score_chat_template_passed(self, reranker):
-        from nemo_retriever.model.local.nemotron_rerank_vl_v2 import SCORE_TEMPLATE
+        from nemo_retriever.models.local.nemotron_rerank_vl_v2 import SCORE_TEMPLATE
 
         out = MagicMock()
         out.outputs.score = 1.0
@@ -177,25 +194,25 @@ class TestNemotronRerankVLV2VLLMScore:
 
 class TestBuildDocument:
     def test_text_only(self):
-        from nemo_retriever.model.local.nemotron_rerank_vl_v2 import NemotronRerankVLV2VLLM
+        from nemo_retriever.models.local.nemotron_rerank_vl_v2 import NemotronRerankVLV2VLLM
 
         result = NemotronRerankVLV2VLLM._build_document("hello world")
         assert result == "hello world"
 
     def test_text_only_none_image(self):
-        from nemo_retriever.model.local.nemotron_rerank_vl_v2 import NemotronRerankVLV2VLLM
+        from nemo_retriever.models.local.nemotron_rerank_vl_v2 import NemotronRerankVLV2VLLM
 
         result = NemotronRerankVLV2VLLM._build_document("hello", None)
         assert result == "hello"
 
     def test_text_only_empty_image(self):
-        from nemo_retriever.model.local.nemotron_rerank_vl_v2 import NemotronRerankVLV2VLLM
+        from nemo_retriever.models.local.nemotron_rerank_vl_v2 import NemotronRerankVLV2VLLM
 
         result = NemotronRerankVLV2VLLM._build_document("hello", "")
         assert result == "hello"
 
     def test_with_image(self):
-        from nemo_retriever.model.local.nemotron_rerank_vl_v2 import NemotronRerankVLV2VLLM
+        from nemo_retriever.models.local.nemotron_rerank_vl_v2 import NemotronRerankVLV2VLLM
 
         result = NemotronRerankVLV2VLLM._build_document("doc text", "abc123")
         assert isinstance(result, dict)
@@ -205,7 +222,7 @@ class TestBuildDocument:
         assert result["content"][1] == {"type": "text", "text": "doc text"}
 
     def test_image_only_no_text(self):
-        from nemo_retriever.model.local.nemotron_rerank_vl_v2 import NemotronRerankVLV2VLLM
+        from nemo_retriever.models.local.nemotron_rerank_vl_v2 import NemotronRerankVLV2VLLM
 
         result = NemotronRerankVLV2VLLM._build_document("", "abc123")
         assert isinstance(result, dict)
@@ -221,45 +238,45 @@ class TestBuildDocument:
 
 class TestCreateLocalRerankerBackend:
     def test_default_backend_dispatches_to_vllm(self):
-        with patch("nemo_retriever.model.local.nemotron_rerank_vl_v2.NemotronRerankVLV2VLLM") as MockVLLM:
+        with patch("nemo_retriever.models.local.nemotron_rerank_vl_v2.NemotronRerankVLV2VLLM") as MockVLLM:
             MockVLLM.return_value = MagicMock()
-            from nemo_retriever.model import create_local_reranker
+            from nemo_retriever.models import create_local_reranker
 
             result = create_local_reranker("nvidia/llama-nemotron-rerank-vl-1b-v2")
             MockVLLM.assert_called_once()
             assert result is MockVLLM.return_value
 
     def test_vllm_backend_explicit(self):
-        with patch("nemo_retriever.model.local.nemotron_rerank_vl_v2.NemotronRerankVLV2VLLM") as MockVLLM:
+        with patch("nemo_retriever.models.local.nemotron_rerank_vl_v2.NemotronRerankVLV2VLLM") as MockVLLM:
             MockVLLM.return_value = MagicMock()
-            from nemo_retriever.model import create_local_reranker
+            from nemo_retriever.models import create_local_reranker
 
             result = create_local_reranker("nvidia/llama-nemotron-rerank-vl-1b-v2", backend="vllm")
             MockVLLM.assert_called_once()
             assert result is MockVLLM.return_value
 
     def test_hf_backend(self):
-        with patch("nemo_retriever.model.local.nemotron_rerank_vl_v2_hf.NemotronRerankVLV2") as MockTF:
+        with patch("nemo_retriever.models.local.nemotron_rerank_vl_v2_hf.NemotronRerankVLV2") as MockTF:
             MockTF.return_value = MagicMock()
-            from nemo_retriever.model import create_local_reranker
+            from nemo_retriever.models import create_local_reranker
 
             result = create_local_reranker("nvidia/llama-nemotron-rerank-vl-1b-v2", backend="hf")
             MockTF.assert_called_once()
             assert result is MockTF.return_value
 
     def test_text_only_model_ignores_backend(self):
-        with patch("nemo_retriever.model.local.nemotron_rerank_v2.NemotronRerankV2") as MockText:
+        with patch("nemo_retriever.models.local.nemotron_rerank_v2.NemotronRerankV2") as MockText:
             MockText.return_value = MagicMock()
-            from nemo_retriever.model import create_local_reranker
+            from nemo_retriever.models import create_local_reranker
 
             result = create_local_reranker("nvidia/llama-nemotron-rerank-1b-v2", backend="vllm")
             MockText.assert_called_once()
             assert result is MockText.return_value
 
     def test_gpu_memory_utilization_passed_to_vllm(self):
-        with patch("nemo_retriever.model.local.nemotron_rerank_vl_v2.NemotronRerankVLV2VLLM") as MockVLLM:
+        with patch("nemo_retriever.models.local.nemotron_rerank_vl_v2.NemotronRerankVLV2VLLM") as MockVLLM:
             MockVLLM.return_value = MagicMock()
-            from nemo_retriever.model import create_local_reranker
+            from nemo_retriever.models import create_local_reranker
 
             create_local_reranker(
                 "nvidia/llama-nemotron-rerank-vl-1b-v2",

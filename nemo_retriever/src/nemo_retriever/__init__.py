@@ -19,20 +19,41 @@ for _finder in sys.meta_path:
         _finder.has_warned_pynvml = True
         break
 
-from .retriever import retriever as _retriever_cls
+from nemo_retriever.graph.retriever import retriever as _retriever_cls
 
-__all__ = ["__version__", "create_ingestor", "get_version", "get_version_info", "ingestor", "retriever"]
+__all__ = [
+    "__version__",
+    "create_ingestor",
+    "get_version",
+    "get_version_info",
+    "GraphIngestionError",
+    "ingestor",
+    "retriever",
+    "RetrieverServiceCompatibilityError",
+    "RetrieverServiceClient",
+    "RetrieverServiceError",
+    "RetrieverServiceNotFoundError",
+    "RetrieverServiceConflictError",
+    "RetrieverServiceValidationError",
+    "CollectionInfo",
+    "CollectionDeleteResult",
+    "CollectionPage",
+    "DocumentInfo",
+    "DocumentPage",
+    "DocumentDeleteResult",
+    "QueryHit",
+]
 
 retriever = _retriever_cls()
 
 
 def __getattr__(name: str):
     if name == "create_ingestor":
-        from .api import create_ingestor
+        from nemo_retriever.ingestor import create_ingestor
 
         return create_ingestor
     if name in {"__version__", "get_version", "get_version_info"}:
-        from .version import __version__, get_version, get_version_info
+        from nemo_retriever.version import __version__, get_version, get_version_info
 
         return {
             "__version__": __version__,
@@ -40,7 +61,55 @@ def __getattr__(name: str):
             "get_version_info": get_version_info,
         }[name]
     if name == "ingestor":
-        from .ingestor import ingestor
+        from nemo_retriever.ingestor import ingestor
 
         return ingestor
+    if name == "GraphIngestionError":
+        from nemo_retriever.ingestor.graph_ingestor import GraphIngestionError
+
+        return GraphIngestionError
+    if name in {
+        "RetrieverServiceClient",
+        "RetrieverServiceCompatibilityError",
+    }:
+        from nemo_retriever.service.client import RetrieverServiceClient, RetrieverServiceCompatibilityError
+
+        return {
+            "RetrieverServiceClient": RetrieverServiceClient,
+            "RetrieverServiceCompatibilityError": RetrieverServiceCompatibilityError,
+        }[name]
+    if name in {
+        "RetrieverServiceError",
+        "RetrieverServiceNotFoundError",
+        "RetrieverServiceConflictError",
+        "RetrieverServiceValidationError",
+    }:
+        from nemo_retriever.service.errors import (
+            RetrieverServiceConflictError,
+            RetrieverServiceError,
+            RetrieverServiceNotFoundError,
+            RetrieverServiceValidationError,
+        )
+
+        return locals()[name]
+    if name in {
+        "CollectionInfo",
+        "CollectionDeleteResult",
+        "CollectionPage",
+        "DocumentInfo",
+        "DocumentPage",
+        "DocumentDeleteResult",
+        "QueryHit",
+    }:
+        from nemo_retriever.common.schemas.collections import (
+            CollectionDeleteResult,
+            CollectionInfo,
+            CollectionPage,
+            DocumentDeleteResult,
+            DocumentInfo,
+            DocumentPage,
+            QueryHit,
+        )
+
+        return locals()[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

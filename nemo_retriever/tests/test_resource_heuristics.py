@@ -2,7 +2,7 @@ import types
 
 import pytest
 
-from nemo_retriever.utils import ray_resource_hueristics as rh
+from nemo_retriever.common import ray_resource_hueristics as rh
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +120,32 @@ def test_gather_cluster_resources_coerces_fractional_values() -> None:
     assert cr.available_gpu_count() == 1
 
 
+def test_gather_cluster_resources_preserves_fractional_available_gpu() -> None:
+    """Positive fractional available GPUs remain a non-zero count."""
+    mock_ray = types.SimpleNamespace(
+        is_initialized=lambda: True,
+        cluster_resources=lambda: {"CPU": 4.0, "GPU": 1.0},
+        available_resources=lambda: {"CPU": 3.9, "GPU": 0.9},
+    )
+
+    cr = rh.gather_cluster_resources(mock_ray)
+
+    assert cr.total_gpu_count() == 1
+    assert cr.available_gpu_count() == 1
+
+
+def test_resolve_requested_plan_uses_total_when_available_gpus_are_zero() -> None:
+    cr = rh.ClusterResources(
+        total_resources=rh.Resources(cpu_count=4, gpu_count=1),
+        available_resources=rh.Resources(cpu_count=4, gpu_count=0),
+    )
+
+    plan = rh.resolve_requested_plan(cluster_resources=cr)
+
+    assert plan.embed_gpus_per_actor == rh.EMBED_SINGLE_GPU_GPUS_PER_ACTOR
+    assert plan.ocr_gpus_per_actor == rh.OCR_GPUS_PER_ACTOR
+
+
 # ---------------------------------------------------------------------------
 # resolve_requested_plan — defaults
 # ---------------------------------------------------------------------------
@@ -154,10 +180,27 @@ def test_resolve_requested_plan_defaults_with_2_gpus() -> None:
 def test_resolve_requested_plan_defaults_with_1_gpu() -> None:
     plan = rh.resolve_requested_plan(cluster_resources=_make_cluster(total_gpu=1))
 
-    assert plan.embed_initial_actors == rh.EMBED_INITIAL_ACTORS
-    assert plan.embed_max_actors == rh.EMBED_MAX_ACTORS
+    assert plan.embed_initial_actors == rh.EMBED_SINGLE_GPU_ACTORS
+    assert plan.embed_min_actors == rh.EMBED_SINGLE_GPU_ACTORS
+    assert plan.embed_max_actors == rh.EMBED_SINGLE_GPU_ACTORS
+    assert plan.embed_gpus_per_actor == rh.EMBED_SINGLE_GPU_GPUS_PER_ACTOR
     assert plan.ocr_initial_actors == rh.OCR_INITIAL_ACTORS
     assert plan.page_elements_initial_actors == rh.PAGE_ELEMENTS_INITIAL_ACTORS
+
+
+def test_resolve_requested_plan_single_gpu_embed_overrides_win() -> None:
+    plan = rh.resolve_requested_plan(
+        cluster_resources=_make_cluster(total_gpu=1),
+        override_embed_initial_actors=2,
+        override_embed_min_actors=2,
+        override_embed_max_actors=3,
+        override_embed_gpus_per_actor=0.5,
+    )
+
+    assert plan.embed_initial_actors == 2
+    assert plan.embed_min_actors == 2
+    assert plan.embed_max_actors == 3
+    assert plan.embed_gpus_per_actor == 0.5
 
 
 # ---------------------------------------------------------------------------

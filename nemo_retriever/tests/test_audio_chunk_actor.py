@@ -6,18 +6,21 @@
 Unit tests for nemo_retriever.audio: MediaChunkActor and audio_path_to_chunks_df.
 """
 
+import logging
 import wave
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
-from nemo_retriever.audio.chunk_actor import CHUNK_COLUMNS
-from nemo_retriever.audio.chunk_actor import MediaChunkActor
-from nemo_retriever.audio.chunk_actor import audio_path_to_chunks_df
-from nemo_retriever.audio.media_interface import is_media_available
+from nemo_retriever.operators.extract.audio.chunk_actor import CHUNK_COLUMNS
+from nemo_retriever.operators.extract.audio.chunk_actor import MediaChunkActor
+from nemo_retriever.operators.extract.audio.chunk_actor import audio_path_to_chunks_df
+from nemo_retriever.common.modality.audio.media_interface import is_media_available
 from tests import _have_ffmpeg_binary
-from nemo_retriever.params import AudioChunkParams
+from tests import _ffprobe_first_stream_type
+from tests import _make_test_mp4_with_av
+from nemo_retriever.common.params import AudioChunkParams
 
 
 def _make_small_wav(path: Path, duration_sec: float = 0.5, sample_rate: int = 8000) -> None:
@@ -32,7 +35,7 @@ def _make_small_wav(path: Path, duration_sec: float = 0.5, sample_rate: int = 80
 
 @pytest.mark.skipif(not _have_ffmpeg_binary(), reason="ffmpeg not available")
 def test_media_chunk_actor_empty_batch():
-    from nemo_retriever.audio import MediaChunkActor
+    from nemo_retriever.operators.extract.audio.chunk_actor import MediaChunkActor
 
     params = AudioChunkParams(split_type="size", split_interval=1000)
     actor = MediaChunkActor(params=params)
@@ -45,7 +48,7 @@ def test_media_chunk_actor_empty_batch():
 
 @pytest.mark.skipif(not _have_ffmpeg_binary(), reason="ffmpeg not available")
 def test_media_chunk_actor_single_small_file(tmp_path: Path):
-    from nemo_retriever.audio import MediaChunkActor
+    from nemo_retriever.operators.extract.audio.chunk_actor import MediaChunkActor
 
     wav = tmp_path / "tiny.wav"
     _make_small_wav(wav, duration_sec=0.3)
@@ -64,6 +67,38 @@ def test_media_chunk_actor_single_small_file(tmp_path: Path):
     assert out["source_path"].iloc[0] == str(wav.resolve())
     assert out["chunk_index"].iloc[0] == 0
     assert isinstance(out["bytes"].iloc[0], bytes)
+
+
+@pytest.mark.skipif(not _have_ffmpeg_binary(), reason="ffmpeg not available")
+def test_video_audio_separate_true_on_video_warns_and_outputs_audio_chunks(tmp_path: Path, caplog) -> None:
+    fixture = tmp_path / "fixture.mp4"
+    _make_test_mp4_with_av(fixture, duration_sec=2)
+
+    caplog.set_level(logging.WARNING, logger="nemo_retriever.common.modality.audio.media_interface")
+    params = AudioChunkParams(
+        split_type="time",
+        split_interval=10,
+        video_audio_separate=True,
+    )
+    actor = MediaChunkActor(params=params)
+
+    out = actor(pd.DataFrame([{"path": str(fixture), "bytes": fixture.read_bytes()}]))
+
+    assert isinstance(out, pd.DataFrame)
+    assert not out.empty
+    chunk_paths = [Path(path) for path in out["path"].tolist()]
+    assert all(path.suffix == ".mp3" for path in chunk_paths)
+    assert not any(path.suffix == ".mp4" for path in chunk_paths)
+    assert all(metadata["source_path"] == str(fixture) for metadata in out["metadata"])
+    for idx, raw in enumerate(out["bytes"]):
+        assert isinstance(raw, bytes) and raw
+        chunk_copy = tmp_path / f"chunk_{idx}.mp3"
+        chunk_copy.write_bytes(raw)
+        assert _ffprobe_first_stream_type(chunk_copy) == "audio"
+    assert "video_audio_separate is ignored" in caplog.text
+    assert "ASR-safe audio chunks" in caplog.text
+    assert "VideoSplitActor" in caplog.text
+    assert "video pipeline" in caplog.text
 
 
 @pytest.mark.skipif(not _have_ffmpeg_binary(), reason="ffmpeg not available")
