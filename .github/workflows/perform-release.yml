@@ -278,7 +278,6 @@ jobs:
             GIT_COMMIT=${{ github.sha }}
           tags: ${{ needs.nvingest-docker-build.outputs.image }}
           secret-files: hf_token=./scripts/private_local/hf_token.txt
-          cache-to: type=gha,scope=nvingest-release,mode=max
           cache-from: type=gha,scope=nvingest-release
 
       - name: Inspect published image
