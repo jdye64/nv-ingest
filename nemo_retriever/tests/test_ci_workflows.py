@@ -222,6 +222,12 @@ def test_legacy_ghcr_push_publish_workflow_is_removed():
 
 
 @requires_workflows
+def test_orphaned_split_docker_reusable_workflows_are_removed():
+    assert not (WORKFLOWS / "reusable-docker-build.yml").exists()
+    assert not (WORKFLOWS / "reusable-docker-test.yml").exists()
+
+
+@requires_workflows
 def test_public_nightly_python_publish_workflows_do_not_target_testpypi():
     workflow_names = ("pypi-nightly-publish.yml", "huggingface-nightly.yml")
 
