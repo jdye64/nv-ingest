@@ -1,7 +1,9 @@
 name: Build NV-Ingest Runtime Image (arm64)
 
 on:
-  # Manual-only: arm64 builds run in scheduled nightly workflow.
+  # Manual-only. Main-branch CI also builds linux/arm64 (QEMU smoke tests)
+  # and pushes a multi-arch nrl-service image to NGC. Nightly does the same
+  # on a schedule.
   workflow_dispatch:
 
 jobs:
