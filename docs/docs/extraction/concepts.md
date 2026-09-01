@@ -32,6 +32,10 @@ Output is a **Ray Dataset** (Ray Data) or **pandas** `DataFrame` listing extract
 
 Optionally, the library can compute **embeddings** for extracted content and store vectors in [LanceDB](https://lancedb.com/) for downstream semantic search in your application. For upload and retrieval APIs, refer to [Vector databases](vdbs.md). For multimodal (VLM) embedding options, refer to [Multimodal embeddings (VLM)](embedding.md). For iterative, tool-driven retrieval over that index, refer to [Agentic retrieval (concept)](agentic-retrieval-concept.md) and [Workflow: Agentic retrieval](workflow-agentic-retrieval.md).
 
+## Agent memory { #agent-memory }
+
+**Agent memory** is what an agent remembers about its own work, as opposed to the documents it retrieves. `create_ingestor(run_mode="agentic")` returns an `AgenticIngestor` that writes **episodic** memories (time-ordered events such as messages, tool calls, and observations) and **semantic** memories (durable facts distilled from those events). Memories live in their own table with typed columns for session, time, and importance, so recall can be scoped by session or time window before ranking. The same operations are available as `/v1/memory` REST routes and as Model Context Protocol (MCP) tools. Refer to [Workflow: Agent memory](workflow-agent-memory.md).
+
 ## Chunking { #chunking }
 
 Chunking is built into the `.extract()` task and depends on **content type**:

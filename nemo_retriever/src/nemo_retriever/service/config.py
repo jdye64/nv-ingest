@@ -347,6 +347,14 @@ class MCPConfig(RichModel):
         ),
     )
     enable_write_tools: bool = True
+    enable_memory_tools: bool = Field(
+        default=True,
+        description=(
+            "Register the agent-memory tools (remember, recall, timeline, forget, "
+            "consolidate, memory_stats). They call /v1/memory/*, which requires an "
+            "embedding backend on the VectorDB service."
+        ),
+    )
     query_methods: MCPQueryMethods = Field(
         default="classic",
         description=(

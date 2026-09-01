@@ -285,6 +285,9 @@ Use the following public import paths:
 - Import `create_ingestor` and `GraphIngestionError` from `nemo_retriever`.
 - Import `GraphIngestor` from `nemo_retriever.ingestor.graph_ingestor`.
 - Import `ServiceIngestor` from `nemo_retriever.service.service_ingestor`.
+- Import `AgenticIngestor` from `nemo_retriever.ingestor.agentic_ingestor`.
+- Import `IngestResult` and `as_ingest_result` from `nemo_retriever.ingestor`.
+- Import agent-memory models from `nemo_retriever.common.schemas.memory`.
 - Import generation operators from `nemo_retriever.operators.generation`.
 - Import LLM client, task, and result types from `nemo_retriever.models.llm`.
 - Import parameter models from `nemo_retriever.common.params`.
@@ -293,17 +296,18 @@ Use the following public import paths:
 
 ### Public ingestion factory { #public-ingestion-factory }
 
-`create_ingestor()` returns a concrete ingestion client from `run_mode`. The supported values are `inprocess`, `batch`, and `service`.
+`create_ingestor()` returns a concrete ingestion client from `run_mode`. The supported values are `inprocess`, `batch`, `service`, and `agentic`.
 
 | `run_mode` | Runtime type | Execution |
 | --- | --- | --- |
 | `inprocess` | `GraphIngestor` | Local in-process graph. This is the default. |
 | `batch` | `GraphIngestor` | Ray Data graph. |
 | `service` | `ServiceIngestor` | Remote Retriever service. |
+| `agentic` | `AgenticIngestor` | Episodic and semantic agent memory, in-process or against a Retriever service. |
 
-The function is annotated as returning the shared `Ingestor` interface. At runtime it returns `GraphIngestor` or `ServiceIngestor`. Use the generated class entries below for run-mode-specific methods.
+The function is annotated as returning the shared `Ingestor` interface. At runtime it returns `GraphIngestor`, `ServiceIngestor`, or `AgenticIngestor`. Use the generated class entries below for run-mode-specific methods.
 
-Factory keyword arguments merge into `IngestorCreateParams`. Common fields include `documents`, `base_url`, `api_key`, `error_policy`, `ray_address`, and `max_concurrency`. Refer to `IngestorCreateParams` in [Parameter models](#generated-parameter-models).
+Factory keyword arguments merge into `IngestorCreateParams`. Common fields include `documents`, `base_url`, `api_key`, `error_policy`, `ray_address`, and `max_concurrency`. The `agentic` run mode adds `memory_backend`, `memory_uri`, `memory_table_name`, `namespace`, `scope`, `agent_id`, `user_id`, `session_id`, and `autoflush`. Refer to `IngestorCreateParams` in [Parameter models](#generated-parameter-models).
 
 ```python
 from nemo_retriever import GraphIngestionError, create_ingestor
@@ -311,9 +315,52 @@ from nemo_retriever import GraphIngestionError, create_ingestor
 graph = create_ingestor(run_mode="inprocess")
 batch = create_ingestor(run_mode="batch")
 service = create_ingestor(run_mode="service", base_url="http://localhost:7670")
+memory = create_ingestor(run_mode="agentic", memory_backend="local", memory_uri="./agent-memory")
 ```
 
 ::: nemo_retriever.ingestor.core.create_ingestor
+    options:
+      heading_level: 4
+      show_docstring_description: false
+
+### Attach metadata and tags to stored records { #source-metadata-and-tags }
+
+`metadata(**fields)` and `tags(*values)` are defined on the shared ingestor
+interface, but only run modes that advertise `SUPPORTS_SOURCE_METADATA` accept
+them. Today that is `AgenticIngestor` only. `GraphIngestor` and
+`ServiceIngestor` raise `NotImplementedError` rather than accept attributes
+they would drop before storage. Repeated `metadata()` calls merge, and
+repeated `tags()` calls append while collapsing duplicates in order.
+
+`capabilities()` returns the set of interface verbs an instance actually
+implements, with mode-specific unsupported verbs removed. A tool layer can
+build its surface from that set instead of probing methods and catching
+`NotImplementedError`.
+
+### Normalize ingest results { #ingest-result-protocol }
+
+Run modes return different native objects from `.ingest()`. Graph modes return
+a `pandas.DataFrame` and `run_mode="service"` returns `ServiceIngestResult`.
+`IngestResult` is the shared shape that exposes `dataframe`, `failures`, and
+`document_ids`.
+
+Call `as_ingest_result()` to adapt any `.ingest()` return value, including the
+`(result, failures)` tuple produced by `return_failures=True`, instead of
+branching on the run mode. Import both names from `nemo_retriever.ingestor`.
+
+```python
+from nemo_retriever.ingestor import as_ingest_result
+
+result = as_ingest_result(pipeline.ingest(return_failures=True))
+print(len(result.failures), result.document_ids)
+```
+
+::: nemo_retriever.ingestor.core.IngestResult
+    options:
+      heading_level: 4
+      show_docstring_description: false
+
+::: nemo_retriever.ingestor.core.as_ingest_result
     options:
       heading_level: 4
       show_docstring_description: false
@@ -355,6 +402,81 @@ Service-only methods include `split()`, `pdf_split_config()`, `save_to_disk()`, 
       heading_level: 4
       docstring_style: numpy
       show_docstring_description: false
+
+### Agent memory { #agent-memory }
+
+`create_ingestor(run_mode="agentic")` returns `AgenticIngestor`. Import the
+class from `nemo_retriever.ingestor.agentic_ingestor` when you need the type
+explicitly, or when you need the `table_name`, `flush_threshold`,
+`flush_interval_seconds`, `embed_kwargs`, or `embed_run_mode` arguments that the
+factory does not expose.
+
+Memory-only methods include `remember()`, `remember_many()`, `recall()`,
+`timeline()`, `forget()`, `consolidate()`, `stats()`, `flush()`, `optimize()`,
+and the `session()` context manager. `ingest()` loads reference documents into
+the same memory namespace as `memory_type="semantic"` records with
+`event_type="document"`, and requires `backend="local"`.
+
+`dedup()`, `caption()`, `store()`, `vdb_upload()`, and `webhook()` are part of
+the class and each raises `NotImplementedError` in this run mode.
+
+For task guidance, backend selection, flush behavior, the REST routes, and the
+MCP tools, refer to [Workflow: Agent memory](workflow-agent-memory.md).
+
+```python
+from nemo_retriever import create_ingestor
+from nemo_retriever.common.schemas.memory import MemoryFilter
+
+memory = create_ingestor(
+    run_mode="agentic",
+    memory_backend="local",
+    memory_uri="./agent-memory",
+    namespace="support-bot",
+)
+
+with memory.session("thread-42", user_id="ada") as session:
+    session.remember("The user prefers pytest over unittest.", memory_type="semantic")
+
+hits = memory.recall(
+    "what testing framework does the user like?",
+    top_k=5,
+    filter=MemoryFilter(memory_type="semantic"),
+)
+```
+
+::: nemo_retriever.ingestor.agentic_ingestor.AgenticIngestor
+    options:
+      heading_level: 4
+      docstring_style: numpy
+      show_docstring_description: false
+
+### Agent memory models { #agent-memory-models }
+
+Import these models from `nemo_retriever.common.schemas.memory`. They are the
+wire contract shared by the Python SDK, the `/v1/memory` REST routes, and the
+memory MCP tools. Describe a recall with `MemoryFilter`; clients never send SQL,
+and `compile_memory_filter()` turns a validated filter into a predicate over the
+typed memory columns.
+
+::: nemo_retriever.common.schemas.memory
+    options:
+      heading_level: 4
+      show_submodules: false
+      members:
+        - MemoryRecord
+        - MemoryHit
+        - MemoryFilter
+        - MemoryRememberRequest
+        - MemoryWriteResult
+        - MemoryRecallRequest
+        - MemoryRecallResponse
+        - MemoryTimelineRequest
+        - MemoryForgetRequest
+        - MemoryForgetResult
+        - MemoryConsolidateRequest
+        - MemoryConsolidateResult
+        - MemoryStats
+        - compile_memory_filter
 
 ### Retrieve { #generated-retrieve-api }
 

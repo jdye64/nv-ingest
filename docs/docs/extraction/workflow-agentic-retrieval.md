@@ -308,6 +308,7 @@ Agentic runs use a dedicated worker pool in the VectorDB process so they cannot 
 ## Related Topics { #related-topics }
 
 - [Agentic retrieval (concept)](agentic-retrieval-concept.md)
+- [Workflow: Agent memory](workflow-agent-memory.md)
 - [Semantic retrieval](vdbs.md#semantic-retrieval)
 - [Metadata and filtering](vdbs.md#metadata-and-filtering)
 - [Evaluate on your data](evaluate-on-your-data.md)

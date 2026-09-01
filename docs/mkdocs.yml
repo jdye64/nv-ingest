@@ -92,6 +92,7 @@ nav:
       - "Workflow: Ingest documents into a searchable VDB collection": extraction/workflow-document-ingestion.md
       - "Workflow: Audio & video ingestion": extraction/audio-video.md
       - "Workflow: Agentic retrieval": extraction/workflow-agentic-retrieval.md
+      - "Workflow: Agent memory": extraction/workflow-agent-memory.md
   - "5. Multimodal extraction": extraction/multimodal-extraction.md
   - "6. Embedding, indexing & storage":
       - "Multimodal embeddings (VLM)": extraction/embedding.md

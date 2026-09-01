@@ -13,4 +13,4 @@ surface it had before the reorganization (``create_ingestor``, ``ingestor`` /
 from nemo_retriever.ingestor.core import *  # noqa: F401,F403
 from nemo_retriever.ingestor.core import _merge_params  # noqa: F401
 
-__all__ = ["create_ingestor", "ingestor", "Ingestor"]
+__all__ = ["create_ingestor", "ingestor", "Ingestor", "IngestResult", "as_ingest_result"]

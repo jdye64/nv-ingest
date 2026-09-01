@@ -39,7 +39,7 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Coroutine, NamedTuple, TypeVar
+from typing import Any, AsyncIterator, Callable, Coroutine, NamedTuple, Sequence, TypeVar
 
 import httpx
 from pydantic import ValidationError
@@ -60,6 +60,20 @@ from nemo_retriever.common.schemas.collections import (
     DocumentInfo,
     DocumentPage,
     QueryHit,
+)
+from nemo_retriever.common.schemas.memory import (
+    MemoryConsolidateRequest,
+    MemoryConsolidateResult,
+    MemoryForgetRequest,
+    MemoryForgetResult,
+    MemoryHit,
+    MemoryRecallRequest,
+    MemoryRecallResponse,
+    MemoryRecord,
+    MemoryRememberRequest,
+    MemoryStats,
+    MemoryTimelineRequest,
+    MemoryWriteResult,
 )
 from nemo_retriever.common.schemas.responses import (
     JobAggregateResponse,
@@ -596,6 +610,66 @@ class RetrieverServiceClient:
         if collection_name and isinstance(query, str):
             return [self._query_hit(hit) for hit in parsed[0]]
         return parsed
+
+    # ------------------------------------------------------------------
+    # Agent memory
+    # ------------------------------------------------------------------
+
+    def remember(self, records: Sequence[MemoryRecord]) -> MemoryWriteResult:
+        """Store a batch of agent memories through ``POST /v1/memory/remember``."""
+        return self._run(self.aremember(records))
+
+    async def aremember(self, records: Sequence[MemoryRecord]) -> MemoryWriteResult:
+        """Asynchronously store a batch of agent memories."""
+        payload = MemoryRememberRequest(records=list(records)).model_dump(mode="json")
+        body = await self._arequest("POST", "/v1/memory/remember", json=payload)
+        return self._model(MemoryWriteResult, body, "memory remember")
+
+    def recall(self, request: MemoryRecallRequest) -> list[MemoryHit]:
+        """Rank stored memories through ``POST /v1/memory/recall``."""
+        return self._run(self.arecall(request))
+
+    async def arecall(self, request: MemoryRecallRequest) -> list[MemoryHit]:
+        """Asynchronously rank stored memories."""
+        body = await self._arequest("POST", "/v1/memory/recall", json=request.model_dump(mode="json"))
+        return self._model(MemoryRecallResponse, body, "memory recall").hits
+
+    def memory_timeline(self, request: MemoryTimelineRequest) -> list[MemoryHit]:
+        """Replay one session through ``POST /v1/memory/timeline``."""
+        return self._run(self.amemory_timeline(request))
+
+    async def amemory_timeline(self, request: MemoryTimelineRequest) -> list[MemoryHit]:
+        """Asynchronously replay one session."""
+        body = await self._arequest("POST", "/v1/memory/timeline", json=request.model_dump(mode="json"))
+        return self._model(MemoryRecallResponse, body, "memory timeline").hits
+
+    def forget(self, request: MemoryForgetRequest) -> MemoryForgetResult:
+        """Retire memories through ``POST /v1/memory/forget``."""
+        return self._run(self.aforget(request))
+
+    async def aforget(self, request: MemoryForgetRequest) -> MemoryForgetResult:
+        """Asynchronously retire memories."""
+        body = await self._arequest("POST", "/v1/memory/forget", json=request.model_dump(mode="json"))
+        return self._model(MemoryForgetResult, body, "memory forget")
+
+    def consolidate_memory(self, request: MemoryConsolidateRequest) -> MemoryConsolidateResult:
+        """Distill episodic memories through ``POST /v1/memory/consolidate``."""
+        return self._run(self.aconsolidate_memory(request))
+
+    async def aconsolidate_memory(self, request: MemoryConsolidateRequest) -> MemoryConsolidateResult:
+        """Asynchronously distill episodic memories into semantic facts."""
+        body = await self._arequest("POST", "/v1/memory/consolidate", json=request.model_dump(mode="json"))
+        return self._model(MemoryConsolidateResult, body, "memory consolidate")
+
+    def memory_stats(self, *, namespace: str | None = None) -> MemoryStats:
+        """Return memory counters through ``GET /v1/memory/stats``."""
+        return self._run(self.amemory_stats(namespace=namespace))
+
+    async def amemory_stats(self, *, namespace: str | None = None) -> MemoryStats:
+        """Asynchronously return memory counters."""
+        params = {"namespace": namespace} if namespace else None
+        body = await self._arequest("GET", "/v1/memory/stats", params=params)
+        return self._model(MemoryStats, body, "memory stats")
 
     # ------------------------------------------------------------------
     # Job lifecycle

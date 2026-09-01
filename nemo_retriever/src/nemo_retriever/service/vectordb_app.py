@@ -49,8 +49,21 @@ from nemo_retriever.common.vdb.adt_vdb import (
     VDBResourceConflict,
     VDBResourceNotFound,
 )
+from nemo_retriever.common.schemas.memory import (
+    MemoryConsolidateRequest,
+    MemoryConsolidateResult,
+    MemoryForgetRequest,
+    MemoryForgetResult,
+    MemoryRecallRequest,
+    MemoryRecallResponse,
+    MemoryRememberRequest,
+    MemoryStats,
+    MemoryTimelineRequest,
+    MemoryWriteResult,
+)
 from nemo_retriever.common.vdb.factory import get_vdb_op_cls
 from nemo_retriever.common.vdb.hybrid_fusion import DEFAULT_HYBRID_FUSION_POLICY
+from nemo_retriever.common.vdb.memory_schema import DEFAULT_MEMORY_TABLE
 from nemo_retriever.common.vdb.records import RetrievalContractError
 from nemo_retriever.ingest.index_mode import (
     inspect_existing_lancedb_mode,
@@ -299,10 +312,15 @@ def create_vectordb_app(
     expiration_cleanup_enabled: bool = True,
     vdb: VDB | None = None,
     agentic_config: AgenticConfig | None = None,
+    memory_enabled: bool = True,
+    memory_table_name: str = DEFAULT_MEMORY_TABLE,
+    memory_compaction_interval_seconds: int = 900,
 ) -> FastAPI:
     """Build the VectorDB FastAPI application around an injected VDB contract."""
     if reconciliation_interval_seconds < 0:
         raise ValueError("reconciliation_interval_seconds must be non-negative")
+    if memory_compaction_interval_seconds < 0:
+        raise ValueError("memory_compaction_interval_seconds must be non-negative")
     index_mode = _validate_service_index_mode(index_mode)
 
     if max_concurrent_queries <= 0:
@@ -311,10 +329,11 @@ def create_vectordb_app(
     state: VectorDBState | None = None
     agentic_executor: ThreadPoolExecutor | None = None
     agentic_slots: threading.BoundedSemaphore | None = None
+    memory_service: Any = None
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        nonlocal state, agentic_executor, agentic_slots
+        nonlocal state, agentic_executor, agentic_slots, memory_service
         backend = vdb or _production_vdb(
             lancedb_uri=lancedb_uri,
             table_name=table_name,
@@ -342,10 +361,20 @@ def create_vectordb_app(
             )
             agentic_slots = threading.BoundedSemaphore(MAX_CONCURRENT_AGENTIC_QUERIES)
         app.state.agentic_slots = agentic_slots
+        if memory_enabled and state.embed_mode != "none":
+            from nemo_retriever.service.services.memory_service import MemoryService
+
+            memory_service = MemoryService(
+                lancedb_uri=lancedb_uri,
+                table_name=memory_table_name,
+                embed_fn=state.embed_queries,
+            )
+        app.state.memory_service = memory_service
         logger.info(
-            "VectorDB service started: embed_mode=%s max_concurrent_queries=%d",
+            "VectorDB service started: embed_mode=%s max_concurrent_queries=%d memory=%s",
             state.embed_mode,
             max_concurrent_queries,
+            "on" if memory_service is not None else "off",
         )
         if state.embed_mode == "none":
             logger.error(
@@ -361,16 +390,36 @@ def create_vectordb_app(
                     logger.exception("VectorDB reconciliation iteration failed")
                 await asyncio.sleep(reconciliation_interval_seconds)
 
+        async def memory_compaction_loop() -> None:
+            # Memory arrives as many small appends, and every append is a new
+            # fragment until compaction runs. Without this the table degrades
+            # steadily under exactly the write pattern memory produces.
+            while True:
+                await asyncio.sleep(memory_compaction_interval_seconds)
+                if memory_service is None:
+                    continue
+                try:
+                    await asyncio.to_thread(memory_service.optimize)
+                except Exception:
+                    logger.exception("Scheduled memory compaction failed")
+
         reconciliation_task = (
             asyncio.create_task(reconciliation_loop()) if reconciliation_interval_seconds > 0 else None
+        )
+        compaction_task = (
+            asyncio.create_task(memory_compaction_loop())
+            if memory_enabled and memory_compaction_interval_seconds > 0
+            else None
         )
         try:
             yield
         finally:
-            if reconciliation_task is not None:
-                reconciliation_task.cancel()
+            for task in (reconciliation_task, compaction_task):
+                if task is None:
+                    continue
+                task.cancel()
                 try:
-                    await reconciliation_task
+                    await task
                 except asyncio.CancelledError:
                     pass
             if agentic_executor is not None:
@@ -380,8 +429,10 @@ def create_vectordb_app(
                 agentic_executor = None
             agentic_slots = None
             state = None
+            memory_service = None
             app.state.agentic_slots = None
             app.state.vectordb_state = None
+            app.state.memory_service = None
             logger.info("VectorDB service stopped")
 
     app = FastAPI(
@@ -395,6 +446,17 @@ def create_vectordb_app(
         if state is None:
             raise HTTPException(503, "VectorDB not initialised")
         return state
+
+    def require_memory() -> Any:
+        if not memory_enabled:
+            raise HTTPException(404, "Agent memory is disabled in the VectorDB configuration.")
+        if memory_service is None:
+            raise HTTPException(
+                501,
+                "Agent memory requires an embedding backend. Set --embed-endpoint for a "
+                "remote NIM or --local-embed for in-pod embedding.",
+            )
+        return memory_service
 
     @app.exception_handler(UnsupportedVDBOperation)
     async def unsupported_operation(_request: Request, exc: UnsupportedVDBOperation) -> JSONResponse:
@@ -759,6 +821,84 @@ def create_vectordb_app(
                 results=[EvidenceResult(**build_evidence_result(hits, strategies)) for hits in hits_per_query]
             )
         return QueryResponse(results=[QueryResult(hits=hits) for hits in hits_per_query])
+
+    # ------------------------------------------------------------------
+    # Agent memory
+    # ------------------------------------------------------------------
+
+    @app.post("/v1/memory/remember", response_model=MemoryWriteResult, tags=["memory"])
+    async def memory_remember(
+        req: MemoryRememberRequest,
+        x_nrl_scope: str | None = Header(None),
+    ) -> MemoryWriteResult:
+        """Embed and store one batch of agent memories."""
+        service = require_memory()
+        try:
+            return await asyncio.to_thread(service.remember, req.records, scope=_scope(x_nrl_scope))
+        except ValueError as exc:
+            raise VDBInvalidRequest(str(exc)) from exc
+
+    @app.post("/v1/memory/recall", response_model=MemoryRecallResponse, tags=["memory"])
+    async def memory_recall(
+        req: MemoryRecallRequest,
+        x_nrl_scope: str | None = Header(None),
+    ) -> MemoryRecallResponse:
+        """Rank stored memories against a natural-language query."""
+        service = require_memory()
+        hits = await asyncio.to_thread(service.recall, req, scope=_scope(x_nrl_scope))
+        return MemoryRecallResponse(hits=hits)
+
+    @app.post("/v1/memory/timeline", response_model=MemoryRecallResponse, tags=["memory"])
+    async def memory_timeline(
+        req: MemoryTimelineRequest,
+        x_nrl_scope: str | None = Header(None),
+    ) -> MemoryRecallResponse:
+        """Replay one session in chronological order."""
+        service = require_memory()
+        hits = await asyncio.to_thread(service.timeline, req, scope=_scope(x_nrl_scope))
+        return MemoryRecallResponse(hits=hits)
+
+    @app.post("/v1/memory/forget", response_model=MemoryForgetResult, tags=["memory"])
+    async def memory_forget(
+        req: MemoryForgetRequest,
+        x_nrl_scope: str | None = Header(None),
+    ) -> MemoryForgetResult:
+        """Retire memories, softly by default."""
+        service = require_memory()
+        try:
+            return await asyncio.to_thread(service.forget, req, scope=_scope(x_nrl_scope))
+        except ValueError as exc:
+            raise VDBInvalidRequest(str(exc)) from exc
+
+    @app.post("/v1/memory/consolidate", response_model=MemoryConsolidateResult, tags=["memory"])
+    async def memory_consolidate(
+        req: MemoryConsolidateRequest,
+        x_nrl_scope: str | None = Header(None),
+    ) -> MemoryConsolidateResult:
+        """Distill episodic memories into durable semantic facts."""
+        service = require_memory()
+        if not agentic_config.enabled:
+            raise HTTPException(
+                400,
+                "Consolidation needs a language model. Start with --agentic and an LLM "
+                "invoke URL/model, or set agentic.enabled in the service config.",
+            )
+        return await asyncio.to_thread(service.consolidate, req, scope=_scope(x_nrl_scope))
+
+    @app.get("/v1/memory/stats", response_model=MemoryStats, tags=["memory"])
+    async def memory_stats(
+        namespace: str | None = Query(default=None),
+        x_nrl_scope: str | None = Header(None),
+    ) -> MemoryStats:
+        """Return coarse counters for one scoped memory namespace."""
+        service = require_memory()
+        return await asyncio.to_thread(service.stats, scope=_scope(x_nrl_scope), namespace=namespace)
+
+    @app.post("/v1/memory/optimize", tags=["memory"])
+    async def memory_optimize() -> dict[str, bool]:
+        """Compact the memory table after a burst of small writes."""
+        service = require_memory()
+        return {"optimized": await asyncio.to_thread(service.optimize)}
 
     async def _run_agentic_query(req: QueryRequest) -> AgenticQueryResponse:
         """Run the blocking agentic workflow without consuming plain-query workers."""

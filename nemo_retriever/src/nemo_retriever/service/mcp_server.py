@@ -81,6 +81,8 @@ class ServiceMCPSettings:
     ingest_timeout_s: float = 1800.0
     poll_interval_s: float = 2.0
     enable_write_tools: bool = True
+    enable_memory_tools: bool = True
+    memory_request_timeout_s: float = 300.0
     query_methods: MCPQueryMethods = "classic"
 
     @property
@@ -140,6 +142,7 @@ def settings_from_service_config(config: ServiceConfig) -> ServiceMCPSettings:
         ingest_timeout_s=mcp_cfg.ingest_timeout_s,
         poll_interval_s=mcp_cfg.poll_interval_s,
         enable_write_tools=mcp_cfg.enable_write_tools,
+        enable_memory_tools=mcp_cfg.enable_memory_tools,
         query_methods=_effective_query_methods(
             mcp_cfg.query_methods,
             agentic_enabled=config.agentic.enabled,
@@ -295,6 +298,38 @@ class ServiceMCPClient:
             body["reference"] = reference
         async with self._client() as client:
             resp = await client.post("/v1/answer", json=body)
+        self._raise_for_status(resp)
+        return dict(self._json_or_text(resp))
+
+    async def _memory_post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+        if not self._settings.enable_memory_tools:
+            raise RuntimeError("MCP memory tools are disabled for this service.")
+        async with self._client(timeout_s=self._settings.memory_request_timeout_s) as client:
+            resp = await client.post(path, json=body)
+        self._raise_for_status(resp)
+        return dict(self._json_or_text(resp))
+
+    async def remember(self, records: list[dict[str, Any]]) -> dict[str, Any]:
+        return await self._memory_post("/v1/memory/remember", {"records": records})
+
+    async def recall(self, body: dict[str, Any]) -> dict[str, Any]:
+        return await self._memory_post("/v1/memory/recall", body)
+
+    async def memory_timeline(self, body: dict[str, Any]) -> dict[str, Any]:
+        return await self._memory_post("/v1/memory/timeline", body)
+
+    async def forget(self, body: dict[str, Any]) -> dict[str, Any]:
+        return await self._memory_post("/v1/memory/forget", body)
+
+    async def consolidate(self, body: dict[str, Any]) -> dict[str, Any]:
+        return await self._memory_post("/v1/memory/consolidate", body)
+
+    async def memory_stats(self, namespace: str | None = None) -> dict[str, Any]:
+        if not self._settings.enable_memory_tools:
+            raise RuntimeError("MCP memory tools are disabled for this service.")
+        params = {"namespace": namespace} if namespace else None
+        async with self._client(timeout_s=self._settings.memory_request_timeout_s) as client:
+            resp = await client.get("/v1/memory/stats", params=params)
         self._raise_for_status(resp)
         return dict(self._json_or_text(resp))
 
@@ -636,7 +671,190 @@ def build_mcp(settings: ServiceMCPSettings | None = None) -> FastMCP:
                 include_result_data=include_result_data,
             )
 
+    if settings.enable_memory_tools:
+        _register_memory_tools(mcp, service)
+
     return mcp
+
+
+def _register_memory_tools(mcp: FastMCP, service: "ServiceMCPClient") -> None:
+    """Register the agent-memory tools on an MCP server.
+
+    These are the highest-leverage integration point for memory: any
+    MCP-capable host gets episodic and semantic memory with no SDK work, over
+    the transport the service already exposes.
+    """
+
+    @mcp.tool(
+        name="remember",
+        description=(
+            "Store something worth recalling later. Use memory_type='episodic' for "
+            "things that happened (default) and 'semantic' for durable facts such as "
+            "a user preference. Pass session_id to keep a conversation's memories "
+            "together so they can be replayed with the timeline tool."
+        ),
+    )
+    async def remember(
+        text: str,
+        memory_type: str = "episodic",
+        session_id: str | None = None,
+        namespace: str = "default",
+        agent_id: str | None = None,
+        user_id: str | None = None,
+        role: str | None = None,
+        tags: list[str] | None = None,
+        importance: float = 0.5,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        record = {
+            "text": text,
+            "memory_type": memory_type,
+            "namespace": namespace,
+            "session_id": session_id,
+            "agent_id": agent_id,
+            "user_id": user_id,
+            "role": role,
+            "importance": importance,
+            "tags": tags or [],
+            "metadata": metadata or {},
+        }
+        return await service.remember([record])
+
+    @mcp.tool(
+        name="recall",
+        description=(
+            "Search stored memories by meaning. Narrow the search with session_id, "
+            "memory_type, tags, or a time window rather than filtering the results "
+            "yourself. Set recency_halflife_seconds to favor recent memories when "
+            "several are equally relevant."
+        ),
+    )
+    async def recall(
+        query: str,
+        top_k: int = 10,
+        session_id: str | None = None,
+        namespace: str = "default",
+        memory_type: str | None = None,
+        agent_id: str | None = None,
+        user_id: str | None = None,
+        tags_any: list[str] | None = None,
+        min_importance: float | None = None,
+        occurred_after: str | None = None,
+        occurred_before: str | None = None,
+        recency_halflife_seconds: float | None = None,
+    ) -> dict[str, Any]:
+        return await service.recall(
+            {
+                "query": query,
+                "top_k": top_k,
+                "recency_halflife_seconds": recency_halflife_seconds,
+                "filter": _memory_filter_body(
+                    namespace=namespace,
+                    session_id=session_id,
+                    memory_type=memory_type,
+                    agent_id=agent_id,
+                    user_id=user_id,
+                    tags_any=tags_any,
+                    min_importance=min_importance,
+                    occurred_after=occurred_after,
+                    occurred_before=occurred_before,
+                ),
+            }
+        )
+
+    @mcp.tool(
+        name="timeline",
+        description=(
+            "Replay one session's memories in the order they happened. Use this "
+            "instead of recall when you need what came before or after something, "
+            "rather than what is most similar to a query."
+        ),
+    )
+    async def timeline(
+        session_id: str,
+        namespace: str = "default",
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 100,
+        ascending: bool = True,
+    ) -> dict[str, Any]:
+        return await service.memory_timeline(
+            {
+                "session_id": session_id,
+                "namespace": namespace,
+                "since": since,
+                "until": until,
+                "limit": limit,
+                "ascending": ascending,
+            }
+        )
+
+    @mcp.tool(
+        name="forget",
+        description=(
+            "Retire memories that are wrong or no longer wanted. The default marks "
+            "them no longer valid so they stop appearing in recall while staying "
+            "auditable. Pass hard=true to delete the rows outright."
+        ),
+    )
+    async def forget(
+        memory_id: str | None = None,
+        session_id: str | None = None,
+        namespace: str = "default",
+        memory_type: str | None = None,
+        tags_any: list[str] | None = None,
+        hard: bool = False,
+    ) -> dict[str, Any]:
+        if memory_id is None and session_id is None and not tags_any:
+            raise ValueError("forget requires memory_id, session_id, or tags_any.")
+        body: dict[str, Any] = {"hard": hard}
+        if memory_id:
+            body["memory_id"] = memory_id
+        else:
+            body["filter"] = _memory_filter_body(
+                namespace=namespace,
+                session_id=session_id,
+                memory_type=memory_type,
+                tags_any=tags_any,
+            )
+        return await service.forget(body)
+
+    @mcp.tool(
+        name="consolidate",
+        description=(
+            "Distill a session's episodic memories into durable facts, superseding "
+            "any earlier fact they contradict. This makes a language model call, so "
+            "run it at the end of a session rather than during one."
+        ),
+    )
+    async def consolidate(
+        session_id: str | None = None,
+        namespace: str = "default",
+        max_episodes: int = 200,
+        since: str | None = None,
+    ) -> dict[str, Any]:
+        return await service.consolidate(
+            {
+                "session_id": session_id,
+                "namespace": namespace,
+                "max_episodes": max_episodes,
+                "since": since,
+            }
+        )
+
+    @mcp.tool(
+        name="memory_stats",
+        description="Report how many memories a namespace holds and the time span they cover.",
+    )
+    async def memory_stats(namespace: str = "default") -> dict[str, Any]:
+        return await service.memory_stats(namespace)
+
+
+def _memory_filter_body(**fields: Any) -> dict[str, Any]:
+    """Drop unset fields so server-side filter defaults still apply."""
+    body = {key: value for key, value in fields.items() if value not in (None, [], "")}
+    body.setdefault("namespace", "default")
+    return body
 
 
 def build_mcp_app(settings: ServiceMCPSettings | None = None) -> Any:

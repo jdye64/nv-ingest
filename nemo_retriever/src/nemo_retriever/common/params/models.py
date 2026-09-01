@@ -31,7 +31,7 @@ from nemo_retriever.common.params.utils import (
 )
 from nemo_retriever.common.remote_auth import resolve_remote_api_key
 
-IngestorRunMode = Literal["inprocess", "batch", "service"]
+IngestorRunMode = Literal["inprocess", "batch", "service", "agentic"]
 
 # Pass as an api_key value to suppress auto-resolution from environment variables.
 # Example: EmbedParams(api_key=NO_API_KEY)
@@ -324,6 +324,16 @@ class IngestorCreateParams(_ParamsModel):
     # values (e.g. 2-4) reduce burst pressure on Kubernetes NodePort /
     # kube-proxy paths that otherwise reset connections under heavy load.
     max_concurrency: Optional[int] = None
+    # agentic run mode: memory placement and default record identity.
+    memory_backend: Literal["service", "local"] = "service"
+    memory_uri: str = "lancedb"
+    memory_table_name: str = "nemo-retriever-memory"
+    namespace: str = "default"
+    scope: Optional[str] = None
+    agent_id: Optional[str] = None
+    user_id: Optional[str] = None
+    session_id: Optional[str] = None
+    autoflush: bool = True
 
 
 class IngestExecuteParams(_ParamsModel):

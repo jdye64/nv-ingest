@@ -11,12 +11,25 @@ Concrete implementations are provided by runmodes:
 - inprocess: local Python process, no framework assumptions
 - batch: large-scale batch execution
 - service: remote ingestion service
+- agentic: episodic and semantic memory for agents
 """
 
 from __future__ import annotations
 
 from io import BytesIO
-from typing import Any, Dict, List, Optional, Self, Sequence, Tuple, Union
+from typing import (
+    Any,
+    Dict,
+    List,
+    NoReturn,
+    Optional,
+    Protocol,
+    Self,
+    Sequence,
+    Tuple,
+    Union,
+    runtime_checkable,
+)
 
 from nemo_retriever.common.params import CaptionParams
 from nemo_retriever.common.params import DedupParams
@@ -28,6 +41,72 @@ from nemo_retriever.common.params import IngestorRunMode
 from nemo_retriever.common.params import StoreParams
 from nemo_retriever.common.params import VdbUploadParams
 from nemo_retriever.common.params import WebhookParams
+
+
+@runtime_checkable
+class IngestResult(Protocol):
+    """Shape every run mode can present after :meth:`ingestor.ingest`.
+
+    Run modes return different native objects: graph modes return a
+    ``pandas.DataFrame`` while service mode returns ``ServiceIngestResult``.
+    Callers that only need rows, failures, or identifiers should adapt with
+    :func:`as_ingest_result` instead of branching on the run mode.
+    """
+
+    @property
+    def dataframe(self) -> Any:
+        """Ingested rows as a ``pandas.DataFrame``, or ``None``."""
+        ...
+
+    @property
+    def failures(self) -> List[Tuple[str, str]]:
+        """``(source, error)`` pairs for inputs that did not complete."""
+        ...
+
+    @property
+    def document_ids(self) -> List[str]:
+        """Identifiers assigned to completed documents, when the mode has them."""
+        ...
+
+
+class _DataFrameIngestResult:
+    """Adapter presenting a bare DataFrame through the :class:`IngestResult` shape."""
+
+    def __init__(self, frame: Any, failures: Optional[List[Tuple[str, str]]] = None) -> None:
+        self._frame = frame
+        self._failures = list(failures or [])
+
+    @property
+    def dataframe(self) -> Any:
+        return self._frame
+
+    @property
+    def failures(self) -> List[Tuple[str, str]]:
+        return self._failures
+
+    @property
+    def document_ids(self) -> List[str]:
+        return []
+
+    def __repr__(self) -> str:
+        rows = None if self._frame is None else len(self._frame)
+        return f"IngestResult(rows={rows}, failures={len(self._failures)})"
+
+
+def as_ingest_result(value: Any) -> IngestResult:
+    """Normalize any ``ingest()`` return value into the :class:`IngestResult` shape.
+
+    Accepts a DataFrame, an object that already satisfies the protocol, or the
+    ``(result, failures)`` tuple produced by ``return_failures=True``.
+    """
+    if isinstance(value, tuple) and len(value) == 2:
+        result, failures = value
+        if isinstance(result, IngestResult):
+            return result
+        return _DataFrameIngestResult(result, failures)
+    if isinstance(value, IngestResult):
+        return value
+    return _DataFrameIngestResult(value)
 
 
 def _merge_params[T](params: T | None, kwargs: dict[str, Any]) -> T:
@@ -67,8 +146,28 @@ def create_ingestor(
             service_kwargs["max_concurrency"] = parsed.max_concurrency
         return ServiceIngestor(**service_kwargs)
 
+    if run_mode == "agentic":
+        from nemo_retriever.ingestor.agentic_ingestor import AgenticIngestor
+
+        return AgenticIngestor(
+            backend=parsed.memory_backend,
+            base_url=parsed.base_url,
+            api_token=parsed.api_key,
+            scope=parsed.scope,
+            memory_uri=parsed.memory_uri,
+            table_name=parsed.memory_table_name,
+            namespace=parsed.namespace,
+            agent_id=parsed.agent_id,
+            user_id=parsed.user_id,
+            session_id=parsed.session_id,
+            documents=parsed.documents,
+            autoflush=parsed.autoflush,
+        )
+
     if run_mode not in {"batch", "inprocess"}:
-        raise ValueError(f"create_ingestor supports run modes 'inprocess', 'batch', and 'service'; got {run_mode!r}.")
+        raise ValueError(
+            "create_ingestor supports run modes 'inprocess', 'batch', 'service', and 'agentic'; " f"got {run_mode!r}."
+        )
 
     from nemo_retriever.ingestor.graph_ingestor import GraphIngestor
 
@@ -93,11 +192,23 @@ class ingestor:
 
     RUN_MODE: str = "interface"
 
+    #: Whether this run mode honors :meth:`metadata` and :meth:`tags`. Modes
+    #: that cannot attach caller-supplied attributes to stored records leave
+    #: this ``False`` so the builder raises instead of silently dropping them.
+    SUPPORTS_SOURCE_METADATA: bool = False
+
+    #: Verbs a subclass overrides only to raise a mode-specific message. They
+    #: are subtracted from :meth:`capabilities` so an override that explains
+    #: *why* something is unavailable does not read as support for it.
+    UNSUPPORTED_VERBS: frozenset[str] = frozenset()
+
     def __init__(self, documents: Optional[List[str]] = None) -> None:
         self._documents: List[str] = list(documents or [])
         self._buffers: List[Tuple[str, BytesIO]] = []
+        self._source_metadata: Dict[str, Any] = {}
+        self._source_tags: List[str] = []
 
-    def _not_implemented(self, method_name: str) -> "None":
+    def _not_implemented(self, method_name: str) -> NoReturn:
         raise NotImplementedError(
             f"{self.__class__.__name__}.{method_name}() is not implemented yet " f"(run_mode={self.RUN_MODE})."
         )
@@ -108,6 +219,45 @@ class ingestor:
         raise ValueError(
             "No input sources configured. Call files(), texts(), or buffers() with at least one source before ingest()."
         )
+
+    def metadata(self, **fields: Any) -> Self:
+        """Attach caller-supplied metadata to every record this builder writes.
+
+        Repeated calls merge. Only run modes that advertise
+        ``SUPPORTS_SOURCE_METADATA`` accept this; the others raise rather than
+        accept attributes they would drop before storage.
+        """
+        if not self.SUPPORTS_SOURCE_METADATA:
+            self._not_implemented("metadata")
+        self._source_metadata.update(fields)
+        return self
+
+    def tags(self, *values: str) -> Self:
+        """Attach tags to every record this builder writes.
+
+        Repeated calls append, and duplicates collapse while preserving order.
+        """
+        if not self.SUPPORTS_SOURCE_METADATA:
+            self._not_implemented("tags")
+        for value in values:
+            text = str(value).strip()
+            if text and text not in self._source_tags:
+                self._source_tags.append(text)
+        return self
+
+    def capabilities(self) -> frozenset[str]:
+        """Return the verbs this instance actually implements.
+
+        A tool layer can call this to build its surface instead of probing
+        methods and catching :class:`NotImplementedError`.
+        """
+        supported = {
+            name for name in _INTERFACE_VERBS if getattr(type(self), name, None) is not getattr(ingestor, name, None)
+        }
+        supported -= set(self.UNSUPPORTED_VERBS)
+        if self.SUPPORTS_SOURCE_METADATA:
+            supported.update({"metadata", "tags"})
+        return frozenset(supported)
 
     def files(self, documents: Union[str, List[str]]) -> "ingestor":
         """Add document paths/URIs for processing."""
@@ -243,6 +393,37 @@ class ingestor:
         Once Ray execution is wired, this should reflect actual job/task state.
         """
         self._not_implemented("get_status")
+
+
+#: Interface verbs probed by :meth:`ingestor.capabilities`. A subclass counts as
+#: supporting a verb when it overrides the interface's raising placeholder.
+_INTERFACE_VERBS: Tuple[str, ...] = (
+    "files",
+    "texts",
+    "buffers",
+    "load",
+    "ingest",
+    "ingest_async",
+    "all_tasks",
+    "dedup",
+    "embed",
+    "extract",
+    "extract_image_files",
+    "filter",
+    "store",
+    "store_embed",
+    "udf",
+    "vdb_upload",
+    "save_intermediate_results",
+    "caption",
+    "webhook",
+    "pdf_split_config",
+    "completed_jobs",
+    "failed_jobs",
+    "cancelled_jobs",
+    "remaining_jobs",
+    "get_status",
+)
 
 
 # Backward compatibility alias.

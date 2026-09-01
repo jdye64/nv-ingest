@@ -8,8 +8,11 @@ The agentic path ranks documents rather than chunks. CLI `--agentic` output is t
 
 For commands, service configuration, request and response contracts, and failure behavior, refer to [Workflow: Agentic retrieval](workflow-agentic-retrieval.md).
 
+Agentic retrieval searches your documents. **Agent memory** is the separate surface that stores and recalls what an agent experienced, in its own table with its own schema. `create_ingestor(run_mode="agentic")` returns that memory client. Refer to [Workflow: Agent memory](workflow-agent-memory.md).
+
 ## Related Topics { #related-topics }
 
 - [Workflow: Agentic retrieval](workflow-agentic-retrieval.md)
+- [Workflow: Agent memory](workflow-agent-memory.md)
 - [Semantic retrieval](vdbs.md#semantic-retrieval)
 - [Starter kits](https://github.com/NVIDIA/NeMo-Retriever/blob/26.08.1/examples/README.md)

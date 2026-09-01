@@ -127,7 +127,7 @@ def test_create_ingestor_rejects_unknown_run_modes() -> None:
         create_ingestor(run_mode="parallel")  # type: ignore[arg-type]
 
 
-@pytest.mark.parametrize("run_mode", ["inprocess", "batch", "service"])
+@pytest.mark.parametrize("run_mode", ["inprocess", "batch", "service", "agentic"])
 @pytest.mark.parametrize("input_method", [None, "files", "texts", "buffers"])
 def test_ingest_requires_input_sources(
     run_mode: str,
@@ -152,6 +152,12 @@ def test_ingest_requires_input_sources(
             ingestor,
             "ingest_stream",
             lambda **kwargs: pytest.fail("input validation must run before contacting the service"),
+        )
+    elif run_mode == "agentic":
+        monkeypatch.setattr(
+            type(ingestor),
+            "backend",
+            property(lambda self: pytest.fail("input validation must run before building a memory backend")),
         )
     else:
         monkeypatch.setattr(
