@@ -312,7 +312,7 @@ def create_app(config: ServiceConfig) -> FastAPI:
         app.mount(config.mcp.path, mcp_asgi_app)
         logger.info("FastMCP service endpoint mounted at %s", config.mcp.path)
 
-    from nemo_retriever.service.routers import admin, collections, ingest, metrics, work
+    from nemo_retriever.service.routers import admin, collections, config as config_router, ingest, metrics, work
     from nemo_retriever.service.services.prometheus import instrument_app
 
     app.include_router(ingest.router, prefix="/v1")
@@ -322,6 +322,9 @@ def create_app(config: ServiceConfig) -> FastAPI:
     # role; the handler self-reports an empty pool dict on gateway pods.
     app.include_router(admin.router, prefix="/v1")
     app.include_router(work.router, prefix="/v1")
+    # Central configuration endpoints — lets a server hold the config for an
+    # entire cluster (GET/PUT /v1/config) plus the self-documenting catalog.
+    app.include_router(config_router.router, prefix="/v1")
     instrument_otel_metrics(app, role=config.mode)
     instrument_app(app, role=config.mode)
 

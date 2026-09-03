@@ -1,0 +1,17 @@
+instances:
+  - url: nemo-retriever.docs.buildwithfern.com
+
+title: NeMo Retriever
+
+navigation:
+  - section: Reference
+    contents:
+      - page: Configuration Reference
+        path: ./docs/pages/configuration.mdx
+
+colors:
+  accentPrimary: "#76b900"
+
+navbar-links:
+  - type: github
+    value: https://github.com/NVIDIA/NeMo-Retriever

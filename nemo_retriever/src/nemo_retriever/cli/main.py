@@ -29,6 +29,11 @@ app.add_typer(service_app, name="service")
 app.add_typer(ingest_app, name="ingest")
 app.add_typer(query_app, name="query")
 
+# Central configuration commands (inspect / serialize / document).
+from nemo_retriever.config.cli import app as config_app  # noqa: E402
+
+app.add_typer(config_app, name="config")
+
 # Keep compatibility commands callable while hiding them from the product help
 # surface. HTML and TXT are intentionally absent: they are ingest input formats,
 # not standalone workflows.
